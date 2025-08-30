@@ -428,7 +428,11 @@ class Session(
                         }
                     }
 
-                    newList.filterNot { it.contains("media.mp4") }
+                    newList.filterNot { it.contains("media.mp4") }.map {
+                        it.replace("""media-hls\.doppiocdn\.\w+/(b-hls-\d+)""".toRegex(),){
+                            "${it.groupValues[1]}.doppiocdn.live"
+                        }
+                    }
                 }
 
                 metric?.updateRefreshLatency(System.currentTimeMillis() - ms)
