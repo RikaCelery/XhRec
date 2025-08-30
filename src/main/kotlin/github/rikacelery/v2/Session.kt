@@ -11,6 +11,7 @@ import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.server.engine.launchOnCancellation
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -348,9 +349,7 @@ class Session(
             generatorJob?.join()
         } finally {
             println("[-] ${room.name} ${room.quality} ${currentQuality} $streamUrl")
-            withContext(NonCancellable) {
-                Metric.removeMetric(room.id)
-            }
+            Metric.removeMetric(room.id)
         }
     }
 

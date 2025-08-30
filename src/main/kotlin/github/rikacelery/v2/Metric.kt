@@ -1,5 +1,6 @@
 package github.rikacelery.v2
 
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.Hashtable
@@ -21,8 +22,9 @@ object Metric {
         }
     }
 
-    suspend fun removeMetric(id: Long) = lock.withLock {
+    suspend fun removeMetric(id: Long) = lock.withLock(NonCancellable) {
         updaters.remove(id)?.dispose()
+        metrics.remove(id)
     }
 
     suspend fun prometheus(): String = lock.withLock {
