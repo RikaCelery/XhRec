@@ -31,7 +31,7 @@ dependencies {
     // https://mvnrepository.com/artifact/org.jsoup/jsoup
     implementation("org.jsoup:jsoup:1.18.1")
     // https://mvnrepository.com/artifact/org.jline/jline
-    implementation("org.jline:jline:3.29.0")
+    implementation("org.jline:jline:3.30.6")
     // https://mvnrepository.com/artifact/commons-cli/commons-cli
     implementation("commons-cli:commons-cli:1.9.0")
     implementation("io.ktor:ktor-server-cors:2.3.12")
