@@ -507,7 +507,7 @@ class Session(
         while (currentCoroutineContext().isActive && !shouldStop) {
             retry++
             try {
-                val lines = withTimeout(5_000) {
+                val lines = run {
                     val rawList = (ClientManager.getProxiedClient(room.name)).get(
                         streamUrl
                     ) {
@@ -710,9 +710,9 @@ class Session(
         val diff = System.currentTimeMillis() / 1000 - created
         val wait = (20L - diff) * 1000
         withTimeoutOrNull(if (wait > 0) wait else 0) {
-            withRetry(25) { attempt ->
+            withRetry(3) { attempt ->
                 try {
-                    c.get(event.url()).readBytes()
+                    c.get(event.url()).readRawBytes()
                 } catch (_: TimeoutCancellationException) {
                     null
                 } catch (e: CancellationException) {
