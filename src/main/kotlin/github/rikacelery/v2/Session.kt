@@ -150,11 +150,9 @@ class Session(
                             return false
                         }
                         API.roomRequestGroupShow(room, u)
-                        launch(scope) {
-                            UserManager.update(
-                                API.getUserFromCookie(u.cookie)
-                            )
-                        }
+                        UserManager.update(
+                            API.getUserFromCookie(u.cookie)
+                        )
                         delay(1000)
                         API.roomFetchModelToken(room, u)
                     }
