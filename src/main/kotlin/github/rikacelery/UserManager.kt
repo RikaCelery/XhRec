@@ -12,6 +12,9 @@ object UserManager {
     fun remove(userid: Long): User? {
         return users.remove(userid)
     }
+    fun randAccount(): User? {
+        return users.values.randomOrNull()
+    }
     fun validPaymentAccount(coins: Int): User? {
         for (user in users.values){
             if (user.coins>coins){

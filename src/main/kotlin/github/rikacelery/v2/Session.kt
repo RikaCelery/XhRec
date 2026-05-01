@@ -131,26 +131,30 @@ class Session(
             when (status) {
                 "public" -> {}
                 "groupShow" -> {
-
                     val price = API.roomFetchCamInfo(room)
                         .PathSingle("user.user.ticketRate").asInt()
                     if (!room.autoPay) {
                         logger.warn("[{}] Room not enable autopay. price={}", room.name, price)
                         return false
                     }
-                    val u = UserManager.validPaymentAccount(price)
+                    var u = UserManager.randAccount()
                     if (u == null) {
                         logger.warn("[{}] No account to pay. price={}", room.name, price)
                         return false
                     }
                     // TODO check cookie and coins status
                     val token = API.roomFetchModelToken(room, u) ?: run {
+                        var u = UserManager.validPaymentAccount(price)
+                        if (u == null) {
+                            logger.warn("[{}] No account to pay. price={}", room.name, price)
+                            return false
+                        }
                         API.roomRequestGroupShow(room, u)
-                        UserManager.update(
-                            u.copy(
-                                coins = u.coins - price
+                        launch {
+                            UserManager.update(
+                                API.getUserFromCookie(u.cookie)
                             )
-                        )
+                        }
                         delay(1000)
                         API.roomFetchModelToken(room, u)
                     }
@@ -161,11 +165,21 @@ class Session(
                     modelToken = token
                 }
 //
-//                "private" -> {
-//                    logger.trace("[{}] -> false, status={}", room.name, status)
-//                    return false
-//                }
-//
+                "private" -> {
+                    var u = UserManager.randAccount()
+                    if (u == null) {
+                        logger.warn("[{}] No account to pay.", room.name)
+                        return false
+                    }
+                    // TODO check cookie and coins status
+                    val token = API.roomFetchModelToken(room, u)
+                    if (token == null) {
+                        logger.warn("[{}] Failed to get model token.", room.name)
+                        return false
+                    }
+                    modelToken = token
+                }
+
 //                "idle" -> {
 //                    logger.trace("[{}] -> false, status={}", room.name, status)
 //                    return false
