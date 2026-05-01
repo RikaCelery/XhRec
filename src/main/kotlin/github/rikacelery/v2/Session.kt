@@ -476,9 +476,9 @@ class Session(
             host = "media-hls.doppiocdn.org"
             encodedPath =
                 if (currentQuality != "raw" && currentQuality.isNotBlank()) "b-hls-%d/%d/%d_%s.m3u8".format(
-                    Random().nextInt(12, 13), room.id, room.id, currentQuality
+                    28, room.id, room.id, currentQuality
                 ) else "b-hls-%d/%d/%d.m3u8".format(
-                    Random().nextInt(12, 13), room.id, room.id
+                    28, room.id, room.id
                 )
             if (token != null) {
                 parameters["aclAuth"] = token
