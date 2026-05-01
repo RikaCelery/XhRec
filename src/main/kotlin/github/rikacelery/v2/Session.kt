@@ -150,7 +150,7 @@ class Session(
                             return false
                         }
                         API.roomRequestGroupShow(room, u)
-                        launch {
+                        launch(scope) {
                             UserManager.update(
                                 API.getUserFromCookie(u.cookie)
                             )
