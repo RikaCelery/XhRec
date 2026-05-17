@@ -12,7 +12,7 @@ kotlin {
     jvmToolchain(17)
 }
 application {
-    mainClass.set("github.rikacelery.MainKt")
+    mainClass.set("github.rikacelery.v3.MainKt")
 
 }
 
