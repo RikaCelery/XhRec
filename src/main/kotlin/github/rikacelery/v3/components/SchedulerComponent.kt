@@ -81,6 +81,7 @@ class SchedulerComponent(
             }
 
             is RecordingStopped -> {
+                if (gracefulStop) return
                 val a = armed[event.roomId]
                 if (a != null) {
                     logger.info(
@@ -161,9 +162,8 @@ class SchedulerComponent(
             is GetArmedRoomIds -> armed.keys().toList()
             is ShutdownCmd -> {
                 gracefulStop = true
-
                 armed.forEach { (id, _) ->
-                    requestBus.request<OkResponse>(BreakCmd(id, EndReason.UserStop))
+                    sessionComponent.tell(DoBreak(id, EndReason.UserStop))
                 }
                 OkResponse
             }

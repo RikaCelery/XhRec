@@ -567,7 +567,9 @@ class SessionComponent(
                 }
             }
         } finally {
-            eventBus.publish(RecordingStopped(rs.roomId))
+            withContext(NonCancellable) {
+                eventBus.publish(RecordingStopped(rs.roomId))
+            }
         }
     }
 
