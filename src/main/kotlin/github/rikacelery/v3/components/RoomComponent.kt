@@ -1,5 +1,6 @@
 package github.rikacelery.v3.components
 
+import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.utils.PathSingle
 import github.rikacelery.v3.utils.asString
 import github.rikacelery.v3.api.ApiClient
@@ -150,6 +151,7 @@ class RoomComponent(
                         ErrorResponse("Exist $name")
                     } else {
                         rooms[id] = Room(id, name, cmd.quality, cmd.timeLimit, cmd.sizeLimitBytes, cmd.autoPay, null, pkey = cmd.pkey)
+                        SensitiveStringRegistry.mask(name)
                         logger.info("Room added: id={}, name={}, quality={}", id, name, cmd.quality)
                         eventBus.publish(RoomAdded(id, name))
                         RoomNameResponse(name)

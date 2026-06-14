@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.events.*
+import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -26,6 +27,7 @@ class ConfigComponent(
     private val configFile = File(config.configPath)
     private var persistedStreamAuthKey: String = config.streamAuthKey
     private val persistedDecryptKeys = config.decryptKeys.toMutableMap()
+    private var maskSensitiveLogs = config.maskSensitiveLogs
 
     private fun loadConfig() {
         if (!configFile.exists()) return
@@ -35,6 +37,8 @@ class ConfigComponent(
             json["decryptKeys"]?.jsonObject?.forEach { (k, v) ->
                 persistedDecryptKeys[k] = v.jsonPrimitive.content
             }
+            json["maskSensitiveLogs"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()?.let { maskSensitiveLogs = it }
+            SensitiveStringRegistry.enabled = maskSensitiveLogs
             logger.info("Loaded config from ${config.configPath}")
         } catch (e: Exception) {
             logger.warn("Failed to load config.json: ${e.message}")
@@ -47,6 +51,7 @@ class ConfigComponent(
             configFile.writeText(json.encodeToString(JsonElement.serializer(),
                 buildJsonObject {
                     put("streamAuthKey", persistedStreamAuthKey)
+                    put("maskSensitiveLogs", maskSensitiveLogs)
                     put("decryptKeys", buildJsonObject {
                         persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
                     })
@@ -86,6 +91,12 @@ class ConfigComponent(
                 val found = env.command.keys.firstOrNull { persistedDecryptKeys.containsKey(it) }
                 if (found != null) DecryptKeyMatch(found, persistedDecryptKeys[found]!!)
                 else DecryptKeyMatch("", "")
+            }
+            is GetMaskStatus -> ConfigResponse(maskSensitiveLogs)
+            is ToggleMask -> {
+                maskSensitiveLogs = !maskSensitiveLogs
+                SensitiveStringRegistry.enabled = maskSensitiveLogs
+                ConfigResponse(maskSensitiveLogs)
             }
             else -> return
         }

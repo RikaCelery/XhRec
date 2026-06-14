@@ -23,6 +23,8 @@ data class RemoveRoom(val roomId: Long) : Request
 
 data class GetDecryptKey(val keyName: String) : Request
 data class MatchDecryptKeys(val keys: List<String>) : Request
+object GetMaskStatus : Request
+object ToggleMask : Request
 // ── Scheduler commands ──
 
 data class StartRecordingCmd(val roomId: Long) : Request

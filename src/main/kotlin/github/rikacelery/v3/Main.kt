@@ -7,6 +7,7 @@ import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.SystemConfig
+import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
 import kotlinx.coroutines.CompletableDeferred
@@ -20,18 +21,25 @@ import org.apache.commons.cli.ParseException
 import org.apache.commons.cli.help.HelpFormatter
 import java.io.File
 
-private fun loadPersistedConfig(configPath: String): Pair<String, Map<String, String>> {
+private data class PersistedConfig(
+    val pkey: String,
+    val decryptKeys: Map<String, String>,
+    val maskSensitiveLogs: Boolean
+)
+
+private fun loadPersistedConfig(configPath: String): PersistedConfig {
     val file = File(configPath)
     val key = "YzWScuyQRGAGcxx1KIJmiQ7BY9Vi35ftwLqUOVO8uoo="
     val pkey = "Fq6m2TO2ZeBkRPm9"
-    val default = pkey to mapOf(pkey to key)
+    val default = PersistedConfig(pkey, mapOf(pkey to key), true)
     if (!file.exists()) return default
     try {
         val json = Json.parseToJsonElement(file.readText()).jsonObject
         val pkey = json["streamAuthKey"]?.jsonPrimitive?.content ?: pkey
         val keys = mutableMapOf(pkey to key)
         json["decryptKeys"]?.jsonObject?.forEach { (k, v) -> keys[k] = v.jsonPrimitive.content }
-        return pkey to keys
+        val mask = json["maskSensitiveLogs"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
+        return PersistedConfig(pkey, keys, mask)
     } catch (_: Exception) {
         return default
     }
@@ -57,20 +65,24 @@ fun main(vararg args: String) {
         val appScope = this
 
         val configPath = "xhrec.json"
-        val (defaultPkey, decryptKeys) = loadPersistedConfig(configPath)
+        val persisted = loadPersistedConfig(configPath)
 
         val config = SystemConfig(
             outputDir = File(cli.getOptionValue("output", "out")),
             tmpDir = File(cli.getOptionValue("tmp", "tmp")),
             port = cli.getOptionValue("port", "8090").toInt(),
             proxy = System.getenv("http_proxy"),
-            decryptKeys = decryptKeys,
-            streamAuthKey = defaultPkey,
+            decryptKeys = persisted.decryptKeys,
+            streamAuthKey = persisted.pkey,
             authToken = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiItMTA4MSIsImluZm8iOnsiaXNHdWVzdCI6dHJ1ZSwidXNlcklkIjotMTA4MX19.IXF36-UfCEmOPGvhl2a19rgLsh2rDCdXNJ3su9LkA9Y",
             platformHost = "stripchat.com",
             listConfPath = cli.getOptionValue("file", "list.conf"),
-            configPath = configPath
+            configPath = configPath,
+            maskSensitiveLogs = persisted.maskSensitiveLogs
         )
+
+        // Apply mask config from persisted config
+        SensitiveStringRegistry.enabled = persisted.maskSensitiveLogs
 
         // 1. Core infrastructure
         val eventBus = EventBus()

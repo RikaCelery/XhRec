@@ -12,5 +12,6 @@ data class SystemConfig(
     val authToken: String,
     val platformHost: String,
     val listConfPath: String = "list.conf",
-    val configPath: String = "xhrec.json"
+    val configPath: String = "xhrec.json",
+    val maskSensitiveLogs: Boolean = true
 )

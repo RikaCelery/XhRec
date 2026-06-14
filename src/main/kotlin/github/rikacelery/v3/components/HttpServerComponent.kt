@@ -338,6 +338,15 @@ class HttpServerComponent(
                 get("/metrics") {
                     call.respondText(metricComponent.prometheusText())
                 }
+                get("/mask/status") {
+                    val status = requestBus.request<ConfigResponse>(GetMaskStatus).value
+                    call.respondText(status.toString())
+                }
+                get("/mask/toggle") {
+                    val status = requestBus.request<ConfigResponse>(ToggleMask).value
+                    persistConfig()
+                    call.respondText(status.toString())
+                }
                 get("/mse/live") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull()
                         ?: return@get call.respondText("Missing id", status = HttpStatusCode.BadRequest)

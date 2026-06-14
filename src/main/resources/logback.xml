@@ -1,7 +1,11 @@
 <configuration  scan="true" scanPeriod="30 seconds">
+
+    <conversionRule conversionWord="maskedMsg"
+        converterClass="github.rikacelery.v3.utils.MaskingMessageConverter" />
+
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{MM-dd HH:mm:ss} %highlight(%-5level) %16logger{16} - %cyan(%msg) ::%M%n</pattern>
+            <pattern>%d{MM-dd HH:mm:ss} %highlight(%-5level) %16logger{16} - %cyan(%maskedMsg) ::%M%n</pattern>
             <charset>utf8</charset>
         </encoder>
     </appender>
@@ -17,7 +21,7 @@
             <totalSizeCap>1GB</totalSizeCap>
         </rollingPolicy>
         <encoder>
-            <pattern>%d{YYYY-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger - %msg ::%M%n</pattern>
+            <pattern>%d{YYYY-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger - %maskedMsg ::%M%n</pattern>
         </encoder>
     </appender>
     <root level="DEBUG">

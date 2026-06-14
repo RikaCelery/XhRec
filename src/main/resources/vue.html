@@ -251,6 +251,11 @@
                         <input type="range" min="40" max="240" v-model.number="previewHeight"
                             class="w-24 h-1 accent-indigo-500 cursor-pointer">
                     </div>
+                    <button @click="toggleMask()" title="Toggle Log Mask"
+                        class="w-8 h-8 flex items-center justify-center rounded text-xs font-bold transition-colors"
+                        :class="maskEnabled ? 'bg-amber-100 text-amber-700 hover:bg-amber-600 hover:text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600'">
+                        <i class="fa-solid" :class="maskEnabled ? 'fa-eye-slash' : 'fa-eye'"></i>
+                    </button>
                     <button @click="poweroff()" title="Power Off Server"
                         class="w-8 h-8 flex items-center justify-center rounded bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-colors ml-2">
                         <i class="fa-solid fa-power-off text-sm"></i>
@@ -533,6 +538,7 @@
                     activeVideos: {},
                     previewHeight: 40,
                     darkMode: false,
+                    maskEnabled: true,
                 }
             },
             computed: {
@@ -590,6 +596,14 @@
                     this.darkMode = !this.darkMode;
                     document.documentElement.classList.toggle('dark', this.darkMode);
                     localStorage.setItem('xhrec-dark', this.darkMode ? '1' : '0');
+                },
+                async toggleMask() {
+                    try {
+                        const r = await fetch(`${HOST}/mask/toggle`);
+                        const text = await r.text();
+                        this.maskEnabled = text === 'true';
+                        this.showToast(this.maskEnabled ? 'Mask ON' : 'Mask OFF');
+                    } catch (e) { this.showToast("Network Error", "error"); }
                 },
                 showToast(message, type = "success") {
                     const id = this.toastId++;
@@ -792,6 +806,9 @@
                 // Dark mode restore
                 this.darkMode = localStorage.getItem('xhrec-dark') === '1';
                 document.documentElement.classList.toggle('dark', this.darkMode);
+
+                // Mask status
+                try { const r = await fetch(`${HOST}/mask/status`); this.maskEnabled = (await r.text()) === 'true'; } catch (_) {}
 
                 // Load cache
                 try { this.snapshotcache = JSON.parse(localStorage.getItem("xhrec-thumb")) || {}; }

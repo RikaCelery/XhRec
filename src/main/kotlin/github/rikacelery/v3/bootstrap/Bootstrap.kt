@@ -2,6 +2,7 @@ package github.rikacelery.v3.bootstrap
 
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.components.*
+import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.postprocessors.*
 import kotlinx.coroutines.async
@@ -79,7 +80,7 @@ class Bootstrap(
         val cookies = file.readLines().filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith(";") }
         val users = cookies.mapNotNull { cookie ->
             try {
-                apiClient.getUserFromCookie(cookie.trim())
+                apiClient.getUserFromCookie(cookie.trim()).also { SensitiveStringRegistry.mask(it.username) }
             } catch (e: Exception) {
                 logger.warn("Failed to validate cookie: ${e.message}"); null
             }
@@ -181,6 +182,7 @@ class Bootstrap(
     }
 
     private fun addRoomFromParsed(id: Long, name: String, parsed: ListConfLine) {
+        SensitiveStringRegistry.mask(name)
         val timeLimit = if (parsed.timeLimit > 0) parsed.timeLimit.seconds else Duration.INFINITE
         roomComponent.internalAdd(id, name, parsed.quality, timeLimit, parsed.sizeLimit, parsed.autoPay, parsed.pkey)
         if (parsed.armed) {

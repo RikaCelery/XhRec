@@ -167,6 +167,7 @@ class SessionComponent(
     private suspend fun startSession(
         roomId: Long, name: String, quality: String, pkey: String = "", reconfigure: Boolean = true
     ) {
+        SensitiveStringRegistry.mask(name)
         val existing = sessions[roomId]
         if (existing != null) {
             val blocked = when (existing.state) {
