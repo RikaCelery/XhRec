@@ -57,6 +57,7 @@ Stream decryption key store. Created with defaults on first run if absent.
 ```json
 {
   "streamAuthKey": "default psch key, if failed to extract from master playlist",
+  "maskSensitiveLogs": true,
   "decryptKeys": {
     "psch key 1": "decrypt key",
     "psch key 2": "decrypt key"
@@ -66,7 +67,8 @@ Stream decryption key store. Created with defaults on first run if absent.
 
 | Field | Description |
 |---|---|
-| `streamAuthKey` | Default key psch key for stream auth |
+| `streamAuthKey` | Default psch key for stream auth |
+| `maskSensitiveLogs` | Enable log masking (model names, cookies, tokens, proxy URLs). Toggle in WebUI or via `/mask/toggle`. Default `true` |
 | `decryptKeys` | Key-value map of decryption keys (psch key → key) |
 
 ### users.txt
@@ -127,6 +129,9 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 | `/list` | All rooms with status, session state, quality |
 | `/dashboard` | Consolidated payload: rooms, statuses, listv2, metrics |
 | `/metrics` | Prometheus metrics endpoint |
+
+| `/mask/toggle` | Toggle log masking on/off |
+| `/mask/status` | Get current mask status (true/false) |
 
 ### Live Preview
 
@@ -226,6 +231,18 @@ Available in `move` destinations and `shell` arguments:
 ## Logging & Monitoring
 
 Logs are written to `./logs` with daily rotation (`xhrec.yyyy-MM-dd.log`).
+
+### Log Masking
+
+Sensitive information is replaced in log output by default. Static patterns (JWT tokens, cookies, auth URL parameters, proxy addresses) are masked with `***`. Dynamic strings (model names, usernames) are registered at startup and replaced with a stable CRC32-based hash that persists within a session but changes on restart, allowing log correlation without revealing identities.
+
+Masking can be toggled at runtime via the eye icon in the WebUI toolbar, or through the API:
+```shell
+curl -k https://localhost:8090/mask/toggle     # on/off
+curl -k https://localhost:8090/mask/status     # current state
+```
+
+The setting persists to `xhrec.json` (`maskSensitiveLogs` field).
 
 Prometheus metrics are exposed at `/metrics`. Example Grafana dashboard:
 
