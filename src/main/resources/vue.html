@@ -251,7 +251,7 @@
                         <input type="range" min="40" max="240" v-model.number="previewHeight"
                             class="w-24 h-1 accent-indigo-500 cursor-pointer">
                     </div>
-                    <button @click="toggleMask()" title="Toggle Log Mask"
+                    <button @click="toggleMask()" title="Log Masking — hides sensitive data (model names, cookies, tokens) in logs. CRC32 hash stays stable per session, changes on restart."
                         class="w-8 h-8 flex items-center justify-center rounded text-xs font-bold transition-colors"
                         :class="maskEnabled ? 'bg-amber-100 text-amber-700 hover:bg-amber-600 hover:text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600'">
                         <i class="fa-solid" :class="maskEnabled ? 'fa-eye-slash' : 'fa-eye'"></i>
