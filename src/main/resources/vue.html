@@ -210,7 +210,7 @@
             <div class="flex flex-wrap items-center gap-3 bg-slate-50 p-2 rounded-lg border border-slate-200">
                 <div class="relative flex items-center">
                     <i class="fa-solid fa-satellite-dish absolute left-3 text-slate-400"></i>
-                    <input v-model="addInput" type="text" placeholder="Room URL or Slug"
+                    <input v-model="addInput" type="text" :placeholder="$t('Room URL or Slug')"
                         class="pl-9 pr-8 py-1.5 text-sm bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 w-48 transition-all">
                     <i v-show="addInput" @click="addInput=''"
                         class="fa-solid fa-xmark absolute right-3 text-slate-400 hover:text-red-500 cursor-pointer transition-colors"></i>
@@ -218,12 +218,12 @@
 
                 <div class="relative flex items-center">
                     <i class="fa-regular fa-clock absolute left-3 text-slate-400"></i>
-                    <input v-model.number="timeLimit" type="number" min="0" placeholder="Limit"
+                    <input v-model.number="timeLimit" type="number" min="0" :placeholder="$t('Limit')"
                            class="pl-9 pr-2 py-1.5 text-sm bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 w-24 transition-all">
                 </div>
                 <div class="relative flex items-center">
                     <i class="fa-solid fa-weight-hanging absolute left-3 text-slate-400"></i>
-                    <input v-model="sizeLimit" type="text"  placeholder="Size"
+                    <input v-model="sizeLimit" type="text"  :placeholder="$t('Size')"
                            class="pl-9 pr-2 py-1.5 text-sm bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 w-24 transition-all">
                 </div>
 
@@ -234,19 +234,19 @@
                 </select>
 
                 <div class="flex items-center gap-1 border-l border-slate-300 pl-3">
-                    <button @click="addRoom(true)" title="Add & Activate"
+                    <button @click="addRoom(true)" :title="$t('Add & Activate')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-colors">
                         <i class="fa-solid fa-paper-plane text-sm"></i>
                     </button>
-                    <button @click="addRoom(false)" title="Add Only"
+                    <button @click="addRoom(false)" :title="$t('Add Only')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-blue-100 text-blue-700 hover:bg-blue-600 hover:text-white transition-colors">
                         <i class="fa-solid fa-plus text-sm"></i>
                     </button>
-                    <button @click="toggleDark()" title="Toggle Dark Mode"
+                    <button @click="toggleDark()" :title="$t('Toggle Dark Mode')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors dark-toggle-btn">
                         <i class="fa-solid" :class="darkMode ? 'fa-sun' : 'fa-moon'"></i>
                     </button>
-                    <div class="flex items-center gap-1 bg-slate-100 rounded px-2 h-8" title="Preview size">
+                    <div class="flex items-center gap-1 bg-slate-100 rounded px-2 h-8" :title="$t('Preview size')">
                         <i class="fa-solid fa-image text-slate-400 text-xs"></i>
                         <input type="range" min="40" max="240" v-model.number="previewHeight"
                             class="w-24 h-1 accent-indigo-500 cursor-pointer">
@@ -256,12 +256,15 @@
                         :class="maskEnabled ? 'bg-amber-100 text-amber-700 hover:bg-amber-600 hover:text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600'">
                         <i class="fa-solid" :class="maskEnabled ? 'fa-eye-slash' : 'fa-eye'"></i>
                     </button>
-                    <button @click="poweroff()" title="Power Off Server"
+                    <button @click="toggleLocale()" :title="$t('Switch Language / 切换语言')"
+                        class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
+                        <i class="fa-solid fa-globe text-sm"></i>
+                    </button>
+                    <button @click="poweroff()" :title="$t('Power Off Server')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-colors ml-2">
                         <i class="fa-solid fa-power-off text-sm"></i>
                     </button>
-                    <button @click="poweroffgracefully()" title="Power Off Server
-(Gracefully, wait all recorders stop)"
+                    <button @click="poweroffgracefully()" :title="$t('Power Off Server (Gracefully)')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-colors">
                         <i class="fa-solid fa-hourglass-start text-sm"></i>
                     </button>
@@ -277,54 +280,54 @@
                         <tr>
                             <th class="px-3 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-xs"
                                 @click="sortToggle('Room')">
-                                Room <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('Room') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['Room'] ? 'fa-sort text-slate-300' : (sort['Room'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
                             <th class="px-2 py-2.5 text-center cursor-pointer hover:bg-slate-100 transition-colors select-none text-xs"
                                 @click="sortToggle('RoomStatus')">
-                                Status <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('Status') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['RoomStatus'] ? 'fa-sort text-slate-300' : (sort['RoomStatus'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
-                            <th class="px-2 py-2.5 text-center text-xs">Preview</th>
+                            <th class="px-2 py-2.5 text-center text-xs">{{ $t('Preview') }}</th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-center text-xs"
                                 @click="sortToggle('ID')">
-                                ID <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('ID') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['ID'] ? 'fa-sort text-slate-300' : (sort['ID'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-center text-xs"
                                 @click="sortToggle('Quality')">
-                                Quality <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('Quality') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['Quality'] ? 'fa-sort text-slate-300' : (sort['Quality'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-center text-xs"
                                 @click="sortToggle('Limit')">
-                                Limit <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('Limit') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['Limit'] ? 'fa-sort text-slate-300' : (sort['Limit'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-center text-xs"
                                 @click="sortToggle('Status')">
-                                State <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('State') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['Status'] ? 'fa-sort text-slate-300' : (sort['Status'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-center text-xs"
                                 @click="sortToggle('AutoPay')">
-                                Auto Pay <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('Auto Pay') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['AutoPay'] ? 'fa-sort text-slate-300' : (sort['AutoPay'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
-                            <th class="px-2 py-2.5 text-center text-xs">Segments</th>
+                            <th class="px-2 py-2.5 text-center text-xs">{{ $t('Segments') }}</th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-right text-xs"
                                 @click="sortToggle('Size')">
-                                Size <i class="fa-solid ml-0.5 text-[9px]"
+                                {{ $t('Size') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['Size'] ? 'fa-sort text-slate-300' : (sort['Size'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
-                            <th class="px-2 py-2.5 text-center text-xs">Actions</th>
+                            <th class="px-2 py-2.5 text-center text-xs">{{ $t('Actions') }}</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         <tr v-if="roomDisplay.length === 0">
                             <td colspan="11" class="px-4 py-12 text-center text-slate-400">
                                 <i class="fa-solid fa-inbox text-3xl mb-2"></i>
-                                <p>No rooms found. Add a room to start recording.</p>
+                                <p>{{ $t('No rooms found. Add a room to start recording.') }}</p>
                             </td>
                         </tr>
                         <tr v-for="room in roomDisplay" :key="room.name"
@@ -361,7 +364,7 @@
                                     <div v-else
                                         :style="{ height: previewHeight + 'px', width: (previewHeight * 1.6) + 'px' }"
                                         class="bg-slate-100 rounded border border-slate-200 flex items-center justify-center text-slate-300 text-xs">
-                                        N/A</div>
+                                        {{ $t('N/A') }}</div>
                                 </div>
                             </td>
                             <td class="px-2 py-1.5 text-slate-400 font-mono text-xs text-center">{{room.id || '-'}}</td>
@@ -375,7 +378,7 @@
                                     </select>
                                     <span v-if="room.sessionStatus==='Recording' && room.sessionQuality"
                                         class="text-[11px] font-mono text-emerald-600 bg-emerald-50 px-1 py-0.5 rounded border border-emerald-200 whitespace-nowrap"
-                                        :title="'Actual recording quality'">
+                                        :title="$t('Actual recording quality')">
                                         ⏺{{room.sessionQuality}}
                                     </span>
                                 </div>
@@ -386,8 +389,8 @@
                                         <span class="text-slate-500 font-mono text-right min-w-[3rem]">{{room.timeLimit > 0 ? (room.timeLimit / 1000) : '∞'}}s</span>
                                         <input v-model.number="editLimits[room.id]" type="number" min="0"
                                             class="w-14 px-1.5 py-0.5 text-xs border border-slate-200 rounded bg-white focus:outline-none focus:border-indigo-500"
-                                            placeholder="sec">
-                                        <button @click="setLimit(room.id)" title="Set Time"
+                                            :placeholder="$t('sec')">
+                                        <button @click="setLimit(room.id)" :title="$t('Set Time')"
                                             class="text-emerald-600 hover:text-emerald-800 p-0.5 leading-none">
                                             <i class="fa-solid fa-check text-[11px]"></i>
                                         </button>
@@ -396,8 +399,8 @@
                                         <span class="text-slate-500 font-mono text-right min-w-[3rem]">{{room.sizeLimitBytes > 0 ? formatBytes(room.sizeLimitBytes) : '∞'}}</span>
                                         <input v-model="editSizeLimits[room.id]" type="text"
                                             class="w-14 px-1.5 py-0.5 text-xs border border-slate-200 rounded bg-white focus:outline-none focus:border-indigo-500"
-                                            placeholder="e.g. 1G">
-                                        <button @click="setSizeLimit(room.id)" title="Set Size"
+                                            :placeholder="$t('e.g. 1G')">
+                                        <button @click="setSizeLimit(room.id)" :title="$t('Set Size')"
                                             class="text-emerald-600 hover:text-emerald-800 p-0.5 leading-none">
                                             <i class="fa-solid fa-check text-[11px]"></i>
                                         </button>
@@ -407,19 +410,19 @@
                             <td class="px-2 py-1.5 text-center">
                                 <span v-if="room.sessionStatus==='Recording'"
                                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                                    <span class="w-1.5 h-1.5 rounded-full bg-red-500 status-recording"></span>REC
+                                    <span class="w-1.5 h-1.5 rounded-full bg-red-500 status-recording"></span>{{ $t('REC') }}
                                 </span>
                                 <span v-else-if="room.sessionStatus==='Fetching'"
                                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
-                                    <i class="fa-solid fa-arrow-down text-[10px]"></i>FETCH
+                                    <i class="fa-solid fa-arrow-down text-[10px]"></i>{{ $t('FETCH') }}
                                 </span>
                                 <span v-else-if="room.sessionStatus==='Listening'"
                                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                                    <i class="fa-solid fa-hourglass-half fa-spin-pulse text-[10px]"></i>ARM
+                                    <i class="fa-solid fa-hourglass-half fa-spin-pulse text-[10px]"></i>{{ $t('ARM') }}
                                 </span>
                                 <span v-else-if="room.sessionStatus===''"
                                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500">
-                                    <i class="fa-solid fa-video-slash text-[10px]"></i>OFF
+                                    <i class="fa-solid fa-video-slash text-[10px]"></i>{{ $t('OFF') }}
                                 </span>
                                 <span v-else
                                     class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
@@ -437,19 +440,19 @@
                             </td>
                             <td class="px-2 py-1.5">
                                 <div v-if="room.sessionStatus==='Recording'" class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs font-mono">
-                                    <span class="text-emerald-600 flex items-center gap-1 justify-end" title="Downloading">
+                                    <span class="text-emerald-600 flex items-center gap-1 justify-end" :title="$t('Downloading')">
                                         <i :class="[{'animate-bounce':room.running},'fa-download','fa-solid','text-[10px]']"></i>
                                         <span class="w-7 text-right">{{room.running || 0}}</span>
                                     </span>
-                                    <span class="text-blue-600 flex items-center gap-1 justify-end" title="Complete">
+                                    <span class="text-blue-600 flex items-center gap-1 justify-end" :title="$t('Complete')">
                                         <i class="fa-solid fa-check text-[10px]"></i>
                                         <span class="w-7 text-right">{{room.success || 0}}</span>
                                     </span>
-                                    <span class="text-red-600 flex items-center gap-1 justify-end" title="Failed">
+                                    <span class="text-red-600 flex items-center gap-1 justify-end" :title="$t('Failed')">
                                         <i class="fa-solid fa-xmark text-[10px]"></i>
                                         <span class="w-7 text-right">{{room.failed || 0}}</span>
                                     </span>
-                                    <span class="text-amber-600 flex items-center gap-1 justify-end" title="Missing">
+                                    <span class="text-amber-600 flex items-center gap-1 justify-end" :title="$t('Missing')">
                                         <i class="fa-solid fa-question text-[10px]"></i>
                                         <span class="w-7 text-right">{{room.segMissing || 0}}</span>
                                     </span>
@@ -462,23 +465,23 @@
                             <td class="px-2 py-1.5">
                                 <div
                                     class="flex items-center justify-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                                    <button @click="action('activate',room.id)" title="Activate"
+                                    <button @click="action('activate',room.id)" :title="$t('Activate')"
                                         class="w-6 h-6 rounded bg-slate-100 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors flex items-center justify-center">
                                         <i class="fa-solid fa-play text-[10px]"></i>
                                     </button>
-                                    <button @click="action('deactivate',room.id)" title="Deactivate"
+                                    <button @click="action('deactivate',room.id)" :title="$t('Deactivate')"
                                         class="w-6 h-6 rounded bg-slate-100 text-amber-600 hover:bg-amber-600 hover:text-white transition-colors flex items-center justify-center">
                                         <i class="fa-solid fa-stop text-[10px]"></i>
                                     </button>
-                                    <button @click="action('restart',room.id)" title="Restart"
+                                    <button @click="action('restart',room.id)" :title="$t('Restart')"
                                         class="w-6 h-6 rounded bg-slate-100 text-purple-600 hover:bg-purple-600 hover:text-white transition-colors flex items-center justify-center">
                                         <i class="fa-solid fa-rotate-right text-[10px]"></i>
                                     </button>
-                                    <button @click="action('break',room.id)" title="Break"
+                                    <button @click="action('break',room.id)" :title="$t('Break')"
                                         class="w-6 h-6 rounded bg-slate-100 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors flex items-center justify-center">
                                         <i class="fa-solid fa-scissors text-[10px]"></i>
                                     </button>
-                                    <button @click="action('remove',room.id)" title="Remove"
+                                    <button @click="action('remove',room.id)" :title="$t('Remove')"
                                         class="w-6 h-6 rounded bg-slate-100 text-red-600 hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center">
                                         <i class="fa-solid fa-trash-can text-[10px]"></i>
                                     </button>
@@ -493,10 +496,10 @@
         <div class="bg-[#1e1e1e] rounded-xl shadow-lg border border-[#333] overflow-hidden flex flex-col h-64">
             <div class="bg-[#2d2d2d] px-4 py-2 flex items-center gap-2 border-b border-[#444]">
                 <i class="fa-solid fa-terminal text-slate-400 text-sm"></i>
-                <span class="text-xs font-semibold text-slate-300 tracking-wider">NETWORK LOGS</span>
+                <span class="text-xs font-semibold text-slate-300 tracking-wider">{{ $t('NETWORK LOGS') }}</span>
             </div>
             <div class="p-4 overflow-x-auto overflow-y-auto terminal-scroll font-mono text-xs flex-1">
-                <div v-if="allUrls.length === 0" class="text-slate-500 italic">Waiting for connection...</div>
+                <div v-if="allUrls.length === 0" class="text-slate-500 italic">{{ $t('Waiting for connection...') }}</div>
                 <div v-for="(info, idx) in allUrls" :key="idx"
                     class="mb-1 text-slate-300 whitespace-nowrap hover:bg-[#2a2a2a] px-1 rounded transition-colors">
                     <span
@@ -539,6 +542,35 @@
                     previewHeight: 40,
                     darkMode: false,
                     maskEnabled: true,
+                    locale: 'en',
+                    translations: {
+                        en: {},
+                        'zh-CN': {
+                            'Room': '直播间', 'Status': '状态', 'Preview': '预览', 'ID': 'ID', 'Quality': '画质',
+                            'Limit': '限时', 'State': '状态', 'Auto Pay': '自动付费', 'Segments': '分片', 'Size': '大小',
+                            'Actions': '操作', 'Room URL or Slug': '直播间 URL 或名称',
+                            'LimitPlaceholder': '限时', 'SizePlaceholder': '大小',
+                            'Add & Activate': '添加并激活', 'Add Only': '仅添加', 'Toggle Dark Mode': '切换深色模式',
+                            'Preview size': '预览大小', 'Power Off Server': '关闭服务器',
+                            'Power Off Server (Gracefully)': '优雅关闭\n(等待所有录制停止)',
+                            'Switch Language / 切换语言': 'Switch Language / 切换语言',
+                            'REC': '录制中', 'FETCH': '获取中', 'ARM': '监听中', 'OFF': '离线',
+                            'Recording': '录制中', 'Fetching': '获取中', 'Listening': '监听中', 'Offline': '离线',
+                            'Mask ON': '脱敏 开', 'Mask OFF': '脱敏 关', 'Network Error': '网络错误',
+                            'Invalid limit value': '无效的限时值', 'Invalid size value': '无效的大小值',
+                            'Please enter a room name or URL': '请输入直播间名称或 URL',
+                            'Room added successfully': '添加成功',
+                            'No rooms found. Add a room to start recording.': '未找到直播间，请添加直播间开始录制。',
+                            'NETWORK LOGS': '网络日志', 'Waiting for connection...': '等待连接...',
+                            'Downloading': '下载中', 'Complete': '已完成', 'Failed': '失败', 'Missing': '缺失',
+                            'N/A': '无', 'sec': '秒', 'e.g. 1G': '例: 1G',
+                            'Set Time': '设置限时', 'Set Size': '设置大小',
+                            'Activate': '激活', 'Deactivate': '停用', 'Restart': '重启', 'Break': '中断', 'Remove': '移除',
+                            'XhRec Dashboard': 'XhRec 控制台', 'XhRec Manager': 'XhRec 管理器',
+                            'Actual recording quality': '实际录制画质',
+                            'Log Masking — hides sensitive data (model names, cookies, tokens) in logs. CRC32 hash stays stable per session, changes on restart.': '日志脱敏 — 在日志中隐藏敏感信息（主播名、Cookie、Token）。CRC32 哈希在同一次运行中保持一致，重启后变化。',
+                        }
+                    },
                 }
             },
             computed: {
@@ -592,6 +624,14 @@
                 }
             },
             methods: {
+                $t(key) {
+                    return this.translations[this.locale]?.[key] || this.translations.en?.[key] || key;
+                },
+                toggleLocale() {
+                    this.locale = this.locale === 'en' ? 'zh-CN' : 'en';
+                    localStorage.setItem('xhrec-locale', this.locale);
+                    document.documentElement.lang = this.locale;
+                },
                 toggleDark() {
                     this.darkMode = !this.darkMode;
                     document.documentElement.classList.toggle('dark', this.darkMode);
@@ -602,8 +642,8 @@
                         const r = await fetch(`${HOST}/mask/toggle`);
                         const text = await r.text();
                         this.maskEnabled = text === 'true';
-                        this.showToast(this.maskEnabled ? 'Mask ON' : 'Mask OFF');
-                    } catch (e) { this.showToast("Network Error", "error"); }
+                        this.showToast(this.maskEnabled ? this.$t('Mask ON') : this.$t('Mask OFF'));
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 showToast(message, type = "success") {
                     const id = this.toastId++;
@@ -632,48 +672,48 @@
                     try {
                         const r1 = await fetch(`${HOST}/quality?id=${roomId}&q=${quality}`);
                         this.showToast(await r1.text());
-                    } catch (e) { this.showToast("Network Error", "error"); }
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 async setAutoPay(value, roomId) {
                     try {
                         const r1 = await fetch(`${HOST}/autopay?id=${roomId}&v=${value}`);
                         this.showToast(await r1.text());
-                    } catch (e) { this.showToast("Network Error", "error"); }
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 async setLimit(roomId) {
                     const newLimit = this.editLimits[roomId];
                     if (newLimit === undefined || newLimit === null || newLimit < 0) {
-                        this.showToast(`Invalid limit value`, "error");
+                        this.showToast(this.$t('Invalid limit value'), "error");
                         return;
                     }
                     try {
                         const r1 = await fetch(`${HOST}/limit?id=${roomId}&v=${newLimit}`);
                         this.showToast(await r1.text());
                         this.editLimits[roomId] = null;
-                    } catch (e) { this.showToast("Network Error", "error"); }
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 async setSizeLimit(roomId) {
                     const newLimit = this.editSizeLimits[roomId];
                     if (!newLimit) {
-                        this.showToast(`Invalid limit value`, "error");
+                        this.showToast(this.$t('Invalid size value'), "error");
                         return;
                     }
                     try {
                         const r1 = await fetch(`${HOST}/sizelimit?id=${roomId}&v=${newLimit}`);
                         this.showToast(await r1.text());
                         this.editSizeLimits[roomId] = null;
-                    } catch (e) { this.showToast("Network Error", "error"); }
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 async action(actionType, roomId) {
                     try {
                         const r1 = await fetch(`${HOST}/${actionType}?id=${roomId}`);
                         this.showToast(await r1.text());
-                    } catch (e) { this.showToast("Network Error", "error"); }
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 async addRoom(active) {
                     const name = this.addInput.split("/").slice(-1)[0].split("?")[0];
                     if (!name) {
-                        this.showToast("Please enter a room name or URL", "error");
+                        this.showToast(this.$t("Please enter a room name or URL"), "error");
                         return;
                     }
                     const limit = this.timeLimit || 0;
@@ -683,14 +723,14 @@
                         if (size) params.append('size', size);
                         const r1 = await fetch(`${HOST}/add?${params}`);
                         if (r1.ok) {
-                            this.showToast("Room added successfully");
+                            this.showToast(this.$t("Room added successfully"));
                             this.addInput = "";
                             this.timeLimit = null;
                             this.sizeLimit = null;
                         } else {
                             this.showToast(await r1.text(), "error");
                         }
-                    } catch (e) { this.showToast("Network Error", "error"); }
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 async fetchdata() {
                     try {
@@ -806,6 +846,11 @@
                 // Dark mode restore
                 this.darkMode = localStorage.getItem('xhrec-dark') === '1';
                 document.documentElement.classList.toggle('dark', this.darkMode);
+
+                // Locale init
+                const savedLocale = localStorage.getItem('xhrec-locale');
+                this.locale = savedLocale || (navigator.language?.startsWith('zh') ? 'zh-CN' : 'en');
+                document.documentElement.lang = this.locale;
 
                 // Mask status
                 try { const r = await fetch(`${HOST}/mask/status`); this.maskEnabled = (await r.text()) === 'true'; } catch (_) {}
