@@ -12,7 +12,7 @@ object SensitiveStringRegistry {
         return mapping.getOrPut(original) {
             val crc = CRC32()
             crc.update(original.toByteArray(Charsets.UTF_8))
-            "%08x_%s".format(crc.value, randomSuffix)
+            "%08x%s".format(crc.value, randomSuffix)
         }
     }
 
