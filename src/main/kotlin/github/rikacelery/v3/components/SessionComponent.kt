@@ -22,7 +22,9 @@ import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
+import kotlin.random.Random
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 sealed interface SessionMsg
@@ -82,6 +84,7 @@ class SessionComponent(
 
     private val sessions = ConcurrentHashMap<Long, RoomSession>()
     private val lastBlockReason = ConcurrentHashMap<Long, String>()
+    private val decryptKeyCache = ConcurrentHashMap<String, String>()
 
     override suspend fun onStart(scope: CoroutineScope) {
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
@@ -92,6 +95,10 @@ class SessionComponent(
         subscribe<QualityChangeRequested>(QualityChangeRequested::class)
         subscribe<RoomTimeLimitChanged>(RoomTimeLimitChanged::class)
         subscribe<RoomSizeLimitChanged>(RoomSizeLimitChanged::class)
+
+        eventBus.subscribe(scope, PersistConfig::class) {
+            decryptKeyCache.clear()
+        }
 
         scope.launch {
             while (isActive) {
@@ -510,8 +517,15 @@ class SessionComponent(
     private suspend fun CoroutineScope.pollingLoop(rs: RoomSession) {
         try {
             val counter = createDiscontinuityCounter()
+            var firstPoll = true
             while (isActive && (rs.state == SessionState.Fetching || rs.state == SessionState.Recording)) {
-                delay(3.seconds)
+                val pollDelay = if (firstPoll) {
+                    3.seconds + Random.nextLong(-500, 500).milliseconds
+                } else {
+                    3.seconds
+                }
+                firstPoll = false
+                delay(pollDelay)
                 try {
                     val client = ClientManager.getProxiedClient("m3u8_${rs.roomId}")
                     val fetchStart = System.currentTimeMillis()
@@ -521,7 +535,11 @@ class SessionComponent(
                     val fetchLatency = System.currentTimeMillis() - fetchStart
                     val text = response.bodyAsText()
 
-                    val key = (requestBus.request<ConfigResponse>(GetDecryptKey(rs.pkey)).value as? String) ?: run {
+                    val key = decryptKeyCache[rs.pkey] ?: run {
+                        val result = (requestBus.request<ConfigResponse>(GetDecryptKey(rs.pkey)).value as? String)
+                        if (result != null) decryptKeyCache[rs.pkey] = result
+                        result
+                    } ?: run {
                         logger.error("No decrypt key for room ${rs.roomId}")
                         delay(5.seconds)
                         continue

@@ -9,7 +9,8 @@ abstract class Actor<T : Any>(
     val name: String,
     protected val eventBus: EventBus,
     parentScope: CoroutineScope,
-    mailboxCapacity: Int = 256
+    mailboxCapacity: Int = 256,
+    private val slowHandlerThresholdMs: Long = 500
 ) {
     private val mailbox = Channel<T>(capacity = mailboxCapacity)
     protected val scope = parentScope + SupervisorJob() + CoroutineName(name)
@@ -25,7 +26,15 @@ abstract class Actor<T : Any>(
             onStart(scope)
             for (msg in mailbox) {
                 try {
+                    val start = System.nanoTime()
                     handle(msg)
+                    val duration = (System.nanoTime() - start) / 1_000_000
+                    if (duration > slowHandlerThresholdMs) {
+                        logger.warn(
+                            "slow handler: actor={}, msg={}, took={}ms",
+                            name, msg::class.simpleName, duration
+                        )
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {

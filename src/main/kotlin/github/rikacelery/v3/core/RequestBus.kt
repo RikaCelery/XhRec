@@ -41,7 +41,7 @@ class RequestBus(
             if (result is ErrorResponse) throw RequestErrorException(cmd, result.message)
             result as T
         } catch (e: TimeoutCancellationException) {
-            pending.remove(id)
+            pending.remove(id)?.cancel()
             throw RequestTimeoutException(cmd, timeoutMs)
         }
     }

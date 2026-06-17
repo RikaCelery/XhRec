@@ -6,7 +6,9 @@ import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
@@ -29,10 +31,12 @@ class ConfigComponent(
     private val persistedDecryptKeys = config.decryptKeys.toMutableMap()
     private var maskSensitiveLogs = config.maskSensitiveLogs
 
-    private fun loadConfig() {
+    private suspend fun loadConfig() {
         if (!configFile.exists()) return
         try {
-            val json = Json.parseToJsonElement(configFile.readText()).jsonObject
+            val json = withContext(Dispatchers.IO) {
+                Json.parseToJsonElement(configFile.readText()).jsonObject
+            }
             json["streamAuthKey"]?.jsonPrimitive?.content?.let { persistedStreamAuthKey = it }
             json["decryptKeys"]?.jsonObject?.forEach { (k, v) ->
                 persistedDecryptKeys[k] = v.jsonPrimitive.content
@@ -45,21 +49,23 @@ class ConfigComponent(
         }
     }
 
-    private fun saveConfig() {
-        try {
-            val json = Json { prettyPrint = true }
-            configFile.writeText(json.encodeToString(JsonElement.serializer(),
-                buildJsonObject {
-                    put("streamAuthKey", persistedStreamAuthKey)
-                    put("maskSensitiveLogs", maskSensitiveLogs)
-                    put("decryptKeys", buildJsonObject {
-                        persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
-                    })
-                }
-            ))
-            logger.info("Saved config to ${config.configPath}")
-        } catch (e: Exception) {
-            logger.warn("Failed to save config.json: ${e.message}")
+    private suspend fun saveConfig() {
+        withContext(Dispatchers.IO) {
+            try {
+                val json = Json { prettyPrint = true }
+                configFile.writeText(json.encodeToString(JsonElement.serializer(),
+                    buildJsonObject {
+                        put("streamAuthKey", persistedStreamAuthKey)
+                        put("maskSensitiveLogs", maskSensitiveLogs)
+                        put("decryptKeys", buildJsonObject {
+                            persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
+                        })
+                    }
+                ))
+                logger.info("Saved config to ${config.configPath}")
+            } catch (e: Exception) {
+                logger.warn("Failed to save config.json: ${e.message}")
+            }
         }
     }
 
@@ -73,7 +79,7 @@ class ConfigComponent(
     override suspend fun wrapEvent(event: Any): ConfigMsg? = when (event) {
         is CommandEnvelope -> HandleConfigQuery(event)
         is PersistConfig -> {
-            saveConfig()
+            scope.launch(Dispatchers.IO) { saveConfig() }
             null
         }
 
