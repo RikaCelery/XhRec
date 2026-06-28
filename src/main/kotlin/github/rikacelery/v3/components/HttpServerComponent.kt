@@ -30,6 +30,9 @@ class HttpServerComponent(
     private val eventBus: EventBus,
     private val requestBus: RequestBus,
     private val metricComponent: MetricComponent,
+    private val roomComponent: RoomComponent,
+    private val sessionComponent: SessionComponent,
+    private val schedulerComponent: SchedulerComponent,
     private val postProcessorComponent: PostProcessorComponent,
     private val scope: CoroutineScope,
     private val mseStore: MseStore = MseStore()
@@ -271,10 +274,10 @@ class HttpServerComponent(
                     })
                 }
                 get("/dashboard") {
-                    val rooms = requestBus.request<List<Room>>(GetRooms)
-                    val statuses = requestBus.request<Map<Long, Map<String, Any>>>(GetRoomDetailedStatus)
-                    val sessions = requestBus.request<List<RoomSession>>(GetSessions)
-                    val armedIds = requestBus.request<List<Long>>(GetArmedRoomIds).toSet()
+                    val rooms = roomComponent.snapshotRooms()
+                    val statuses = metricComponent.snapshotRoomDetailedStatus()
+                    val sessions = sessionComponent.snapshotSessions()
+                    val armedIds = schedulerComponent.snapshotArmedRoomIds().toSet()
                     val metrics = metricComponent.prometheusText()
 
                     val json = Json { encodeDefaults = true }

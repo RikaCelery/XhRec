@@ -171,6 +171,8 @@ class SessionComponent(
         eventBus.publish(CommandAck(env.id, ack))
     }
 
+    fun snapshotSessions(): List<RoomSession> = sessions.values.map { it.copy() }
+
     private suspend fun startSession(
         roomId: Long, name: String, quality: String, pkey: String = "", reconfigure: Boolean = true
     ) {
@@ -178,7 +180,13 @@ class SessionComponent(
         val existing = sessions[roomId]
         if (existing != null) {
             val blocked = when (existing.state) {
-                SessionState.Fetching, SessionState.Recording -> true
+                SessionState.Fetching -> {
+                    logger.warn("[{}] Session stuck in Fetching, cancelling and restarting", name)
+                    existing.pollingJob?.cancel()
+                    sessions.remove(roomId)
+                    false
+                }
+                SessionState.Recording -> true
                 SessionState.Closing -> existing.pollingJob?.isCompleted != true
                 else -> false
             }
@@ -194,6 +202,7 @@ class SessionComponent(
             if (reconfigure) {
                 val token = configureSession(roomId, name) ?: run {
                     logger.info("[{}] Session not started: configure returned false", name)
+                    eventBus.publish(RecordingStopped(roomId, 0))
                     sessions.remove(roomId)
                     delay(5.seconds)
                     requestBus.request<OkResponse>(RefreshRoomCmd(roomId))
@@ -701,7 +710,7 @@ class SessionComponent(
             }
         } finally {
             withContext(NonCancellable) {
-                eventBus.publish(RecordingStopped(rs.roomId))
+                eventBus.publish(RecordingStopped(rs.roomId, rs.segmentIndex))
             }
         }
     }

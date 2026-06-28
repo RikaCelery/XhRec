@@ -1,5 +1,7 @@
 package github.rikacelery.v3.core
 
+import github.rikacelery.v3.events.CommandEnvelope
+import github.rikacelery.v3.events.GetRooms
 import github.rikacelery.v3.hooks.EventHook
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -103,5 +105,18 @@ class EventBusTest {
 
         bus.publish(123)
         assertTrue(strings.isEmpty())
+    }
+
+    @Test
+    fun `command events use reliable control plane separate from data events`() = runTest(UnconfinedTestDispatcher()) {
+        val bus = EventBus()
+        val commands = mutableListOf<CommandEnvelope>()
+        bus.subscribe(backgroundScope, CommandEnvelope::class) { commands.add(it) }
+
+        repeat(2_000) { bus.publish("data-$it") }
+        val command = CommandEnvelope(42, GetRooms)
+        bus.publish(command)
+
+        assertEquals(listOf(command), commands)
     }
 }

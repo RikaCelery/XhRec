@@ -35,9 +35,9 @@ java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.jso
 每行一个房间。以 `#` 或 `;` 开头的行视为未激活（不会自动录制）。
 
 ```ini
-# https://stripchat.com/modelA q:720p limit:120
-; https://stripchat.com/modelB q:240p
-https://stripchat.com/modelC q:highest
+# https://poplive.xyz/modelA q:720p limit:120
+; https://poplive.xyz/modelB q:240p
+https://poplive.xyz/modelC q:highest
 ```
 
 | 字段            | 描述                                                                                                          |

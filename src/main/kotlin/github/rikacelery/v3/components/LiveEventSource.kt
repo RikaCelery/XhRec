@@ -86,7 +86,7 @@ class LiveEventSource(
         while (isActive) {
             try {
                 val client = ClientManager.getProxiedClient("event")
-                client.webSocket("wss://websocket-v6.xhamsterlive.com/connection/websocket") {
+                client.webSocket("wss://websocket-v6.poplive.xyz/connection/websocket") {
                     wsSession = this
                     send(authFrame(authToken))
                     resubscribeAll()

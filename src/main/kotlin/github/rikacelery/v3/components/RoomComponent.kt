@@ -239,6 +239,8 @@ class RoomComponent(
         rooms[id] = Room(id, name, quality, timeLimit, sizeLimitBytes, autoPay, null, pkey = pkey)
     }
 
+    fun snapshotRooms(): List<Room> = rooms.values.map { it.copy() }
+
 
     private suspend fun saveListConf() {
         try {

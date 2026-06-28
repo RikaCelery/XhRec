@@ -35,9 +35,9 @@ java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.jso
 One room per line. Lines starting with `#` or `;` are inactive (not automatically recorded).
 
 ```ini
-# https://stripchat.com/modelA q:720p limit:120
-; https://stripchat.com/modelB q:240p
-https://stripchat.com/modelC q:highest
+# https://poplive.xyz/modelA q:720p limit:120
+; https://poplive.xyz/modelB q:240p
+https://poplive.xyz/modelC q:highest
 ```
 
 | Field          | Description                                                                                                                                 |

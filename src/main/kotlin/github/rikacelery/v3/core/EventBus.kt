@@ -1,5 +1,7 @@
 package github.rikacelery.v3.core
 
+import github.rikacelery.v3.events.CommandAck
+import github.rikacelery.v3.events.CommandEnvelope
 import github.rikacelery.v3.hooks.EventHook
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
@@ -21,6 +23,20 @@ class EventBus {
     )
     val events: SharedFlow<Any> = _events.asSharedFlow()
 
+    /*
+     * RequestBus commands are the control plane: losing either CommandEnvelope
+     * or CommandAck leaves HTTP handlers waiting until their timeout and makes
+     * the dashboard render blank. Keep them off the best-effort data/event
+     * stream above, whose DROP_OLDEST policy is intentional for high-volume
+     * telemetry/download events.
+     */
+    private val _commands = MutableSharedFlow<Any>(
+        replay = 0,
+        extraBufferCapacity = 1024,
+        onBufferOverflow = BufferOverflow.SUSPEND
+    )
+    private val commands: SharedFlow<Any> = _commands.asSharedFlow()
+
     private val hooks = mutableListOf<EventHook>()
 
     // backlog tracking
@@ -38,6 +54,13 @@ class EventBus {
             e = hook.intercept(e ?: return)
         }
         if (e == null) return
+
+        if (e is CommandEnvelope || e is CommandAck) {
+            if (!_commands.tryEmit(e)) {
+                _commands.emit(e)
+            }
+            return
+        }
 
         if (_events.tryEmit(e)) {
             checkBacklogCleared()
@@ -100,7 +123,12 @@ class EventBus {
         handler: suspend (E) -> Unit
     ) {
         scope.launch {
-            events.filterIsInstance(eventType).collect { handler(it) }
+            val source = if (eventType == CommandEnvelope::class || eventType == CommandAck::class) {
+                commands
+            } else {
+                events
+            }
+            source.filterIsInstance(eventType).collect { handler(it) }
         }
     }
 }

@@ -23,7 +23,7 @@ object ApiClient {
     suspend fun getUserFromCookie(cookie: String): User {
         val client = ClientManager.getProxiedClient("api")
         val response = withRetry(3) {
-            client.get("https://stripchat.com/api/front/v3/config/initial") {
+            client.get("https://poplive.xyz/api/front/v3/config/initial") {
                 header("Cookie", cookie)
                 expectSuccess = true
             }
@@ -39,7 +39,7 @@ object ApiClient {
     suspend fun userFetchInitial(user: User): JsonObject {
         val client = ClientManager.getProxiedClient("api")
         val response = withRetry(3) {
-            client.get("https://stripchat.com/api/front/v3/config/initial") {
+            client.get("https://poplive.xyz/api/front/v3/config/initial") {
                 header("Cookie", user.cookie)
                 expectSuccess = true
             }
@@ -50,7 +50,7 @@ object ApiClient {
     suspend fun roomFetchCamInfo(roomName: String, cookie: String): JsonObject {
         val client = ClientManager.getProxiedClient("api")
         val response = withRetry(3) {
-            client.get("https://stripchat.com/api/front/v2/models/username/$roomName/cam") {
+            client.get("https://poplive.xyz/api/front/v2/models/username/$roomName/cam") {
                 header("Cookie", cookie)
                 expectSuccess = true
             }
@@ -67,7 +67,7 @@ object ApiClient {
         val initial = userFetchInitial(user)
         val client = ClientManager.getProxiedClient("api")
         val response = withRetry(3, stopIf = { false }) {
-            client.post("https://stripchat.com/api/front/show/models/$roomId/groupShows/${user.userId}") {
+            client.post("https://poplive.xyz/api/front/show/models/$roomId/groupShows/${user.userId}") {
                 header("Cookie", user.cookie)
                 contentType(ContentType.Application.Json)
                 setBody(buildJsonObject {
@@ -97,7 +97,7 @@ object ApiClient {
     suspend fun roomFetchBroadcastInfo(roomName: String): JsonObject {
         val client = ClientManager.getProxiedClient("api")
         val response = withRetry(3) {
-            client.get("https://stripchat.com/api/front/v1/broadcasts/$roomName")
+            client.get("https://poplive.xyz/api/front/v1/broadcasts/$roomName")
         }
         val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
 

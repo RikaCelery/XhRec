@@ -75,7 +75,7 @@ fun main(vararg args: String) {
             decryptKeys = persisted.decryptKeys,
             streamAuthKey = persisted.pkey,
             authToken = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiItMTA4MSIsImluZm8iOnsiaXNHdWVzdCI6dHJ1ZSwidXNlcklkIjotMTA4MX19.IXF36-UfCEmOPGvhl2a19rgLsh2rDCdXNJ3su9LkA9Y",
-            platformHost = "stripchat.com",
+            platformHost = "poplive.xyz",
             listConfPath = cli.getOptionValue("file", "list.conf"),
             configPath = configPath,
             maskSensitiveLogs = persisted.maskSensitiveLogs
@@ -131,6 +131,9 @@ fun main(vararg args: String) {
             eventBus,
             requestBus,
             metricComponent,
+            roomComponent,
+            sessionComponent,
+            schedulerComponent,
             postProcessorComponent,
             appScope,
             mseStore

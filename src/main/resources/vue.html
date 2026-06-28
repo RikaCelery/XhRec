@@ -333,7 +333,7 @@
                         <tr v-for="room in roomDisplay" :key="room.name"
                             class="hover:bg-slate-50 transition-colors group">
                             <td class="px-3 py-1.5 font-medium text-indigo-600 text-xs">
-                                <a :href="`https://xhamsterlive.com/${room.name}`" target="_blank"
+                                <a :href="`https://poplive.xyz/${room.name}`" target="_blank"
                                     class="hover:underline flex items-center gap-0.5">
                                     {{room.name}} <i
                                         class="fa-solid fa-arrow-up-right-from-square text-[0.6rem] text-slate-400"></i>
@@ -812,7 +812,7 @@
                     }
 
                     try {
-                        const res = await fetch(`https://zh.xhamsterlive.com/api/front/v1/broadcasts/${modelName}`);
+                        const res = await fetch(`https://poplive.xyz/api/front/v1/broadcasts/${modelName}`);
                         const r = await res.json();
                         const data = r.item.isLive === false ? { stamp: now, url: null } : {
                             stamp: r.item.snapshotTimestamp,

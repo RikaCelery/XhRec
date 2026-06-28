@@ -227,4 +227,23 @@ class MetricComponent(
         }
         return sb.toString()
     }
+
+    fun snapshotRoomDetailedStatus(): Map<Long, Map<String, Any>> =
+        metrics.mapValues { (_, m) ->
+            mapOf<String, Any>(
+                "total" to (m.segmentAttempted.get() + m.runningUrls.size),
+                "success" to m.segmentDownloaded.get(),
+                "failed" to m.segmentFailed.get(),
+                "bytesWrite" to m.segmentBytes.get(),
+                "lifetimeBytes" to m.lifetimeBytes.get(),
+                "lifetimeDownloaded" to m.lifetimeDownloaded.get(),
+                "running" to m.runningUrls.mapKeys { it.key }
+                    .mapValues { (_, v) ->
+                        mapOf<String, Any>(
+                            "type" to v.type,
+                            "startAt" to v.startAt
+                        )
+                    }
+            )
+        }
 }
