@@ -32,7 +32,7 @@ class ConfigComponentTest {
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
             port = 8080, proxy = null,
             decryptKeys = mapOf("key1" to "secret1", "key2" to "secret2"),
-            streamAuthKey = "auth-secret", authToken = "tok",
+            streamAuthKey = "auth-secret", 
             hosts = HostsConfig(platformHosts = listOf("ex.com"), webSocketHosts = listOf("ws.ex.com")),
             configPath = configPath.absolutePath
         )
@@ -106,7 +106,7 @@ class ConfigComponentTest {
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
             port = 8080, proxy = null,
             decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
-            authToken = "tok", hosts = HostsConfig(platformHosts = listOf("ex.com")),
+             hosts = HostsConfig(platformHosts = listOf("ex.com")),
             configPath = configPath.absolutePath
         )
         val bus = EventBus()
@@ -136,7 +136,7 @@ class ConfigComponentTest {
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
             port = 8080, proxy = null,
             decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
-            authToken = "tok", hosts = HostsConfig(platformHosts = listOf("default.example.com")),
+             hosts = HostsConfig(platformHosts = listOf("default.example.com")),
             configPath = configPath.absolutePath
         )
         val bus = EventBus()
@@ -161,7 +161,7 @@ class ConfigComponentTest {
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
             port = 8080, proxy = null,
             decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
-            authToken = "tok", hosts = HostsConfig(platformHosts = listOf("old.example.com")),
+             hosts = HostsConfig(platformHosts = listOf("old.example.com")),
             configPath = configPath.absolutePath
         )
         val bus = EventBus()

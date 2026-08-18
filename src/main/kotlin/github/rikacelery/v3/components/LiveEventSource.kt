@@ -27,7 +27,8 @@ data class OnWsMessage(val text: String) : LiveEventMsg
 
 
 class LiveEventSource(
-    private val authToken: String,
+    /** Supplies the WebSocket auth JWT (fetched from config/initial at startup). */
+    private val tokenProvider: suspend () -> String,
     eventBus: EventBus,
     parentScope: CoroutineScope
 ) : Actor<LiveEventMsg>("LiveEventSource", eventBus, parentScope) {
@@ -37,6 +38,11 @@ class LiveEventSource(
     @Volatile private var wsSession: WebSocketSession? = null
     private val seq = AtomicInteger(0)
     private val wsFailover = HostFailover(listOf(HostsConfig.DEFAULT_WS_HOST))
+
+    // WS auth JWT: minted per session, validity unknown — assume 5 days and refresh on auth failure.
+    @Volatile private var wsToken: String = ""
+    @Volatile private var wsTokenFetchedAt: Long = 0L
+    private val wsTokenMaxAgeMs = 5L * 24 * 60 * 60 * 1000
 
     private val globalChannels = listOf(
         "changeConfigFeature",
@@ -65,7 +71,13 @@ class LiveEventSource(
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
         subscribe<HostsChanged>(HostsChanged::class)
         applyHostConfig() // pick up the current ws hosts before connecting
-        scope.launch { connectWebSocket() }
+        scope.launch {
+            // fetch the guest WS token at startup; failures are retried inside the loop
+            try { ensureWsToken() } catch (e: Exception) {
+                logger.warn("Failed to fetch ws token at startup: {}", e.message)
+            }
+            connectWebSocket()
+        }
     }
 
     override suspend fun wrapEvent(event: Any): LiveEventMsg? = when (event) {
@@ -90,6 +102,21 @@ class LiveEventSource(
         }
     }
 
+    /** Returns a valid WS token, refetching when not yet fetched or older than the 5-day TTL. */
+    private suspend fun ensureWsToken(): String {
+        val now = System.currentTimeMillis()
+        if (wsToken.isNotEmpty() && now - wsTokenFetchedAt < wsTokenMaxAgeMs) return wsToken
+        wsToken = tokenProvider()
+        wsTokenFetchedAt = now
+        logger.info("Fetched fresh WebSocket auth token")
+        return wsToken
+    }
+
+    /** Force a token refetch on the next connection attempt (auth failure / stale token). */
+    private fun invalidateWsToken() {
+        wsToken = ""
+    }
+
     /** Refresh the ws host list from the active config and force a reconnect. */
     private suspend fun applyHostConfig() {
         wsFailover.updateHosts(Hosts.current.webSocketHosts)
@@ -107,12 +134,15 @@ class LiveEventSource(
         while (isActive) {
             val host = wsFailover.currentHost() ?: HostsConfig.DEFAULT_WS_HOST
             try {
+                val token = ensureWsToken()
                 val client = ClientManager.getProxiedClient("event", http1 = true)
                 client.webSocket("wss://" + host + "/connection/websocket") {
                     wsSession = this
-                    send(authFrame(authToken))
+                    send(authFrame(token))
                     resubscribeAll()
+                    var frames = 0
                     for (frame in incoming) {
+                        frames++
                         if (frame is Frame.Text) {
                             val text = frame.readText()
                             if (text == "{}") {
@@ -122,12 +152,16 @@ class LiveEventSource(
                             }
                         }
                     }
+                    // closed by the server without delivering any frame — almost certainly an
+                    // auth failure (invalid/expired token) → refetch on the next attempt
+                    if (frames == 0) invalidateWsToken()
                 }
                 wsFailover.markSuccess(host)
                 backoff = 1.seconds
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                invalidateWsToken()
                 wsSession = null
                 wsFailover.markFailure(host)
                 logger.error("WS error on {}: {}, reconnecting in {}ms", host, e.message, backoff.inWholeMilliseconds)

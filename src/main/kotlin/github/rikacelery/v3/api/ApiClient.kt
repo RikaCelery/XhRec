@@ -98,6 +98,20 @@ object ApiClient {
         return response
     }
 
+    /**
+     * Fetches the per-session guest WebSocket auth JWT from config/initial (no cookie =
+     * anonymous guest). The token is freshly minted per session by the server.
+     */
+    suspend fun fetchGuestWsToken(): String {
+        val response = withHostFallback { host ->
+            withRetry(3) {
+                ensure2xx(host, apiClient.get(apiUrl(host, "api/front/v3/config/initial")))
+            }
+        }
+        val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        return json.PathSingle("initial.client.websocket.token").asString()
+    }
+
     suspend fun getRoomFromUrlOrSlug(path: String): Pair<Long, String> {
         val slug = path.substringAfterLast("/")
         val j = withRetry(3, stopIf = { it is RenameException || it is DeletedException }) {

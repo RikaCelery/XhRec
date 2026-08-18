@@ -9,7 +9,6 @@ data class SystemConfig(
     val proxy: String?,
     val decryptKeys: Map<String, String>,
     val streamAuthKey: String,
-    val authToken: String,
     val hosts: HostsConfig = HostsConfig.DEFAULT,
     val listConfPath: String = "list.conf",
     val configPath: String = "xhrec.json",

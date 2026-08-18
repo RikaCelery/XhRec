@@ -92,7 +92,6 @@ fun main(vararg args: String) {
             proxy = System.getenv("http_proxy"),
             decryptKeys = persisted.decryptKeys,
             streamAuthKey = persisted.pkey,
-            authToken = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiItMTA4MSIsImluZm8iOnsiaXNHdWVzdCI6dHJ1ZSwidXNlcklkIjotMTA4MX19.IXF36-UfCEmOPGvhl2a19rgLsh2rDCdXNJ3su9LkA9Y",
             hosts = persisted.hosts,
             listConfPath = cli.getOptionValue("file", "list.conf"),
             configPath = configPath,
@@ -127,7 +126,9 @@ fun main(vararg args: String) {
         val authComponent = AuthComponent(cli.getOptionValue("users", "users.txt"), eventBus, appScope)
         val roomComponent =
             RoomComponent(ApiClient, config.listConfPath, requestBus, eventBus, appScope)
-        val liveEventSource = LiveEventSource(config.authToken, eventBus, appScope)
+        // WS auth JWT is fetched dynamically at startup from config/initial (guest session),
+        // refreshed on auth failure or after its (unknown) validity window.
+        val liveEventSource = LiveEventSource({ ApiClient.fetchGuestWsToken() }, eventBus, appScope)
 
         val downloaderComponent = DownloaderComponent(
             dataChannel, eventBus = eventBus, parentScope = appScope, initialConcurrency = 64
