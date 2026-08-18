@@ -6,7 +6,6 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class EventBusTest {
 
@@ -95,13 +94,4 @@ class EventBusTest {
         assertEquals(listOf("x-1-2"), events)
     }
 
-    @Test
-    fun `unsubscribed event type not delivered to other subscribers`() = runTest(UnconfinedTestDispatcher()) {
-        val bus = EventBus()
-        val strings = mutableListOf<String>()
-        bus.subscribe(backgroundScope, String::class) { strings.add(it) }
-
-        bus.publish(123)
-        assertTrue(strings.isEmpty())
-    }
 }

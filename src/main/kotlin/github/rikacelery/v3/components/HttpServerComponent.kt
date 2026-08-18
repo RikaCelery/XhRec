@@ -2,8 +2,10 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.events.*
+import github.rikacelery.v3.utils.CdnSelector
 import io.ktor.http.*
 import io.ktor.network.tls.certificates.*
 import io.ktor.serialization.kotlinx.json.*
@@ -12,6 +14,7 @@ import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
+import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.*
@@ -36,6 +39,9 @@ class HttpServerComponent(
 ) {
     private val logger = LoggerFactory.getLogger("v3.HttpServer")
     private val stopping = AtomicBoolean(false)
+    private val dashboardHtml: String by lazy {
+        this::class.java.getResource("/vue.html")!!.readText()
+    }
 
     fun start(): EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration> {
         val keyStoreFile = File("xhrec.keystore")
@@ -73,7 +79,7 @@ class HttpServerComponent(
 
             routing {
                 get("/") {
-                    call.respondText(this::class.java.getResource("/vue.html")!!.readText(), ContentType.Text.Html)
+                    call.respondText(dashboardHtml, ContentType.Text.Html)
                 }
                 get("/add") {
                     val name = call.request.queryParameters["name"] ?: ""
@@ -329,6 +335,44 @@ class HttpServerComponent(
                     val status = requestBus.request<ConfigResponse>(ToggleMask).value
                     persistConfig()
                     call.respondText(status.toString())
+                }
+                get("/config/hosts") {
+                    val hosts = requestBus.request<HostsConfigResponse>(GetHostsConfig).hosts
+                    val cdnStats = CdnSelector.snapshot()
+                    call.respond(buildJsonObject {
+                        hosts.toJson().forEach { (k, v) -> put(k, v) }
+                        put("cdnStats", buildJsonObject {
+                            cdnStats.forEach { (host, stat) ->
+                                put(host, buildJsonObject {
+                                    put("speedBps", stat.speedBps.toLong())
+                                    put("samples", stat.samples)
+                                    put("failures", stat.failures)
+                                    put("coolingDown", stat.cooldownUntil > System.currentTimeMillis())
+                                })
+                            }
+                        })
+                    })
+                }
+                post("/config/hosts") {
+                    val params = call.receiveParameters()
+                    fun listOf(key: String): List<String> =
+                        params[key]?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+                    val hosts = HostsConfig(
+                        platformHosts = listOf("platformHosts"),
+                        webSocketHosts = listOf("webSocketHosts"),
+                        hlsHosts = listOf("hlsHosts"),
+                        hlsMasterHost = params["hlsMasterHost"] ?: "",
+                        webHost = params["webHost"] ?: "",
+                        previewHost = params["previewHost"] ?: "",
+                        thumbHost = params["thumbHost"] ?: ""
+                    )
+                    try {
+                        requestBus.request<OkResponse>(SetHostsConfig(hosts))
+                        call.respondText("Hosts config updated")
+                    } catch (e: Exception) {
+                        logger.error("Failed to update hosts config", e)
+                        call.respondText("Error: ${e.message}", status = HttpStatusCode.InternalServerError)
+                    }
                 }
                 get("/mse/live") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull()

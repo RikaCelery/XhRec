@@ -1,35 +1,42 @@
 package github.rikacelery.v3.components
 
+import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
+import github.rikacelery.v3.data.Hosts
+import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.events.*
+import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.*
 import java.io.File
 
 sealed interface ConfigMsg
 data class HandleConfigQuery(val env: CommandEnvelope) : ConfigMsg
 
 class ConfigComponent(
-    private val config: SystemConfig,
+    val config: SystemConfig,
     eventBus: EventBus,
     parentScope: CoroutineScope
 ) : Actor<ConfigMsg>("ConfigComponent", eventBus, parentScope) {
+    companion object {
+        var instance: ConfigComponent? = null
+    }
+
+    init {
+        instance = this
+    }
 
     private val configFile = File(config.configPath)
     private var persistedStreamAuthKey: String = config.streamAuthKey
     private val persistedDecryptKeys = config.decryptKeys.toMutableMap()
     private var maskSensitiveLogs = config.maskSensitiveLogs
+    private var hostsConfig: HostsConfig = config.hosts
 
     private suspend fun loadConfig() {
         if (!configFile.exists()) return
@@ -42,7 +49,9 @@ class ConfigComponent(
                 persistedDecryptKeys[k] = v.jsonPrimitive.content
             }
             json["maskSensitiveLogs"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()?.let { maskSensitiveLogs = it }
+            hostsConfig = HostsConfig.fromJson(json)
             SensitiveStringRegistry.enabled = maskSensitiveLogs
+            applyHosts()
             logger.info("Loaded config from ${config.configPath}")
         } catch (e: Exception) {
             logger.error("Failed to load config from ${config.configPath}: ${e.message}", e)
@@ -53,20 +62,35 @@ class ConfigComponent(
         withContext(Dispatchers.IO) {
             try {
                 val json = Json { prettyPrint = true }
-                configFile.writeText(json.encodeToString(JsonElement.serializer(),
-                    buildJsonObject {
-                        put("streamAuthKey", persistedStreamAuthKey)
-                        put("maskSensitiveLogs", maskSensitiveLogs)
-                        put("decryptKeys", buildJsonObject {
-                            persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
-                        })
-                    }
-                ))
+                configFile.writeText(
+                    json.encodeToString(
+                        JsonElement.serializer(),
+                        buildJsonObject {
+                            put("streamAuthKey", persistedStreamAuthKey)
+                            put("maskSensitiveLogs", maskSensitiveLogs)
+                            hostsConfig.toJson().forEach { (k, v) -> put(k, v) }
+                            put("decryptKeys", buildJsonObject {
+                                persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
+                            })
+                        }
+                    )
+                )
                 logger.info("Saved config to ${config.configPath}")
             } catch (e: Exception) {
                 logger.error("Failed to save config to ${config.configPath}: ${e.message}", e)
             }
         }
+    }
+
+    /** Push the active host config to all consumers and notify components that need to react. */
+    private suspend fun applyHosts() {
+        val cfg = HostsConfig.sanitize(hostsConfig)
+        hostsConfig = cfg
+        Hosts.current = cfg
+        ApiClient.applyHosts(cfg.platformHosts)
+        CdnSelector.updateHosts(cfg.hlsHosts)
+        eventBus.publish(HostsChanged)
+        logger.info("Hosts config applied: platform=${cfg.platformHosts}, ws=${cfg.webSocketHosts}, hls=${cfg.hlsHosts}, master=${cfg.hlsMasterHost}")
     }
 
     override suspend fun onStart(scope: CoroutineScope) {
@@ -98,12 +122,22 @@ class ConfigComponent(
                 if (found != null) DecryptKeyMatch(found, persistedDecryptKeys[found]!!)
                 else DecryptKeyMatch("", "")
             }
+
             is GetMaskStatus -> ConfigResponse(maskSensitiveLogs)
             is ToggleMask -> {
                 maskSensitiveLogs = !maskSensitiveLogs
                 SensitiveStringRegistry.enabled = maskSensitiveLogs
                 ConfigResponse(maskSensitiveLogs)
             }
+
+            is GetHostsConfig -> HostsConfigResponse(HostsConfig.sanitize(hostsConfig))
+            is SetHostsConfig -> {
+                hostsConfig = HostsConfig.sanitize(env.command.hosts)
+                applyHosts()
+                scope.launch(Dispatchers.IO) { saveConfig() }
+                OkResponse
+            }
+
             else -> return
         }
         eventBus.publish(CommandAck(env.id, ack))

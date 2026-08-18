@@ -9,6 +9,7 @@ import io.ktor.client.plugins.websocket.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import okhttp3.ConnectionPool
+import okhttp3.Protocol
 import org.slf4j.LoggerFactory
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -16,27 +17,36 @@ import java.util.concurrent.TimeUnit
 
 object ClientManager {
     private val logger = LoggerFactory.getLogger(ClientManager::class.java)
-    private fun clientDirect(key: String): HttpClient {
+
+    /**
+     * http1=true forces HTTP/1.1 — required for the stripchat.com WAF: its HTTP/2
+     * fingerprint check rejects OkHttp (non-browser h2), while HTTP/1.1 + browser
+     * navigation headers passes. CDN clients (doppiocdn.org) keep HTTP/2.
+     */
+    private fun clientDirect(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient {
         val pool = ConnectionPool(16, 5, TimeUnit.MINUTES)
-        logger.debug("create direct client key={}", key)
+        logger.debug("create direct client key={} http1={} expectSuccess={}", key, http1, expectSuccess)
         return HttpClient(OkHttp) {
             configureClient()
+            this.expectSuccess = expectSuccess
             engine {
                 config {
                     connectionPool(pool)
                     followSslRedirects(true)
                     followRedirects(true)
+                    if (http1) protocols(listOf(Protocol.HTTP_1_1))
                 }
             }
         }
     }
 
-    private fun clientProxied(key: String): HttpClient {
+    private fun clientProxied(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient {
         val pool = ConnectionPool(16, 5, TimeUnit.MINUTES)
         val proxyEnv = System.getenv("http_proxy") ?: System.getenv("HTTP_PROXY")
-        logger.info("create proxied client key={} proxy={}", key, proxyEnv)
+        logger.info("create proxied client key={} proxy={} http1={} expectSuccess={}", key, proxyEnv, http1, expectSuccess)
         return HttpClient(OkHttp) {
             configureClient()
+            this.expectSuccess = expectSuccess
             install(ContentNegotiation) {
                 json()
             }
@@ -53,6 +63,7 @@ object ClientManager {
                     connectionPool(pool)
                     followSslRedirects(true)
                     followRedirects(true)
+                    if (http1) protocols(listOf(Protocol.HTTP_1_1))
                 }
             }
         }
@@ -63,7 +74,6 @@ object ClientManager {
     private val lock = Any()
 
     private fun HttpClientConfig<OkHttpConfig>.configureClient() {
-        expectSuccess = true
         install(Logging) {
             logger = object : Logger {
                 override fun log(message: String) {
@@ -90,19 +100,29 @@ object ClientManager {
                 )
                 append(HttpHeaders.AcceptLanguage, "en,zh-CN;q=0.9,zh;q=0.8")
                 append(HttpHeaders.Connection, "keep-alive")
+                // browser navigation fingerprint — required by the stripchat WAF on HTTP/1.1
+                append("Sec-Fetch-Dest", "document")
+                append("Sec-Fetch-Mode", "navigate")
+                append("Sec-Fetch-Site", "none")
+                append("Sec-Fetch-User", "?1")
+                append("Upgrade-Insecure-Requests", "1")
             }
         }
     }
 
-    fun getClient(key: String): HttpClient {
+    fun getClient(key: String): HttpClient = getClient(key, http1 = false)
+
+    fun getClient(key: String, http1: Boolean, expectSuccess: Boolean = true): HttpClient {
         synchronized(lock) {
-            return clientsDirect[key] ?: clientDirect(key).also { clientsDirect[key] = it }
+            return clientsDirect[key] ?: clientDirect(key, http1, expectSuccess).also { clientsDirect[key] = it }
         }
     }
 
-    fun getProxiedClient(key: String): HttpClient {
+    fun getProxiedClient(key: String): HttpClient = getProxiedClient(key, http1 = false)
+
+    fun getProxiedClient(key: String, http1: Boolean, expectSuccess: Boolean = true): HttpClient {
         synchronized(lock) {
-            return clientsProxied[key] ?: clientProxied(key).also { clientsProxied[key] = it }
+            return clientsProxied[key] ?: clientProxied(key, http1, expectSuccess).also { clientsProxied[key] = it }
         }
     }
 

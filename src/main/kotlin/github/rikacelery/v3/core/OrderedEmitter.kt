@@ -2,17 +2,24 @@ package github.rikacelery.v3.core
 
 import github.rikacelery.v3.data.*
 import github.rikacelery.v3.events.EndReason
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class OrderedEmitter(
     private val roomId: Long,
     private val output: suspend (DataChannelMsg) -> Unit
 ) {
+    // complete() is called concurrently from downloader workers; the buffer and
+    // nextIndex must be mutated under a single lock (drain may suspend on output()).
+    private val mutex = Mutex()
     private var nextIndex = 0L
     private val buffer = sortedMapOf<Long, DownloadResult>()
 
     suspend fun complete(idx: Long, result: DownloadResult) {
-        buffer[idx] = result
-        drain()
+        mutex.withLock {
+            buffer[idx] = result
+            drain()
+        }
     }
 
     private suspend fun drain() {

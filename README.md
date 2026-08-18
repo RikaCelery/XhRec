@@ -52,10 +52,17 @@ If the requested quality is unavailable, the closest match is selected automatic
 
 ### xhrec.json
 
-Stream decryption key store. Created with defaults on first run if absent.
+Platform domains and stream decryption key store. Created with defaults on first run if absent.
 
 ```json
 {
+  "platformHosts": ["stripchat.com"],
+  "webSocketHosts": ["websocket-v6.xhamsterlive.com"],
+  "hlsHosts": ["media-hls.doppiocdn.org"],
+  "hlsMasterHost": "edge-hls.doppiocdn.org",
+  "webHost": "xhamsterlive.com",
+  "previewHost": "zh.xhamsterlive.com",
+  "thumbHost": "img.doppiocdn.org",
   "streamAuthKey": "default psch key, if failed to extract from master playlist",
   "maskSensitiveLogs": true,
   "decryptKeys": {
@@ -65,13 +72,25 @@ Stream decryption key store. Created with defaults on first run if absent.
 }
 ```
 
-| Field               | Description                                                                                                          |
-|---------------------|----------------------------------------------------------------------------------------------------------------------|
-| `streamAuthKey`     | Default psch key for stream auth                                                                                     |
-| `maskSensitiveLogs` | Enable log masking (model names, cookies, tokens, proxy URLs). Toggle in WebUI or via `/mask/toggle`. Default `true` |
-| `decryptKeys`       | Key-value map of decryption keys (psch key → key)                                                                    |
+| Field              | Description                                                                                                                                            |
+|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `platformHosts`    | Ordered list of platform API hosts (host only, no `https://`). On request failure the host enters a cooldown and the next host takes over automatically. Default `["stripchat.com"]` |
+| `webSocketHosts`   | Ordered list of WebSocket hosts with the same failover behavior. Default `["websocket-v6.xhamsterlive.com"]`                                            |
+| `hlsHosts`         | Ordered list of CDN hosts used for media playlists and segments. Download speed is measured per host (EWMA) and the fastest host is preferred, while ~10% of connections are randomly routed to other hosts to keep measurements fresh. Default `["media-hls.doppiocdn.org"]` |
+| `hlsMasterHost`    | Host serving the master playlist; the remaining `hlsHosts` are tried as fallbacks. Default `edge-hls.doppiocdn.org`                                     |
+| `webHost`          | Host used by the WebUI for room links. Default `xhamsterlive.com`                                                                                       |
+| `previewHost`      | Host used by the WebUI for snapshot previews. Default `zh.xhamsterlive.com`                                                                             |
+| `thumbHost`        | Host used by the WebUI for thumbnail images. Default `img.doppiocdn.org`                                                                                |
+| `streamAuthKey`    | Default psch key for stream auth                                                                                                                        |
+| `maskSensitiveLogs`| Enable log masking (model names, cookies, tokens, proxy URLs). Toggle in WebUI or via `/mask/toggle`. Default `true`                                      |
+| `decryptKeys`      | Key-value map of decryption keys (psch key → key)                                                                                                        |
+
+All domains can also be managed at runtime from the WebUI (network icon in the toolbar) or via
+`GET /config/hosts` / `POST /config/hosts`; changes are persisted to `xhrec.json` and applied live
+(WebSocket reconnects, CDN selection switches immediately).
 
 ### users.txt
+
 
 User cookies for auto-payment. One cookie per line. Lines starting with `#` or `;` are ignored.
 

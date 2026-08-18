@@ -260,6 +260,10 @@
                         class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
                         <i class="fa-solid fa-globe text-sm"></i>
                     </button>
+                    <button @click="hostsDialog = true; syncHostForm()" :title="'Domain Settings / 域名设置'"
+                        class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
+                        <i class="fa-solid fa-network-wired text-sm"></i>
+                    </button>
                     <button @click="poweroff()" :title="$t('Power Off Server')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-colors ml-2">
                         <i class="fa-solid fa-power-off text-sm"></i>
@@ -333,7 +337,7 @@
                         <tr v-for="room in roomDisplay" :key="room.name"
                             class="hover:bg-slate-50 transition-colors group">
                             <td class="px-3 py-1.5 font-medium text-indigo-600 text-xs">
-                                <a :href="`https://xhamsterlive.com/${room.name}`" target="_blank"
+                                <a :href="`https://${hosts.webHost}/${room.name}`" target="_blank"
                                     class="hover:underline flex items-center gap-0.5">
                                     {{room.name}} <i
                                         class="fa-solid fa-arrow-up-right-from-square text-[0.6rem] text-slate-400"></i>
@@ -516,6 +520,66 @@
                 </div>
             </div>
         </div>
+
+        <!-- Domain Settings Modal -->
+        <div v-if="hostsDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="hostsDialog=false">
+            <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-2xl w-full p-5 border border-slate-200 dark:border-slate-700">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-bold text-slate-800 dark:text-slate-100">Domain Settings / 域名设置</h2>
+                    <button @click="hostsDialog=false" class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-200"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <label class="block">
+                        <span class="text-xs text-slate-500 dark:text-slate-400">API 域名 (逗号分隔, 自动 fallback)</span>
+                        <input v-model="hostForm.platformHosts" type="text" placeholder="stripchat.com, mirror.example.com"
+                            class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 dark:text-slate-400">WebSocket 域名 (逗号分隔)</span>
+                        <input v-model="hostForm.webSocketHosts" type="text" placeholder="websocket-v6.xhamsterlive.com"
+                            class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 dark:text-slate-400">CDN 域名 (测速优选, 逗号分隔)</span>
+                        <input v-model="hostForm.hlsHosts" type="text" placeholder="media-hls.doppiocdn.org"
+                            class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 dark:text-slate-400">Master playlist 域名</span>
+                        <input v-model="hostForm.hlsMasterHost" type="text" placeholder="edge-hls.doppiocdn.org"
+                            class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 dark:text-slate-400">Web 链接域名</span>
+                        <input v-model="hostForm.webHost" type="text" placeholder="xhamsterlive.com"
+                            class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 dark:text-slate-400">预览 API 域名</span>
+                        <input v-model="hostForm.previewHost" type="text" placeholder="zh.xhamsterlive.com"
+                            class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-500 dark:text-slate-400">缩略图域名</span>
+                        <input v-model="hostForm.thumbHost" type="text" placeholder="img.doppiocdn.org"
+                            class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
+                    </label>
+                </div>
+                <div class="mt-4" v-if="Object.keys(cdnStats).length">
+                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">CDN 测速 (bytes/s)</div>
+                    <div class="text-xs grid grid-cols-1 gap-1">
+                        <div v-for="(stat, host) in cdnStats" :key="host" class="flex justify-between px-2 py-1 rounded bg-slate-50 dark:bg-slate-900">
+                            <span class="font-mono">{{host}}</span>
+                            <span>{{formatBytes(stat.speedBps)}}/s · {{stat.samples}} samples · {{stat.failures}} failures{{stat.coolingDown ? ' · cooling': ''}}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-5 flex justify-end gap-2">
+                    <button @click="hostsDialog=false" class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">Cancel</button>
+                    <button @click="saveHosts()" class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm">Save / 保存</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script type="module">
@@ -542,6 +606,21 @@
                     previewHeight: 40,
                     darkMode: false,
                     maskEnabled: true,
+                    hostsDialog: false,
+                    cdnStats: {},
+                    hosts: {
+                        platformHosts: ["stripchat.com"],
+                        webSocketHosts: ["websocket-v6.xhamsterlive.com"],
+                        hlsHosts: ["media-hls.doppiocdn.org"],
+                        hlsMasterHost: "edge-hls.doppiocdn.org",
+                        webHost: "xhamsterlive.com",
+                        previewHost: "zh.xhamsterlive.com",
+                        thumbHost: "img.doppiocdn.org"
+                    },
+                    hostForm: {
+                        platformHosts: "", webSocketHosts: "", hlsHosts: "",
+                        hlsMasterHost: "", webHost: "", previewHost: "", thumbHost: ""
+                    },
                     locale: 'en',
                     translations: {
                         en: {},
@@ -643,6 +722,57 @@
                         const text = await r.text();
                         this.maskEnabled = text === 'true';
                         this.showToast(this.maskEnabled ? this.$t('Mask ON') : this.$t('Mask OFF'));
+                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
+                },
+                async fetchHostsConfig() {
+                    try {
+                        const res = await fetch(`${HOST}/config/hosts`);
+                        const j = await res.json();
+                        if (j.platformHosts) {
+                            this.hosts = {
+                                platformHosts: j.platformHosts || [],
+                                webSocketHosts: j.webSocketHosts || [],
+                                hlsHosts: j.hlsHosts || [],
+                                hlsMasterHost: j.hlsMasterHost || "",
+                                webHost: j.webHost || "",
+                                previewHost: j.previewHost || "",
+                                thumbHost: j.thumbHost || ""
+                            };
+                            this.cdnStats = j.cdnStats || {};
+                        }
+                    } catch (_) {}
+                },
+                syncHostForm() {
+                    this.hostForm = {
+                        platformHosts: (this.hosts.platformHosts || []).join(", "),
+                        webSocketHosts: (this.hosts.webSocketHosts || []).join(", "),
+                        hlsHosts: (this.hosts.hlsHosts || []).join(", "),
+                        hlsMasterHost: this.hosts.hlsMasterHost || "",
+                        webHost: this.hosts.webHost || "",
+                        previewHost: this.hosts.previewHost || "",
+                        thumbHost: this.hosts.thumbHost || ""
+                    };
+                },
+                async saveHosts() {
+                    const body = new URLSearchParams({
+                        platformHosts: this.hostForm.platformHosts,
+                        webSocketHosts: this.hostForm.webSocketHosts,
+                        hlsHosts: this.hostForm.hlsHosts,
+                        hlsMasterHost: this.hostForm.hlsMasterHost,
+                        webHost: this.hostForm.webHost,
+                        previewHost: this.hostForm.previewHost,
+                        thumbHost: this.hostForm.thumbHost
+                    });
+                    try {
+                        const r = await fetch(`${HOST}/config/hosts`, { method: "POST", body });
+                        const text = await r.text();
+                        if (r.ok) {
+                            this.showToast(text);
+                            this.hostsDialog = false;
+                            await this.fetchHostsConfig();
+                        } else {
+                            this.showToast(text, "error");
+                        }
                     } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 showToast(message, type = "success") {
@@ -812,11 +942,11 @@
                     }
 
                     try {
-                        const res = await fetch(`https://zh.xhamsterlive.com/api/front/v1/broadcasts/${modelName}`);
+                        const res = await fetch(`https://${this.hosts.previewHost}/api/front/v1/broadcasts/${modelName}`);
                         const r = await res.json();
                         const data = r.item.isLive === false ? { stamp: now, url: null } : {
                             stamp: r.item.snapshotTimestamp,
-                            url: `https://img.doppiocdn.org/thumbs/${r.item.snapshotTimestamp}/${r.item.modelId}`
+                            url: `https://${this.hosts.thumbHost}/thumbs/${r.item.snapshotTimestamp}/${r.item.modelId}`
                         };
 
                         cache[modelName] = data;
@@ -854,6 +984,9 @@
 
                 // Mask status
                 try { const r = await fetch(`${HOST}/mask/status`); this.maskEnabled = (await r.text()) === 'true'; } catch (_) {}
+
+                // Domain hosts config
+                await this.fetchHostsConfig();
 
                 // Load cache
                 try { this.snapshotcache = JSON.parse(localStorage.getItem("xhrec-thumb")) || {}; }

@@ -5,9 +5,11 @@ import github.rikacelery.v3.components.*
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.postprocessors.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import org.apache.commons.cli.DefaultParser
 import org.apache.commons.cli.Options
@@ -78,7 +80,9 @@ class Bootstrap(
         if (!file.exists()) {
             logger.warn("users.txt not found"); return
         }
-        val cookies = file.readLines().filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith(";") }
+        val cookies = withContext(Dispatchers.IO) {
+            file.readLines().filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith(";") }
+        }
         val users = cookies.mapNotNull { cookie ->
             try {
                 apiClient.getUserFromCookie(cookie.trim()).also { SensitiveStringRegistry.mask(it.username) }
@@ -90,12 +94,12 @@ class Bootstrap(
         logger.info("Loaded ${users.size} users")
     }
 
-    private fun loadProcessors(cli: CliConfig) {
+    private suspend fun loadProcessors(cli: CliConfig) {
         val file = File(cli.postProcessorPath)
         if (!file.exists()) {
             logger.warn("postprocessor.json not found"); return
         }
-        val json = file.readText()
+        val json = withContext(Dispatchers.IO) { file.readText() }
         val processors = parseProcessorConfig(json)
         postProcessorComponent.setProcessors(processors)
         logger.info("Loaded ${processors.size} processors")
@@ -155,7 +159,9 @@ class Bootstrap(
         if (!file.exists()) {
             logger.warn("list.conf not found"); return
         }
-        val lines = file.readLines().filter { it.isNotBlank() && !it.trimStart().startsWith(";") }
+        val lines = withContext(Dispatchers.IO) {
+            file.readLines().filter { it.isNotBlank() && !it.trimStart().startsWith(";") }
+        }
         coroutineScope {
             val idx = AtomicInteger(1)
             lines.map { line ->

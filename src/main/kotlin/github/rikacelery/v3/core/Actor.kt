@@ -13,8 +13,11 @@ abstract class Actor<T : Any>(
     private val slowHandlerThresholdMs: Long = 500
 ) {
     private val mailbox = Channel<T>(capacity = mailboxCapacity)
-    protected val scope = parentScope + SupervisorJob() + CoroutineName(name)
     protected val logger = LoggerFactory.getLogger(name)
+    protected val scope =
+        parentScope + SupervisorJob() + CoroutineName(name) + CoroutineExceptionHandler { context, throwable ->
+            logger.error("Unhandled exception {}",context[CoroutineName.Key], throwable)
+        }
 
     private var started = false
 

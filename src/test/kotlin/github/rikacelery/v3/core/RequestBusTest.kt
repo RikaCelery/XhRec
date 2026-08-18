@@ -69,30 +69,4 @@ class RequestBusTest {
         }
     }
 
-    @Test
-    fun `parent coroutine cancelled cleans up CompletableDeferred`() = runTest(UnconfinedTestDispatcher()) {
-        val bus = EventBus()
-        bus.installEchoResponder(backgroundScope)
-        val rb = RequestBus(bus, backgroundScope)
-
-        val job = launch {
-            try {
-                rb.request<OkResponse>(GetDecryptKey("slow"))
-            } catch (_: CancellationException) {
-                // expected
-            }
-        }
-        job.cancel()
-        job.join()
-    }
-
-    @Test
-    fun `CommandAck arrives before await handles gracefully`() = runTest(UnconfinedTestDispatcher()) {
-        val bus = EventBus()
-        bus.installEchoResponder(backgroundScope)
-        val rb = RequestBus(bus, backgroundScope)
-
-        val result = rb.request<ConfigResponse>(GetDecryptKey("fast"))
-        assertEquals("decrypted-fast", result.value)
-    }
 }

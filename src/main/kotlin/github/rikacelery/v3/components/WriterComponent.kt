@@ -93,9 +93,9 @@ class WriterComponent(
             hooks.forEach { path = it.beforeFileOpen(msg.roomId, path) }
 
             val file = File(path)
-            file.parentFile?.mkdirs()
             val eventFile = File("$path.event")
             withContext(Dispatchers.IO) {
+                file.parentFile?.mkdirs()
                 files[msg.roomId] = ActiveFile(
                     file = file, eventFile = eventFile,
                     fos = FileOutputStream(file), eventFos = FileOutputStream(eventFile),
@@ -146,7 +146,7 @@ class WriterComponent(
     }
 
     private suspend fun closeActiveFile(active: ActiveFile, reason: EndReason) {
-        withContext(NonCancellable) {
+        withContext(Dispatchers.IO + NonCancellable) {
             try {
                 if (active.bytesWritten < 1024) {
                     logger.info("Closed file: ${active.file.absolutePath}, reason=$reason (empty)")

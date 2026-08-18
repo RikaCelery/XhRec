@@ -2,11 +2,15 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
+import github.rikacelery.v3.data.Hosts
+import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.events.LiveMessage
 import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.RecordingStopped
 import github.rikacelery.v3.events.RoomStatusChanged
+import github.rikacelery.v3.events.HostsChanged
 import github.rikacelery.v3.utils.ClientManager
+import github.rikacelery.v3.utils.HostFailover
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
@@ -30,8 +34,9 @@ class LiveEventSource(
 
     private val subscribed = ConcurrentHashMap.newKeySet<Long>()
     private val roomStatuses = ConcurrentHashMap<Long, String>()
-    private var wsSession: WebSocketSession? = null
+    @Volatile private var wsSession: WebSocketSession? = null
     private val seq = AtomicInteger(0)
+    private val wsFailover = HostFailover(listOf(HostsConfig.DEFAULT_WS_HOST))
 
     private val globalChannels = listOf(
         "changeConfigFeature",
@@ -58,6 +63,8 @@ class LiveEventSource(
         subscribe<RecordingStarted>(RecordingStarted::class)
         subscribe<RecordingStopped>(RecordingStopped::class)
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
+        subscribe<HostsChanged>(HostsChanged::class)
+        applyHostConfig() // pick up the current ws hosts before connecting
         scope.launch { connectWebSocket() }
     }
 
@@ -65,6 +72,7 @@ class LiveEventSource(
         is RecordingStarted -> OnLiveEvent(event)
         is RecordingStopped -> OnLiveEvent(event)
         is RoomStatusChanged -> OnLiveEvent(event)
+        is HostsChanged -> OnLiveEvent(event)
         else -> null
     }
 
@@ -74,6 +82,7 @@ class LiveEventSource(
                 is RecordingStarted -> subscribeRoom(event.roomId)
                 is RecordingStopped -> unsubscribeRoom(event.roomId)
                 is RoomStatusChanged -> roomStatuses[event.roomId] = event.newStatus
+                is HostsChanged -> applyHostConfig()
                 else -> {}
             }
 
@@ -81,12 +90,25 @@ class LiveEventSource(
         }
     }
 
+    /** Refresh the ws host list from the active config and force a reconnect. */
+    private suspend fun applyHostConfig() {
+        wsFailover.updateHosts(Hosts.current.webSocketHosts)
+        logger.info("WebSocket hosts updated: {}", wsFailover.hosts)
+        try {
+            wsSession?.close(CloseReason(CloseReason.Codes.NORMAL, "hosts updated"))
+        } catch (e: Exception) {
+            logger.debug("ws close on hosts update: {}", e.message)
+        }
+        wsSession = null
+    }
+
     private suspend fun CoroutineScope.connectWebSocket() {
         var backoff = 1.seconds
         while (isActive) {
+            val host = wsFailover.currentHost() ?: HostsConfig.DEFAULT_WS_HOST
             try {
-                val client = ClientManager.getProxiedClient("event")
-                client.webSocket("wss://websocket-v6.xhamsterlive.com/connection/websocket") {
+                val client = ClientManager.getProxiedClient("event", http1 = true)
+                client.webSocket("wss://" + host + "/connection/websocket") {
                     wsSession = this
                     send(authFrame(authToken))
                     resubscribeAll()
@@ -101,11 +123,14 @@ class LiveEventSource(
                         }
                     }
                 }
+                wsFailover.markSuccess(host)
+                backoff = 1.seconds
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 wsSession = null
-                logger.error("WS error: ${e.message}, reconnecting in ${backoff.inWholeMilliseconds}ms")
+                wsFailover.markFailure(host)
+                logger.error("WS error on {}: {}, reconnecting in {}ms", host, e.message, backoff.inWholeMilliseconds)
                 delay(backoff)
                 backoff = minOf(backoff.inWholeSeconds * 2, 30).seconds
             }

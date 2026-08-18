@@ -52,10 +52,17 @@ https://stripchat.com/modelC q:highest
 
 ### xhrec.json
 
-流解密密钥存储。首次运行时如不存在则会创建默认文件。
+平台域名与流解密密钥存储。首次运行时如不存在则会创建默认文件。
 
 ```json
 {
+  "platformHosts": ["stripchat.com"],
+  "webSocketHosts": ["websocket-v6.xhamsterlive.com"],
+  "hlsHosts": ["media-hls.doppiocdn.org"],
+  "hlsMasterHost": "edge-hls.doppiocdn.org",
+  "webHost": "xhamsterlive.com",
+  "previewHost": "zh.xhamsterlive.com",
+  "thumbHost": "img.doppiocdn.org",
   "streamAuthKey": "默认 psch 密钥，如果无法从 master playlist 中提取则使用此值",
   "maskSensitiveLogs": true,
   "decryptKeys": {
@@ -65,13 +72,24 @@ https://stripchat.com/modelC q:highest
 }
 ```
 
-| 字段                 | 描述                                                                                          |
-|---------------------|----------------------------------------------------------------------------------------------|
-| `streamAuthKey`     | 用于流认证的默认 psch 密钥                                                                       |
-| `maskSensitiveLogs` | 启用日志脱敏（主播名、cookie、token、代理地址）。可在 WebUI 中或通过 `/mask/toggle` 切换。默认 `true` |
-| `decryptKeys`       | 解密密钥映射表（psch 密钥 → 解密密钥）                                                             |
+| 字段                 | 描述                                                                                                                                      |
+|---------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `platformHosts`     | 平台 API 域名列表（仅主机名，不带 `https://`，有序，第一个为主域名）。请求失败时该域名进入冷却，自动切换到下一个可用域名。默认 `["stripchat.com"]` |
+| `webSocketHosts`    | WebSocket 域名列表（有序，同样支持失败自动切换）。默认 `["websocket-v6.xhamsterlive.com"]`                                                |
+| `hlsHosts`          | CDN 数据域名列表（媒体 playlist 与分片）。系统按 EWMA 记录每个域名的下载速度，优先选择最快域名，同时约 10% 的连接随机分配给其它域名以保持测速新鲜。默认 `["media-hls.doppiocdn.org"]` |
+| `hlsMasterHost`     | master playlist 域名，失败时依次尝试 `hlsHosts` 作为后备。默认 `edge-hls.doppiocdn.org`                                                    |
+| `webHost`           | WebUI 房间链接域名。默认 `xhamsterlive.com`                                                                                                |
+| `previewHost`       | WebUI 快照预览 API 域名。默认 `zh.xhamsterlive.com`                                                                                        |
+| `thumbHost`         | WebUI 缩略图域名。默认 `img.doppiocdn.org`                                                                                                 |
+| `streamAuthKey`     | 用于流认证的默认 psch 密钥                                                                                                                   |
+| `maskSensitiveLogs` | 启用日志脱敏（主播名、cookie、token、代理地址）。可在 WebUI 中或通过 `/mask/toggle` 切换。默认 `true`                                         |
+| `decryptKeys`       | 解密密钥映射表（psch 密钥 → 解密密钥）                                                                                                         |
+
+所有域名也可以在运行时通过 WebUI（工具栏网络图标）或 `GET /config/hosts` / `POST /config/hosts` 管理，
+修改会持久化到 `xhrec.json` 并即时生效（WebSocket 自动重连，CDN 优选立即切换）。
 
 ### users.txt
+
 
 自动支付使用的用户 cookie。每行一个 cookie。以 `#` 或 `;` 开头的行被忽略。
 

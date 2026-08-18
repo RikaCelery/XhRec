@@ -29,7 +29,7 @@ data class RoomMetrics(
     val directCount: AtomicLong = AtomicLong(0),
     val latencySamples: ArrayDeque<Long> = ArrayDeque(10),
     val refreshLatencySamples: ArrayDeque<Long> = ArrayDeque(10),
-    var quality: String = "",
+    @Volatile var quality: String = "",
     val currentSegmentId: AtomicLong = AtomicLong(0),
     val totalLatencyMs: AtomicLong = AtomicLong(0),
     val fileCount: AtomicLong = AtomicLong(0),
@@ -115,8 +115,10 @@ class MetricComponent(
                     m.segmentBytes.addAndGet(e.bytes.toLong())
                     m.lifetimeDownloaded.incrementAndGet()
                     m.lifetimeBytes.addAndGet(e.bytes.toLong())
-                    m.latencySamples.addLast(e.durationMs)
-                    if (m.latencySamples.size > 10) m.latencySamples.removeFirst()
+                    synchronized(m) {
+                        m.latencySamples.addLast(e.durationMs)
+                        if (m.latencySamples.size > 10) m.latencySamples.removeFirst()
+                    }
                     if (e.proxied) m.proxyCount.incrementAndGet() else m.directCount.incrementAndGet()
                     m.runningUrls.remove(e.originalUrl)
                 }
@@ -145,8 +147,10 @@ class MetricComponent(
 
                 is PlaylistRefreshed -> {
                     val m = metrics.getOrPut(e.roomId) { RoomMetrics() }
-                    m.refreshLatencySamples.addLast(e.latencyMs)
-                    if (m.refreshLatencySamples.size > 10) m.refreshLatencySamples.removeFirst()
+                    synchronized(m) {
+                        m.refreshLatencySamples.addLast(e.latencyMs)
+                        if (m.refreshLatencySamples.size > 10) m.refreshLatencySamples.removeFirst()
+                    }
                     m.currentSegmentId.set(e.maxSegmentId.toLong())
                 }
 
@@ -168,8 +172,9 @@ class MetricComponent(
         val sb = StringBuilder()
         metrics.forEach { (roomId, m) ->
             if (roomId !in recording) return@forEach
-            val avgLatency = if (m.latencySamples.isNotEmpty())
-                m.latencySamples.average() else 0.0
+            val avgLatency = synchronized(m) {
+                if (m.latencySamples.isNotEmpty()) m.latencySamples.average() else 0.0
+            }
             val total = m.proxyCount.get() + m.directCount.get()
             val proxyRatio = if (total > 0) m.proxyCount.get().toDouble() / total else 0.0
 
@@ -204,8 +209,9 @@ class MetricComponent(
             sb.appendLine("# TYPE xhrec_files_total counter")
             sb.appendLine("xhrec_files_total{roomId=\"$roomId\"} ${m.fileCount.get()}")
 
-            val avgRefreshLatency = if (m.refreshLatencySamples.isNotEmpty())
-                m.refreshLatencySamples.average() else 0.0
+            val avgRefreshLatency = synchronized(m) {
+                if (m.refreshLatencySamples.isNotEmpty()) m.refreshLatencySamples.average() else 0.0
+            }
 
             sb.appendLine("# HELP xhrec_refresh_latency_ms Playlist refresh latency ms")
             sb.appendLine("# TYPE xhrec_refresh_latency_ms gauge")

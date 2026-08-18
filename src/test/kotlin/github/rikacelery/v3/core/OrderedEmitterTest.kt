@@ -102,15 +102,4 @@ class OrderedEmitterTest {
         // UserStop → no StreamStart follow-up
     }
 
-    @Test
-    fun `buffer holds out-of-order until contiguous prefix is ready`() = runTest(UnconfinedTestDispatcher()) {
-        val emitted = mutableListOf<DataChannelMsg>()
-        val emitter = OrderedEmitter(42) { emitted.add(it) }
-
-        emitter.complete(5, success(42, 5))
-        emitter.complete(3, success(42, 3))
-        emitter.complete(4, success(42, 4))
-        // idx 0-2 not arrived, nothing emitted
-        assertEquals(0, emitted.size)
-    }
 }

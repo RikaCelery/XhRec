@@ -8,6 +8,7 @@ import github.rikacelery.v3.data.DownloadMeta
 import github.rikacelery.v3.data.DownloadResult
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.hooks.DownloaderHook
+import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.ClientManager
 import io.ktor.client.*
 import io.ktor.client.request.*
@@ -31,10 +32,10 @@ data class DoCutPoint(val cut: CutPoint) : DownloaderMsg
 data class ActiveDownload(
     val emitter: OrderedEmitter,
     val semaphore: Semaphore,
-    val runningJobs: MutableSet<Job>,
+    val runningJobs: MutableSet<Job> = ConcurrentHashMap.newKeySet(),
     var idx: AtomicInteger = AtomicInteger(-1),
-    var generation: Int = 0,
-    var active: Boolean = true
+    @Volatile var generation: Int = 0,
+    @Volatile var active: Boolean = true
 )
 
 class DownloaderComponent(
@@ -63,8 +64,7 @@ class DownloaderComponent(
         val active = rooms.getOrPut(cmd.roomId) {
             ActiveDownload(
                 emitter = OrderedEmitter(cmd.roomId) { dataChannel.send(it) },
-                semaphore = Semaphore(initialConcurrency),
-                runningJobs = mutableSetOf()
+                semaphore = Semaphore(initialConcurrency)
             )
         }
         if (!active.active) return
@@ -110,22 +110,26 @@ class DownloaderComponent(
 
     private suspend fun downloadSegment(url: String, idx: Int): DownloadResult {
         val start = System.currentTimeMillis()
+        // CDN host selection: rewrite to the fastest measured host (with epsilon exploration)
+        val resolvedUrl = CdnSelector.resolve(url)
+        val cdnHost = CdnSelector.hostOf(resolvedUrl)
 
         return try {
             val directDeferred = scope.async {
-                downloadWithClient(ClientManager.getClient("dl_${Random.nextInt(32)}"), url, idx, false)
+                downloadWithClient(ClientManager.getClient("dl_${Random.nextInt(32)}"), resolvedUrl, idx, false)
             }
 
             val directResult = withTimeoutOrNull(raceThresholdMs.milliseconds) { directDeferred.await() }
             if (directResult is DownloadResult.Success) {
                 val dur = System.currentTimeMillis() - start
+                CdnSelector.record(cdnHost, directResult.data.size.toLong(), dur)
                 return directResult.copy(meta = directResult.meta.copy(fetchDurationMs = dur, proxied = false))
             }
 
             logger.debug("Direct download slow/failed for idx={}, falling back to proxy race", idx)
             // Phase 2: proxy joins the race
             val proxyDeferred = scope.async {
-                downloadWithClient(ClientManager.getProxiedClient("px_${Random.nextInt(5)}"), url, idx, true)
+                downloadWithClient(ClientManager.getProxiedClient("px_${Random.nextInt(5)}"), resolvedUrl, idx, true)
             }
 
             val result = select<DownloadResult> {
@@ -141,8 +145,14 @@ class DownloaderComponent(
 
             if (!directDeferred.isCompleted) directDeferred.cancel()
             if (!proxyDeferred.isCompleted) proxyDeferred.cancel()
+
+            (result as? DownloadResult.Success)?.let {
+                CdnSelector.record(cdnHost, it.data.size.toLong(), System.currentTimeMillis() - start)
+            }
+            if (result is DownloadResult.Failed) CdnSelector.recordFailure(cdnHost)
             result
         } catch (e: Exception) {
+            CdnSelector.recordFailure(cdnHost)
             logger.error("downloadSegment failed: idx=$idx, url=$url", e)
             DownloadResult.Failed(idx, url, e.message ?: "download failed")
         }

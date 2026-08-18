@@ -35,17 +35,20 @@ class MoveProcessor(
         val resolved = replace(template)
         val isDir = File(resolved).extension.isEmpty()
         val dest = if (isDir) File(resolved, input.name) else File(resolved)
-        dest.parentFile.mkdirs()
 
-        val eventFile = input.parentFile.resolve(input.name + ".event")
-        if (eventFile.exists()) {
-            val destEvent = dest.parentFile.resolve(dest.name + ".event")
-            eventFile.copyTo(destEvent, overwrite = true)
-            eventFile.delete()
-        }
-        if (input.absolutePath != dest.absolutePath) {
-            input.copyTo(dest, overwrite = true)
-            input.delete()
+        // file copies/deletes are blocking IO (possibly multi-GB) — keep them off the actor thread
+        withContext(Dispatchers.IO) {
+            dest.parentFile.mkdirs()
+            val eventFile = input.parentFile.resolve(input.name + ".event")
+            if (eventFile.exists()) {
+                val destEvent = dest.parentFile.resolve(dest.name + ".event")
+                eventFile.copyTo(destEvent, overwrite = true)
+                eventFile.delete()
+            }
+            if (input.absolutePath != dest.absolutePath) {
+                input.copyTo(dest, overwrite = true)
+                input.delete()
+            }
         }
         return listOf(dest)
     }

@@ -10,7 +10,7 @@ data class SystemConfig(
     val decryptKeys: Map<String, String>,
     val streamAuthKey: String,
     val authToken: String,
-    val platformHost: String,
+    val hosts: HostsConfig = HostsConfig.DEFAULT,
     val listConfPath: String = "list.conf",
     val configPath: String = "xhrec.json",
     val maskSensitiveLogs: Boolean = true

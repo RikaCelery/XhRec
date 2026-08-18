@@ -52,7 +52,7 @@ class ShellProcessor(
             val outputLine = lastLine ?: throw IllegalStateException("No output from shell command")
             val outputFile = File(outputLine)
             if (!outputFile.exists()) throw IllegalStateException("Output file not found: $outputFile")
-            if (removeInput) input.delete()
+            if (removeInput) withContext(Dispatchers.IO) { input.delete() }
             return listOf(outputFile)
         } else {
             if (noreturn) return listOf(input)

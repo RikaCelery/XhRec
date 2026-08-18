@@ -2,6 +2,7 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.events.*
 import kotlinx.coroutines.CoroutineScope
@@ -10,6 +11,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -28,7 +33,8 @@ class ConfigComponentTest {
             port = 8080, proxy = null,
             decryptKeys = mapOf("key1" to "secret1", "key2" to "secret2"),
             streamAuthKey = "auth-secret", authToken = "tok",
-            platformHost = "ex.com", configPath = configPath.absolutePath
+            hosts = HostsConfig(platformHosts = listOf("ex.com"), webSocketHosts = listOf("ws.ex.com")),
+            configPath = configPath.absolutePath
         )
         val bus = EventBus()
         val comp = ConfigComponent(config, bus, this)
@@ -100,7 +106,7 @@ class ConfigComponentTest {
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
             port = 8080, proxy = null,
             decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
-            authToken = "tok", platformHost = "ex.com",
+            authToken = "tok", hosts = HostsConfig(platformHosts = listOf("ex.com")),
             configPath = configPath.absolutePath
         )
         val bus = EventBus()
@@ -120,6 +126,67 @@ class ConfigComponentTest {
 
         comp1.stop()
         comp2.stop()
+    }
+
+    @Test
+    fun `hosts are loaded from config file and preserved on save`() = runTest(UnconfinedTestDispatcher()) {
+        val configPath = tempDir.resolve("xhrec-hosts.json").toFile()
+        configPath.writeText("{\"platformHosts\":[\"mirror.example.com\"],\"webSocketHosts\":[\"ws.mirror.example.com\"],\"hlsHosts\":[\"cdn.mirror.example.com\"],\"hlsMasterHost\":\"master.mirror.example.com\"}")
+        val config = SystemConfig(
+            outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
+            port = 8080, proxy = null,
+            decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
+            authToken = "tok", hosts = HostsConfig(platformHosts = listOf("default.example.com")),
+            configPath = configPath.absolutePath
+        )
+        val bus = EventBus()
+        val comp = ConfigComponent(config, bus, this)
+        comp.start()
+
+        // give async IO save time to complete
+        delay(300)
+
+        val saved = Json.parseToJsonElement(configPath.readText()).jsonObject
+        assertEquals("mirror.example.com", saved["platformHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
+        assertEquals("ws.mirror.example.com", saved["webSocketHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
+        assertEquals("cdn.mirror.example.com", saved["hlsHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
+        assertEquals("master.mirror.example.com", saved["hlsMasterHost"]?.jsonPrimitive?.content)
+        comp.stop()
+    }
+
+    @Test
+    fun `SetHostsConfig updates runtime and persists`() = runTest(UnconfinedTestDispatcher()) {
+        val configPath = tempDir.resolve("xhrec-set.json").toFile()
+        val config = SystemConfig(
+            outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
+            port = 8080, proxy = null,
+            decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
+            authToken = "tok", hosts = HostsConfig(platformHosts = listOf("old.example.com")),
+            configPath = configPath.absolutePath
+        )
+        val bus = EventBus()
+        val comp = ConfigComponent(config, bus, this)
+        comp.start()
+        val rb = RequestBus(bus, backgroundScope)
+
+        rb.request<OkResponse>(
+            SetHostsConfig(
+                HostsConfig(
+                    platformHosts = listOf("new1.example.com", "new2.example.com"),
+                    webSocketHosts = listOf("ws.new.example.com"),
+                    hlsHosts = listOf("cdn.new.example.com", "cdn2.new.example.com")
+                )
+            )
+        )
+
+        val cfg = rb.request<HostsConfigResponse>(GetHostsConfig).hosts
+        assertEquals(listOf("new1.example.com", "new2.example.com"), cfg.platformHosts)
+        assertEquals(listOf("cdn.new.example.com", "cdn2.new.example.com"), cfg.hlsHosts)
+
+        delay(300)
+        val saved = Json.parseToJsonElement(configPath.readText()).jsonObject
+        assertEquals("new1.example.com", saved["platformHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
+        comp.stop()
     }
 
     @Test

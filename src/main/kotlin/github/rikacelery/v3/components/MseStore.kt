@@ -31,13 +31,13 @@ class MseStore : DataHook {
     }
 
     private data class RoomState(
-        var latestSegment: SegmentEntry? = null,
-        var generation: Int = 0,
-        var init: ByteArray = ByteArray(0),
-        var mime: String = "",
-        var lastAccess: Long = System.currentTimeMillis(),
+        @Volatile var latestSegment: SegmentEntry? = null,
+        @Volatile var generation: Int = 0,
+        @Volatile var init: ByteArray = ByteArray(0),
+        @Volatile var mime: String = "",
+        @Volatile var lastAccess: Long = System.currentTimeMillis(),
         val segCounter: AtomicInteger = AtomicInteger(0),
-        var latestIdx: Int = -1,
+        @Volatile var latestIdx: Int = -1,
         val sseChannels: MutableList<SendChannel<SseChunk>> = Collections.synchronizedList(mutableListOf())
     )
 
