@@ -117,6 +117,10 @@ object WsDisconnected {
 object WsReconnected {
     override fun toString() = "WsReconnected"
 }
+/** Published when the WS reports a broadcast-settings / stream change — a hint to re-check quality */
+data class QualityChangeHint(val roomId: Long) {
+    override fun toString() = "QualityChangeHint(roomId=$roomId)"
+}
 /** Published when user manually changes quality — triggers immediate quality check */
 data class QualityChangeRequested(val roomId: Long, val newQuality: String) {
     override fun toString() = "QualityChangeRequested(roomId=$roomId, quality=$newQuality)"

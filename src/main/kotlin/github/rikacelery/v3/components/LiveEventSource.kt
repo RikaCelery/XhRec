@@ -4,11 +4,14 @@ import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.HostsConfig
+import github.rikacelery.v3.events.HostsChanged
 import github.rikacelery.v3.events.LiveMessage
+import github.rikacelery.v3.events.QualityChangeHint
 import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.RecordingStopped
+import github.rikacelery.v3.events.RoomAdded
+import github.rikacelery.v3.events.RoomRemoved
 import github.rikacelery.v3.events.RoomStatusChanged
-import github.rikacelery.v3.events.HostsChanged
 import github.rikacelery.v3.events.WsDisconnected
 import github.rikacelery.v3.events.WsReconnected
 import github.rikacelery.v3.utils.ClientManager
@@ -39,6 +42,10 @@ class LiveEventSource(
 ) : Actor<LiveEventMsg>("LiveEventSource", eventBus, parentScope) {
 
     private val subscribed = ConcurrentHashMap.newKeySet<Long>()
+    // rooms known to list.conf (from RoomAdded/RoomRemoved) — get status channels even when idle
+    private val trackedRooms = ConcurrentHashMap.newKeySet<Long>()
+    // rooms currently recording — get the full channel set
+    private val recordingRooms = ConcurrentHashMap.newKeySet<Long>()
     private val roomStatuses = ConcurrentHashMap<Long, String>()
     private val seq = AtomicInteger(0)
     private val wsFailover = HostFailover(listOf(HostsConfig.DEFAULT_WS_HOST))
@@ -54,6 +61,12 @@ class LiveEventSource(
         "changeConfigFeature",
 //        "newModelEvent",
         "lotteryChanged"
+    )
+
+    // minimal channels needed to track status of idle (armed but not recording) rooms
+    private val statusChannels = listOf(
+        "broadcastChanged", "streamChanged", "broadcastStarted", "broadcastStopped",
+        "modelStatusChanged", "broadcastSettingsChanged"
     )
 
     private val roomChannels = listOf(
@@ -75,6 +88,8 @@ class LiveEventSource(
         subscribe<RecordingStarted>(RecordingStarted::class)
         subscribe<RecordingStopped>(RecordingStopped::class)
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
+        subscribe<RoomAdded>(RoomAdded::class)
+        subscribe<RoomRemoved>(RoomRemoved::class)
         subscribe<HostsChanged>(HostsChanged::class)
         applyHostConfig() // pick up the current ws hosts before connecting
         scope.launch {
@@ -90,6 +105,8 @@ class LiveEventSource(
         is RecordingStarted -> OnLiveEvent(event)
         is RecordingStopped -> OnLiveEvent(event)
         is RoomStatusChanged -> OnLiveEvent(event)
+        is RoomAdded -> OnLiveEvent(event)
+        is RoomRemoved -> OnLiveEvent(event)
         is HostsChanged -> OnLiveEvent(event)
         else -> null
     }
@@ -97,9 +114,25 @@ class LiveEventSource(
     override suspend fun handle(msg: LiveEventMsg) {
         when (msg) {
             is OnLiveEvent -> when (val event = msg.event) {
-                is RecordingStarted -> subscribeRoom(event.roomId)
-                is RecordingStopped -> unsubscribeRoom(event.roomId)
+                is RecordingStarted -> {
+                    recordingRooms.add(event.roomId)
+                    subscribeRoom(event.roomId, full = true)
+                }
+                is RecordingStopped -> {
+                    recordingRooms.remove(event.roomId)
+                    // keep status channels for rooms still in list.conf, drop otherwise
+                    if (event.roomId in trackedRooms) subscribeRoom(event.roomId, full = false)
+                    else unsubscribeRoom(event.roomId)
+                }
                 is RoomStatusChanged -> roomStatuses[event.roomId] = event.newStatus
+                is RoomAdded -> {
+                    trackedRooms.add(event.roomId)
+                    subscribeRoom(event.roomId, full = false)
+                }
+                is RoomRemoved -> {
+                    trackedRooms.remove(event.roomId)
+                    unsubscribeRoom(event.roomId)
+                }
                 is HostsChanged -> applyHostConfig()
                 else -> {}
             }
@@ -195,8 +228,12 @@ class LiveEventSource(
             wsSession = null
         }
 
-        suspend fun subscribeRoom(roomId: Long) {
-            if (poolIndex(roomId) == index) wsSession?.sendRoomChannels(roomId)
+        suspend fun subscribeRoom(roomId: Long, full: Boolean) {
+            if (poolIndex(roomId) == index) wsSession?.sendRoomChannels(roomId, full)
+        }
+
+        suspend fun downgradeRoom(roomId: Long) {
+            if (poolIndex(roomId) == index) wsSession?.sendRoomFullUnsubscribes(roomId)
         }
 
         suspend fun unsubscribeRoom(roomId: Long) {
@@ -207,7 +244,9 @@ class LiveEventSource(
 
     private suspend fun WebSocketSession.resubscribeAllForPool(poolIdx: Int) {
         globalChannels.forEach { send(subscribeFrame(it)) }
-        subscribed.filter { poolIndex(it) == poolIdx }.forEach { sendRoomChannels(it) }
+        subscribed.filter { poolIndex(it) == poolIdx }.forEach { roomId ->
+            sendRoomChannels(roomId, full = roomId in recordingRooms)
+        }
     }
 
     private fun authFrame(token: String): String {
@@ -222,24 +261,38 @@ class LiveEventSource(
         return """{"unsubscribe":{"channel":"$channel"},"id":${seq.incrementAndGet()}}"""
     }
 
-    private suspend fun subscribeRoom(roomId: Long) {
-        if (subscribed.add(roomId)) {
-            pools[poolIndex(roomId)].subscribeRoom(roomId)
+    private suspend fun subscribeRoom(roomId: Long, full: Boolean) {
+        subscribed.add(roomId)
+        pools[poolIndex(roomId)].subscribeRoom(roomId, full)
+        if (!full) {
+            // downgrade: drop the full channel set, keep only the status subset
+            pools[poolIndex(roomId)].downgradeRoom(roomId)
         }
     }
 
     private suspend fun unsubscribeRoom(roomId: Long) {
-        if (subscribed.remove(roomId)) {
-            pools[poolIndex(roomId)].unsubscribeRoom(roomId)
-        }
+        subscribed.remove(roomId)
+        recordingRooms.remove(roomId)
+        pools[poolIndex(roomId)].unsubscribeRoom(roomId)
     }
 
-    private suspend fun WebSocketSession.sendRoomChannels(roomId: Long) {
-        roomChannels.forEach { channel ->
+    private suspend fun WebSocketSession.sendRoomChannels(roomId: Long, full: Boolean) {
+        val channels = if (full) roomChannels else statusChannels
+        channels.forEach { channel ->
             try {
                 send(Frame.Text(subscribeFrame("$channel@$roomId")))
             } catch (e: Exception) {
                 logger.error("Failed to send subscribe frame for channel=$channel@$roomId: ${e.message}", e)
+            }
+        }
+    }
+
+    private suspend fun WebSocketSession.sendRoomFullUnsubscribes(roomId: Long) {
+        roomChannels.forEach { channel ->
+            try {
+                send(Frame.Text(unsubscribeFrame("$channel@$roomId")))
+            } catch (e: Exception) {
+                logger.error("Failed to send unsubscribe frame for channel=$channel@$roomId: ${e.message}", e)
             }
         }
     }
@@ -274,6 +327,11 @@ class LiveEventSource(
                     logger.debug("WS event: type={}, roomId={}, status={}", type, roomId, status)
                     roomStatuses[roomId] = status
                     eventBus.publish(RoomStatusChanged(roomId, oldStatus, status))
+                }
+
+                // broadcast-settings / stream changes may alter available qualities — hint the session
+                if (type == "broadcastSettingsChanged" || type == "streamChanged") {
+                    eventBus.publish(QualityChangeHint(roomId))
                 }
 
                 eventBus.publish(LiveMessage(roomId, type, data))

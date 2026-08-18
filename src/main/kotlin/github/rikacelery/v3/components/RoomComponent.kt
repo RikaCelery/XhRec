@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 sealed interface RoomMsg
@@ -30,7 +31,9 @@ class RoomComponent(
     private val listConfPath: String,
     private val requestBus: RequestBus,
     eventBus: EventBus,
-    parentScope: CoroutineScope
+    parentScope: CoroutineScope,
+    /** Slow catch-up cadence; live status changes arrive via WebSocket */
+    private val refreshInterval: Duration = 5.minutes
 ) : Actor<RoomMsg>("RoomComponent", eventBus, parentScope) {
 
     private val rooms = ConcurrentHashMap<Long, Room>()
@@ -59,7 +62,7 @@ class RoomComponent(
         scope.launch {
             tell(RefreshRooms)
             while (isActive && !stopRefresh) {
-                delay((30).seconds); tell(RefreshRooms)
+                delay(refreshInterval); tell(RefreshRooms)
             }
         }
     }
@@ -268,7 +271,7 @@ class RoomComponent(
         }
     }
 
-    fun internalAdd(
+    suspend fun internalAdd(
         id: Long,
         name: String,
         quality: String,
@@ -278,6 +281,8 @@ class RoomComponent(
         pkey: String = ""
     ) {
         rooms[id] = Room(id, name, quality, timeLimit, sizeLimitBytes, autoPay, null, pkey = pkey)
+        // let LiveEventSource subscribe the room's status channels
+        eventBus.publish(RoomAdded(id, name))
     }
 
 

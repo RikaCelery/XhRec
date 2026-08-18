@@ -189,7 +189,7 @@ class Bootstrap(
         logger.info("Loaded rooms from list.conf")
     }
 
-    private fun addRoomFromParsed(id: Long, name: String, parsed: ListConfLine) {
+    private suspend fun addRoomFromParsed(id: Long, name: String, parsed: ListConfLine) {
         SensitiveStringRegistry.mask(name)
         val timeLimit = if (parsed.timeLimit > 0) parsed.timeLimit.seconds else Duration.INFINITE
         roomComponent.internalAdd(id, name, parsed.quality, timeLimit, parsed.sizeLimit, parsed.autoPay, parsed.pkey)

@@ -26,6 +26,7 @@ import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 sealed interface SessionMsg
@@ -87,6 +88,9 @@ class SessionComponent(
     private val sessions = ConcurrentHashMap<Long, RoomSession>()
     private val lastBlockReason = ConcurrentHashMap<Long, String>()
     private val decryptKeyCache = ConcurrentHashMap<String, String>()
+    // per-room throttle for WS-triggered quality re-checks (ms)
+    private val lastQualityCheck = ConcurrentHashMap<Long, Long>()
+    private val qualityHintMinIntervalMs = 30_000L
 
     override suspend fun onStart(scope: CoroutineScope) {
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
@@ -97,15 +101,22 @@ class SessionComponent(
         subscribe<QualityChangeRequested>(QualityChangeRequested::class)
         subscribe<RoomTimeLimitChanged>(RoomTimeLimitChanged::class)
         subscribe<RoomSizeLimitChanged>(RoomSizeLimitChanged::class)
+        subscribe<QualityChangeHint>(QualityChangeHint::class)
 
         eventBus.subscribe(scope, PersistConfig::class) {
             decryptKeyCache.clear()
         }
 
         scope.launch {
+            // quality rarely changes — poll infrequently to save network
+            while (isActive) {
+                delay(5.minutes)
+                pollQualities()
+            }
+        }
+        scope.launch {
             while (isActive) {
                 delay(30.seconds)
-                pollQualities()
                 cleanStaleSessions()
             }
         }
@@ -119,6 +130,7 @@ class SessionComponent(
         is QualityChangeRequested -> OnSessionEvent(event)
         is RoomTimeLimitChanged -> OnSessionEvent(event)
         is RoomSizeLimitChanged -> OnSessionEvent(event)
+        is QualityChangeHint -> OnSessionEvent(event)
         is CommandEnvelope -> HandleSessionCommand(event)
         else -> null
     }
@@ -337,6 +349,17 @@ class SessionComponent(
                 }
             }
 
+            is QualityChangeHint -> {
+                // WS reported a settings/stream change — re-check quality (throttled)
+                val rs = sessions[event.roomId] ?: return
+                if (rs.state != SessionState.Recording) return
+                val now = System.currentTimeMillis()
+                val last = lastQualityCheck[event.roomId] ?: 0L
+                if (now - last < qualityHintMinIntervalMs) return
+                lastQualityCheck[event.roomId] = now
+                pollQualityForRoom(rs, force = true)
+            }
+
             is RoomTimeLimitChanged -> {
                 val rs = sessions[event.roomId] ?: return
                 logger.info("Time limit changed for {}: {} -> {}", rs.roomName, rs.timeLimit, event.limit)
@@ -381,14 +404,18 @@ class SessionComponent(
     private suspend fun pollQualities() {
         for (rs in sessions.values) {
             if (rs.state != SessionState.Recording) continue
+            // already recording at the requested quality — nothing to chase; settings
+            // changes are caught by the WS QualityChangeHint instead
+            if (rs.quality == rs.targetquality) continue
             pollQualityForRoom(rs)
         }
     }
 
-    private suspend fun pollQualityForRoom(rs: RoomSession) {
+    private suspend fun pollQualityForRoom(rs: RoomSession, force: Boolean = false) {
         // Already on the user-requested quality: keep the periodic loop alive but
-        // do nothing to avoid unnecessary master playlist requests.
-        if (rs.quality == rs.targetquality) return
+        // do nothing to avoid unnecessary master playlist requests. A forced check
+        // (WS settings-change hint) still re-fetches.
+        if (!force && rs.quality == rs.targetquality) return
 
         try {
             val master = fetchAndCacheMasterPlaylist(rs)
