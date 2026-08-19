@@ -62,7 +62,9 @@ class AuthComponent(
                     OkResponse
                 } else ErrorResponse("user not found: ${env.command.userId}")
             }
-            else -> ErrorResponse("unknown auth query")
+            // don't ack commands this component doesn't handle — the real handler will;
+            // a stray ErrorResponse here would race the RequestBus and fail legit requests
+            else -> return
         }
         eventBus.publish(CommandAck(env.id, ack))
     }
