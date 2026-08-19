@@ -186,9 +186,23 @@ class SessionComponent(
     private suspend fun handleCommand(env: CommandEnvelope) {
         val ack = when (env.command) {
             is GetSessions -> sessions.values.map { it.copy() }
+            is ProbeStreamReady -> ConfigResponse(
+                probeMasterPlaylist(env.command.roomId, env.command.roomName, env.command.quality)
+            )
             else -> return
         }
         eventBus.publish(CommandAck(env.id, ack))
+    }
+
+    /** True when the room's HLS master playlist is currently reachable (stream is distributing). */
+    private suspend fun probeMasterPlaylist(roomId: Long, roomName: String, quality: String): Boolean {
+        val rs = RoomSession(roomId, roomName, quality, quality, pkey = streamAuthKey)
+        return try {
+            fetchAndCacheMasterPlaylist(rs)
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private suspend fun startSession(
