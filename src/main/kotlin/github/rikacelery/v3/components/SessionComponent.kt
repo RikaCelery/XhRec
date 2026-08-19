@@ -524,6 +524,7 @@ class SessionComponent(
             takeFrom(baseUrl)
             parameters["psch"] = "v2"
             parameters["pkey"] = rs.pkey
+            rs.token?.takeIf { it.isNotEmpty() }?.let { parameters["aclAuth"] = it }
         }.toString()
         // rewrite the playlist host to the currently selected (fastest) CDN host
         return CdnSelector.resolve(url)
