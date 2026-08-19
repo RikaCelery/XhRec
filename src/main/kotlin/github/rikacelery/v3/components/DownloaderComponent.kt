@@ -198,6 +198,9 @@ class DownloaderComponent(
                 bos.write(buf, 0, read)
             }
             DownloadResult.Success(bos.toByteArray(), DownloadMeta(url, 0, proxied, Instant.now()))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // the download race was resolved and this coroutine was cancelled — not an error
+            throw e
         } catch (e: Exception) {
             logger.error("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied", e)
             DownloadResult.Failed(idx, url, e.message ?: "download failed")
