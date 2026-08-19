@@ -9,11 +9,15 @@ import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.RecordingStopped
 import github.rikacelery.v3.events.RoomStatusChanged
 import github.rikacelery.v3.events.HostsChanged
+import github.rikacelery.v3.events.WsDisconnected
+import github.rikacelery.v3.events.WsReconnected
 import github.rikacelery.v3.utils.ClientManager
 import github.rikacelery.v3.utils.HostFailover
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -30,19 +34,21 @@ class LiveEventSource(
     /** Supplies the WebSocket auth JWT (fetched from config/initial at startup). */
     private val tokenProvider: suspend () -> String,
     eventBus: EventBus,
-    parentScope: CoroutineScope
+    parentScope: CoroutineScope,
+    private val wsPoolCount: Int = 3
 ) : Actor<LiveEventMsg>("LiveEventSource", eventBus, parentScope) {
 
     private val subscribed = ConcurrentHashMap.newKeySet<Long>()
     private val roomStatuses = ConcurrentHashMap<Long, String>()
-    @Volatile private var wsSession: WebSocketSession? = null
     private val seq = AtomicInteger(0)
     private val wsFailover = HostFailover(listOf(HostsConfig.DEFAULT_WS_HOST))
+    private val pools = (0 until wsPoolCount).map { WsPool(it) }
 
     // WS auth JWT: minted per session, validity unknown — assume 5 days and refresh on auth failure.
     @Volatile private var wsToken: String = ""
     @Volatile private var wsTokenFetchedAt: Long = 0L
     private val wsTokenMaxAgeMs = 5L * 24 * 60 * 60 * 1000
+    private val wsTokenMutex = Mutex()
 
     private val globalChannels = listOf(
         "changeConfigFeature",
@@ -72,11 +78,11 @@ class LiveEventSource(
         subscribe<HostsChanged>(HostsChanged::class)
         applyHostConfig() // pick up the current ws hosts before connecting
         scope.launch {
-            // fetch the guest WS token at startup; failures are retried inside the loop
+            // fetch the guest WS token at startup; failures are retried inside each pool loop
             try { ensureWsToken() } catch (e: Exception) {
                 logger.warn("Failed to fetch ws token at startup: {}", e.message)
             }
-            connectWebSocket()
+            pools.forEach { pool -> launch { pool.connectLoop() } }
         }
     }
 
@@ -103,13 +109,13 @@ class LiveEventSource(
     }
 
     /** Returns a valid WS token, refetching when not yet fetched or older than the 5-day TTL. */
-    private suspend fun ensureWsToken(): String {
+    private suspend fun ensureWsToken(): String = wsTokenMutex.withLock {
         val now = System.currentTimeMillis()
-        if (wsToken.isNotEmpty() && now - wsTokenFetchedAt < wsTokenMaxAgeMs) return wsToken
+        if (wsToken.isNotEmpty() && now - wsTokenFetchedAt < wsTokenMaxAgeMs) return@withLock wsToken
         wsToken = tokenProvider()
         wsTokenFetchedAt = now
         logger.info("Fetched fresh WebSocket auth token")
-        return wsToken
+        wsToken
     }
 
     /** Force a token refetch on the next connection attempt (auth failure / stale token). */
@@ -117,63 +123,91 @@ class LiveEventSource(
         wsToken = ""
     }
 
-    /** Refresh the ws host list from the active config and force a reconnect. */
+    /** Refresh the ws host list from the active config and force every pool to reconnect. */
     private suspend fun applyHostConfig() {
         wsFailover.updateHosts(Hosts.current.webSocketHosts)
         logger.info("WebSocket hosts updated: {}", wsFailover.hosts)
-        try {
-            wsSession?.close(CloseReason(CloseReason.Codes.NORMAL, "hosts updated"))
-        } catch (e: Exception) {
-            logger.debug("ws close on hosts update: {}", e.message)
-        }
-        wsSession = null
+        pools.forEach { pool -> pool.closeSession() }
     }
 
-    private suspend fun CoroutineScope.connectWebSocket() {
-        var backoff = 1.seconds
-        while (isActive) {
-            val host = wsFailover.currentHost() ?: HostsConfig.DEFAULT_WS_HOST
-            try {
-                val token = ensureWsToken()
-                val client = ClientManager.getProxiedClient("event", http1 = true)
-                client.webSocket("wss://" + host + "/connection/websocket") {
-                    wsSession = this
-                    send(authFrame(token))
-                    resubscribeAll()
-                    var frames = 0
-                    for (frame in incoming) {
-                        frames++
-                        if (frame is Frame.Text) {
-                            val text = frame.readText()
-                            if (text == "{}") {
-                                send("{}")
-                            } else {
-                                dispatch(text)
+    private fun poolIndex(roomId: Long): Int =
+        Math.floorMod(roomId, wsPoolCount.toLong()).toInt()
+
+    /** One WebSocket connection handling roughly 1/wsPoolCount of the subscribed rooms. */
+    private inner class WsPool(private val index: Int) {
+        @Volatile var wsSession: WebSocketSession? = null
+        private var backoff = 1.seconds
+
+        suspend fun connectLoop() {
+            while (scope.isActive) {
+                val host = wsFailover.currentHost() ?: HostsConfig.DEFAULT_WS_HOST
+                var opened = false
+                try {
+                    val token = ensureWsToken()
+                    val client = ClientManager.getProxiedClient("event_$index", http1 = true)
+                    client.webSocket("wss://" + host + "/connection/websocket") {
+                        wsSession = this
+                        opened = true
+                        send(authFrame(token))
+                        resubscribeAllForPool(index)
+                        eventBus.publish(WsReconnected)
+                        var frames = 0
+                        for (frame in incoming) {
+                            frames++
+                            if (frame is Frame.Text) {
+                                val text = frame.readText()
+                                if (text == "{}") {
+                                    send("{}")
+                                } else {
+                                    dispatch(text)
+                                }
                             }
                         }
+                        // closed by the server without delivering any frame — almost certainly an
+                        // auth failure (invalid/expired token) → refetch on the next attempt
+                        if (frames == 0) invalidateWsToken()
                     }
-                    // closed by the server without delivering any frame — almost certainly an
-                    // auth failure (invalid/expired token) → refetch on the next attempt
-                    if (frames == 0) invalidateWsToken()
+                    wsFailover.markSuccess(host)
+                    backoff = 1.seconds
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    invalidateWsToken()
+                    wsFailover.markFailure(host)
+                    logger.error("WS pool {} error on {}: {}, reconnecting in {}ms", index, host, e.message, backoff.inWholeMilliseconds)
+                    delay(backoff)
+                    backoff = minOf(backoff.inWholeSeconds * 2, 30).seconds
+                } finally {
+                    if (opened) {
+                        wsSession = null
+                        eventBus.publish(WsDisconnected)
+                    }
                 }
-                wsFailover.markSuccess(host)
-                backoff = 1.seconds
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                invalidateWsToken()
-                wsSession = null
-                wsFailover.markFailure(host)
-                logger.error("WS error on {}: {}, reconnecting in {}ms", host, e.message, backoff.inWholeMilliseconds)
-                delay(backoff)
-                backoff = minOf(backoff.inWholeSeconds * 2, 30).seconds
             }
         }
+
+        suspend fun closeSession() {
+            try {
+                wsSession?.close(CloseReason(CloseReason.Codes.NORMAL, "hosts updated"))
+            } catch (e: Exception) {
+                logger.debug("ws pool {} close on hosts update: {}", index, e.message)
+            }
+            wsSession = null
+        }
+
+        suspend fun subscribeRoom(roomId: Long) {
+            if (poolIndex(roomId) == index) wsSession?.sendRoomChannels(roomId)
+        }
+
+        suspend fun unsubscribeRoom(roomId: Long) {
+            if (poolIndex(roomId) == index) wsSession?.sendRoomUnsubscribes(roomId)
+        }
+
     }
 
-    private suspend fun WebSocketSession.resubscribeAll() {
+    private suspend fun WebSocketSession.resubscribeAllForPool(poolIdx: Int) {
         globalChannels.forEach { send(subscribeFrame(it)) }
-        subscribed.forEach { sendRoomChannels(it) }
+        subscribed.filter { poolIndex(it) == poolIdx }.forEach { sendRoomChannels(it) }
     }
 
     private fun authFrame(token: String): String {
@@ -190,13 +224,13 @@ class LiveEventSource(
 
     private suspend fun subscribeRoom(roomId: Long) {
         if (subscribed.add(roomId)) {
-            wsSession?.sendRoomChannels(roomId)
+            pools[poolIndex(roomId)].subscribeRoom(roomId)
         }
     }
 
     private suspend fun unsubscribeRoom(roomId: Long) {
         if (subscribed.remove(roomId)) {
-            wsSession?.sendRoomUnsubscribes(roomId)
+            pools[poolIndex(roomId)].unsubscribeRoom(roomId)
         }
     }
 

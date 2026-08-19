@@ -36,7 +36,11 @@ class RoomComponent(
     private val rooms = ConcurrentHashMap<Long, Room>()
     private var ready = false
     private var saveDebounceJob: Job? = null
+    private var refreshDebounceJob: Job? = null
     private val saveLock = Mutex()
+
+    /** Debounce window for WS-triggered status refresh, avoids an API storm when WS flaps. */
+    private val refreshDebounceMs = 1_500L
 
     @Volatile
     private var stopRefresh = false
@@ -50,6 +54,8 @@ class RoomComponent(
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
         subscribe<CommandEnvelope>(CommandEnvelope::class)
         subscribe<PersistConfig>(PersistConfig::class)
+        subscribe<WsDisconnected>(WsDisconnected::class)
+        subscribe<WsReconnected>(WsReconnected::class)
         scope.launch {
             tell(RefreshRooms)
             while (isActive && !stopRefresh) {
@@ -62,6 +68,8 @@ class RoomComponent(
         is RoomStatusChanged -> OnRoomEvent(event)
         is CommandEnvelope -> HandleRoomCommand(event)
         is PersistConfig -> OnRoomEvent(event)
+        is WsDisconnected -> OnRoomEvent(event)
+        is WsReconnected -> OnRoomEvent(event)
         else -> null
     }
 
@@ -81,6 +89,15 @@ class RoomComponent(
                     saveDebounceJob = scope.launch {
                         delay(1.seconds)
                         saveListConf()
+                    }
+                }
+
+                is WsDisconnected, is WsReconnected -> {
+                    logger.debug("WS state changed ({}), scheduling debounced refreshAll", event::class.simpleName)
+                    refreshDebounceJob?.cancel()
+                    refreshDebounceJob = scope.launch {
+                        delay(refreshDebounceMs)
+                        tell(RefreshRooms)
                     }
                 }
 

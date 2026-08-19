@@ -110,6 +110,13 @@ object PersistConfig {
 object HostsChanged {
     override fun toString() = "HostsChanged"
 }
+/** Published when the platform WebSocket connection is lost / established. */
+object WsDisconnected {
+    override fun toString() = "WsDisconnected"
+}
+object WsReconnected {
+    override fun toString() = "WsReconnected"
+}
 /** Published when user manually changes quality — triggers immediate quality check */
 data class QualityChangeRequested(val roomId: Long, val newQuality: String) {
     override fun toString() = "QualityChangeRequested(roomId=$roomId, quality=$newQuality)"
