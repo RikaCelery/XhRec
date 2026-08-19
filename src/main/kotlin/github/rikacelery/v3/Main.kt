@@ -151,7 +151,7 @@ fun main(vararg args: String) {
             eventBus,
             appScope
         )
-        val schedulerComponent = SchedulerComponent(requestBus, sessionComponent, eventBus, appScope)
+        val schedulerComponent = SchedulerComponent(requestBus, sessionComponent, eventBus, appScope, config.streamAuthKey)
 
         val httpServer = HttpServerComponent(
             config.port,

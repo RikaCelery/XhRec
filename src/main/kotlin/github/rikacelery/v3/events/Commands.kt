@@ -81,13 +81,6 @@ data class CutPoint(
     override fun toString() = "CutPoint(roomId=$roomId, idx=$index, reason=$reason)"
 }
 
-// ── Session commands ──
-
-/** Asks SessionComponent whether the room's stream is ready (master playlist reachable). */
-data class ProbeStreamReady(val roomId: Long, val roomName: String, val quality: String) : Request {
-    override fun toString() = "ProbeStreamReady(roomId=$roomId, name=$roomName)"
-}
-
 // ── Scheduler commands ──
 
 data class ActivateRecordingCmd(val roomId: Long) : Request {

@@ -5,6 +5,7 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.ClientManager
+import github.rikacelery.v3.utils.StreamProbe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -29,7 +30,8 @@ class SchedulerComponent(
     private val requestBus: RequestBus,
     private val sessionComponent: SessionComponent,
     eventBus: EventBus,
-    parentScope: CoroutineScope
+    parentScope: CoroutineScope,
+    private val streamAuthKey: String = ""
 ) : Actor<SchedulerMsg>("SchedulerComponent", eventBus, parentScope) {
 
     private val armed = ConcurrentHashMap<Long, ArmedRoom>()
@@ -155,11 +157,8 @@ class SchedulerComponent(
     private fun probeAndStart(roomId: Long, a: ArmedRoom) {
         if (pendingStarts.containsKey(roomId)) return
         val job = scope.launch {
-            val ready = try {
-                requestBus.request<ConfigResponse>(ProbeStreamReady(roomId, a.roomName, a.quality)).value as? Boolean ?: false
-            } catch (e: Exception) {
-                false
-            }
+            // direct concurrent probe — no session-mailbox round trip, no request timeout
+            val ready = StreamProbe.masterReady(roomId, a.pkey.ifBlank { streamAuthKey })
             pendingStarts.remove(roomId)
             if (ready) {
                 tryStartRecording(roomId, a)
