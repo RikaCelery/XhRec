@@ -470,15 +470,22 @@ class SessionComponent(
         return null
     }
 
-    private fun buildMasterUrl(roomId: Long, host: String = Hosts.current.hlsMasterHost): String =
-        "https://" + host + "/hls/" + roomId + "/master/" + roomId + "_auto.m3u8"
+    private fun buildMasterUrl(rs: RoomSession, host: String = Hosts.current.hlsMasterHost): String =
+        buildUrl {
+            protocol = URLProtocol.HTTPS
+            this.host = host
+            encodedPath = "/hls/${rs.roomId}/master/${rs.roomId}_auto.m3u8"
+            parameters["psch"] = "v2"
+            parameters["pkey"] = rs.pkey
+            rs.token?.takeIf { it.isNotEmpty() }?.let { parameters["aclAuth"] = it }
+        }.toString()
 
     private suspend fun fetchAndCacheMasterPlaylist(rs: RoomSession): MasterPlaylist {
         val client = ClientManager.getProxiedClient("master_" + rs.roomId)
         val hosts = (listOf(Hosts.current.hlsMasterHost) + Hosts.current.hlsHosts).distinct()
         var lastErr: Throwable? = null
         for (host in hosts) {
-            val url = buildMasterUrl(rs.roomId, host)
+            val url = buildMasterUrl(rs, host)
             try {
                 val response = withRetry(3) { client.get(url) }
                 val text = response.bodyAsText()
