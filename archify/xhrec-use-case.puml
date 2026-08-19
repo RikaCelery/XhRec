@@ -1,0 +1,96 @@
+@startuml XhRec 用例图
+' PlantUML use case diagram
+left to right direction
+skinparam backgroundColor #FEFDF9
+skinparam shadowing false
+skinparam actorStyle awesome
+skinparam usecase {
+  BackgroundColor #E8F1FA
+  BorderColor #2E6DA4
+  ArrowColor #333333
+}
+skinparam package {
+  BackgroundColor #F4F7FB
+  BorderColor #9BB7D4
+  FontColor #1F3864
+}
+
+actor "用户/操作者\n(WebUI / REST API)" as User
+actor "管理员/运维\n(CLI 启动/配置)" as Admin
+actor "浏览器扩展\n/ UserScript" as Ext
+actor "直播平台\n(API / WebSocket / HLS CDN)" as Platform
+actor "后处理工具链\n(ffmpeg / ffprobe / shell)" as Tools
+
+rectangle "XhRec 自动直播录制系统" {
+
+  package "房间与录制控制" {
+    usecase "管理房间\n添加/删除/激活/停用/重启/中断" as UC_RoomManage
+    usecase "设置录制参数\n画质/时长/大小/自动支付" as UC_RoomConfig
+    usecase "控制录制\n开始/停止/重启/中断" as UC_RecordControl
+    usecase "查看状态与指标\n列表/状态/仪表盘/Prometheus" as UC_ViewStatus
+    usecase "实时预览\n/mse/live" as UC_LivePreview
+    usecase "优雅停止/关闭服务" as UC_Stop
+  }
+
+  package "自动录制引擎" {
+    usecase "接收平台实时事件\nWebSocket 订阅/状态推送" as UC_LiveEvents
+    usecase "自动录制直播\n会话/拉流/下载/写入" as UC_AutoRecord
+    usecase "自动支付私密/群组秀" as UC_AutoPay
+    usecase "下载 HLS 分片\nCDN 优选/直连代理竞争" as UC_Download
+    usecase "写入/封装 MP4 文件" as UC_Write
+  }
+
+  package "配置与后处理" {
+    usecase "管理系统配置\n域名/解密密钥/日志脱敏" as UC_Config
+    usecase "加载启动配置\nlist.conf/users/processors" as UC_Startup
+    usecase "后处理录制文件\n修复/移动/切片/Shell" as UC_PostProcess
+    usecase "日志脱敏" as UC_MaskLogs
+  }
+}
+
+' ---- actor connections ----
+User --> UC_RoomManage
+User --> UC_RoomConfig
+User --> UC_RecordControl
+User --> UC_ViewStatus
+User --> UC_LivePreview
+User --> UC_Config
+User --> UC_Stop
+Admin --> UC_Startup
+Admin --> UC_Config
+Admin --> UC_Stop
+
+Ext --> UC_RoomManage
+Ext --> UC_RoomConfig
+Ext --> UC_RecordControl
+Ext --> UC_ViewStatus
+
+Platform --> UC_LiveEvents
+Platform --> UC_AutoRecord
+Platform --> UC_Download
+
+Tools --> UC_PostProcess
+
+' ---- include / extend relations ----
+UC_AutoRecord ..> UC_LiveEvents : <<include>>
+UC_AutoRecord ..> UC_Download : <<include>>
+UC_AutoRecord ..> UC_Write : <<include>>
+UC_AutoRecord ..> UC_AutoPay : <<extend>>
+UC_RoomManage ..> UC_RoomConfig : <<include>>
+UC_Stop ..> UC_RecordControl : <<include>>
+UC_Stop ..> UC_PostProcess : <<include>>
+UC_Config ..> UC_MaskLogs : <<include>>
+UC_Startup ..> UC_Config : <<include>>
+
+note bottom of UC_AutoRecord
+  SessionComponent 负责状态机；
+  DownloaderComponent 负责分片下载；
+  WriterComponent 负责写 MP4。
+end note
+
+note bottom of UC_PostProcess
+  PostProcessorComponent 按房间队列隔离，
+  支持 fix_stamp / move / slice / shell。
+end note
+
+@enduml

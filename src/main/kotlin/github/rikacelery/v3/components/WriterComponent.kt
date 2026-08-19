@@ -15,6 +15,8 @@ import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -161,10 +163,28 @@ class WriterComponent(
                 val durFmt = formatDurationHM(durationMs)
                 val finalName = "${active.roomName}-${timeFormatter.format(active.startTime)}-${durFmt}.mp4"
                 val finalFile = File(tmpDir, finalName)
-                active.file.renameTo(finalFile)
+
+                val moved = try {
+                    Files.move(active.file.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    true
+                } catch (e: Exception) {
+                    logger.error("Failed to move {} to {}: {}", active.file.absolutePath, finalFile.absolutePath, e.message)
+                    false
+                }
+                if (!moved) {
+                    // Never delete the original file if the move failed; publish it as-is.
+                    eventBus.publish(FileReady(active.roomId, active.file, reason, active.roomName, active.startTime.toEpochMilli(), endTime.toEpochMilli(), durationMs, active.quality))
+                    return@withContext
+                }
 
                 val finalEvent = File(tmpDir, "$finalName.event")
-                active.eventFile.renameTo(finalEvent)
+                if (active.eventFile.exists()) {
+                    try {
+                        Files.move(active.eventFile.toPath(), finalEvent.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    } catch (e: Exception) {
+                        logger.warn("Failed to move event file {}: {}", active.eventFile.absolutePath, e.message)
+                    }
+                }
 
                 if (finalEvent.length() == 0L) {
                     finalEvent.delete()

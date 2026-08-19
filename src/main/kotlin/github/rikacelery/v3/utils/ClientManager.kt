@@ -74,6 +74,11 @@ object ClientManager {
     private val lock = Any()
 
     private fun HttpClientConfig<OkHttpConfig>.configureClient() {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 60_000
+            connectTimeoutMillis = 10_000
+            socketTimeoutMillis = 30_000
+        }
         install(Logging) {
             logger = object : Logger {
                 override fun log(message: String) {
@@ -123,6 +128,18 @@ object ClientManager {
     fun getProxiedClient(key: String, http1: Boolean, expectSuccess: Boolean = true): HttpClient {
         synchronized(lock) {
             return clientsProxied[key] ?: clientProxied(key, http1, expectSuccess).also { clientsProxied[key] = it }
+        }
+    }
+
+    /** Close and remove the per-room clients created for a recording session. */
+    fun removeRoomClients(roomId: Long) {
+        synchronized(lock) {
+            listOf("m3u8_$roomId", "master_$roomId").forEach { key ->
+                clientsProxied.remove(key)?.let { client ->
+                    runCatching { client.close() }
+                    logger.info("Closed per-room client {}", key)
+                }
+            }
         }
     }
 

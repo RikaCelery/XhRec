@@ -17,7 +17,7 @@ class EventBus {
     private val _events = MutableSharedFlow<Any>(
         replay = 0,
         extraBufferCapacity = 1024,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
+        onBufferOverflow = BufferOverflow.SUSPEND
     )
     val events: SharedFlow<Any> = _events.asSharedFlow()
 
@@ -42,8 +42,9 @@ class EventBus {
         if (_events.tryEmit(e)) {
             checkBacklogCleared()
         } else {
+            // Bus is saturated: log and drop the message. Subscribers are designed
+            // to be fast; a saturated buffer indicates a stalled/blocked subscriber.
             recordBacklog(e)
-            _events.emit(e)
         }
     }
 

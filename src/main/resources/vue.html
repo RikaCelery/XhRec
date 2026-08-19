@@ -586,6 +586,16 @@
         import { createApp, defineComponent } from 'vue'
 
         const HOST = ""
+        const _token = new URLSearchParams(window.location.search).get('token') || '';
+        if (_token) {
+            const _origFetch = window.fetch.bind(window);
+            window.fetch = function(url, opts) {
+                if (typeof url === 'string' && (url.startsWith('/') || url.startsWith(window.location.origin))) {
+                    url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(_token);
+                }
+                return _origFetch(url, opts);
+            };
+        }
 
         createApp({
             data() {

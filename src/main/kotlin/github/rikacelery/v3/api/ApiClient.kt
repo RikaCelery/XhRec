@@ -4,6 +4,7 @@ import github.rikacelery.v3.data.User
 import github.rikacelery.v3.exceptions.DeletedException
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.utils.*
+import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -43,6 +44,15 @@ object ApiClient {
     private val logger = LoggerFactory.getLogger("v3.ApiClient")
     private val failover = HostFailover(listOf(DEFAULT_PLATFORM_HOST))
 
+    /**
+     * A 4xx response means the platform understood the request and answered with a
+     * business status (bad cookie / stale slug / room not available). It must not be
+     * retried against the same host, but for platform API calls it may still make
+     * sense to fail over to the next configured host.
+     */
+    private fun is4xx(e: Throwable): Boolean =
+        e is ClientRequestException && e.response.status.value in 400..499
+
     /** Current ordered platform hosts (first entry = primary). */
     val platformHosts: List<String> get() = failover.hosts
 
@@ -60,13 +70,17 @@ object ApiClient {
     }
 
     /**
-     * Run [block] against the current host; on failure mark the host as failed
-     * (cooldown) and retry with the next available host. Exceptions matching [stopIf]
-     * (e.g. business results like Rename/Deleted) propagate immediately without
-     * retrying or penalizing the host.
+     * Run [block] against the current host.
+     *
+     * - Domain business results matching [stopIf] (Rename/Deleted) propagate
+     *   immediately: another host would return the same answer.
+     * - A 4xx response is a business result for the current host: it is not retried
+     *   (withRetry stops it), but it *does* fail over to the next host.
+     * - Network errors (timeouts etc.) are retried by withRetry first; only after
+     *   retries are exhausted do we mark the host failed and switch to the next one.
      */
     private suspend fun <T> withHostFallback(
-        stopIf: (Throwable) -> Boolean = { false },
+        stopIf: (Throwable) -> Boolean = { it is RenameException || it is DeletedException },
         block: suspend (host: String) -> T
     ): T {
         var lastErr: Throwable? = null
@@ -93,7 +107,9 @@ object ApiClient {
 
     private fun ensure2xx(host: String, response: HttpResponse): HttpResponse {
         if (response.status.value !in 200..299) {
-            throw IllegalStateException("HTTP " + response.status.value + " from " + host)
+            val msg = "HTTP " + response.status.value + " from " + host
+            if (response.status.value in 400..499) throw ClientRequestException(response, msg)
+            throw IllegalStateException(msg)
         }
         return response
     }
@@ -114,7 +130,7 @@ object ApiClient {
 
     suspend fun getRoomFromUrlOrSlug(path: String): Pair<Long, String> {
         val slug = path.substringAfterLast("/")
-        val j = withRetry(3, stopIf = { it is RenameException || it is DeletedException }) {
+        val j = withRetry(3, stopIf = { it is RenameException || it is DeletedException || is4xx(it) }) {
             roomFetchBroadcastInfo(slug).jsonObject
         }
         val id = j.PathSingle("item.modelId").asLong()
@@ -205,15 +221,21 @@ object ApiClient {
      * "model deleted" are business exceptions (no retry / no host failover).
      */
     suspend fun roomFetchBroadcastInfo(roomName: String): JsonObject {
-        val business: (Throwable) -> Boolean = { it is RenameException || it is DeletedException }
-        return withHostFallback(stopIf = business) { host ->
-            withRetry(3, stopIf = business) {
+        // Rename/Deleted are domain answers and must not fail over to another host.
+        val domainBusiness: (Throwable) -> Boolean = { it is RenameException || it is DeletedException }
+        // 4xx should not be retried against the same host; withHostFallback still
+        // fails over to the next host after the inner retry loop stops.
+        val noRetry: (Throwable) -> Boolean = { domainBusiness(it) || is4xx(it) }
+        return withHostFallback(stopIf = domainBusiness) { host ->
+            withRetry(3, stopIf = noRetry) {
                 val response = apiClient.get(apiUrl(host, "api/front/v1/broadcasts/" + roomName))
                 val status = response.status.value
                 if (status in 200..299) {
                     Json.parseToJsonElement(response.bodyAsText()).jsonObject
                 } else if (status == 404) {
                     throwBroadcast404(response.bodyAsText())
+                } else if (status in 400..499) {
+                    throw ClientRequestException(response, "HTTP " + status + " from " + host)
                 } else {
                     throw IllegalStateException("HTTP " + status + " from " + host)
                 }

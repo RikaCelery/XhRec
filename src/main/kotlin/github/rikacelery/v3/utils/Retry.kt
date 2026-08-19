@@ -1,8 +1,12 @@
 package github.rikacelery.v3.utils
 
+import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.delay
 
-suspend fun <T> withRetry(i: Int, stopIf: (Throwable) -> Boolean = { false }, function: suspend (n:Int) -> T): T {
+private fun isBusiness4xx(e: Throwable): Boolean =
+    e is ClientRequestException && e.response.status.value in 400..499
+
+suspend fun <T> withRetry(i: Int, stopIf: (Throwable) -> Boolean = { isBusiness4xx(it) }, function: suspend (n:Int) -> T): T {
     var err: Throwable? = null
     (0 until i).forEach { j ->
         runCatching {
@@ -18,7 +22,7 @@ suspend fun <T> withRetry(i: Int, stopIf: (Throwable) -> Boolean = { false }, fu
     throw err!!
 }
 
-suspend fun <T> withRetryOrNull(i: Int, stopIf: (Throwable) -> Boolean = { false }, function: suspend () -> T): T? {
+suspend fun <T> withRetryOrNull(i: Int, stopIf: (Throwable) -> Boolean = { isBusiness4xx(it) }, function: suspend () -> T): T? {
     (0 until i).forEach { j ->
         runCatching {
             return function()

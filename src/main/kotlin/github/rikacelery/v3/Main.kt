@@ -34,7 +34,8 @@ private data class PersistedConfig(
     val pkey: String,
     val decryptKeys: Map<String, String>,
     val maskSensitiveLogs: Boolean,
-    val hosts: HostsConfig
+    val hosts: HostsConfig,
+    val apiToken: String
 )
 
 private val mainLogger = LoggerFactory.getLogger("v3.Main")
@@ -43,7 +44,7 @@ private fun loadPersistedConfig(configPath: String): PersistedConfig {
     val file = File(configPath)
     val key = "YzWScuyQRGAGcxx1KIJmiQ7BY9Vi35ftwLqUOVO8uoo="
     val pkey = "Fq6m2TO2ZeBkRPm9"
-    val default = PersistedConfig(pkey, mapOf(pkey to key), true, HostsConfig.DEFAULT)
+    val default = PersistedConfig(pkey, mapOf(pkey to key), true, HostsConfig.DEFAULT, "")
     if (!file.exists()) return default
     try {
         val json = Json.parseToJsonElement(file.readText()).jsonObject
@@ -52,7 +53,8 @@ private fun loadPersistedConfig(configPath: String): PersistedConfig {
         json["decryptKeys"]?.jsonObject?.forEach { (k, v) -> keys[k] = v.jsonPrimitive.content }
         val mask = json["maskSensitiveLogs"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
         val hosts = HostsConfig.fromJson(json)
-        return PersistedConfig(pkey, keys, mask, hosts)
+        val apiToken = json["apiToken"]?.jsonPrimitive?.content ?: ""
+        return PersistedConfig(pkey, keys, mask, hosts, apiToken)
     } catch (e: Exception) {
         mainLogger.error("Failed to load persisted config from $configPath", e)
         return default
@@ -95,7 +97,8 @@ fun main(vararg args: String) {
             hosts = persisted.hosts,
             listConfPath = cli.getOptionValue("file", "list.conf"),
             configPath = configPath,
-            maskSensitiveLogs = persisted.maskSensitiveLogs
+            maskSensitiveLogs = persisted.maskSensitiveLogs,
+            apiToken = persisted.apiToken
         )
 
         // Apply persisted runtime config before components start making API calls
@@ -157,7 +160,8 @@ fun main(vararg args: String) {
             metricComponent,
             postProcessorComponent,
             appScope,
-            mseStore
+            mseStore,
+            config.apiToken
         )
 
 

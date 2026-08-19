@@ -161,6 +161,7 @@ class MetricComponent(
 
                 is RecordingStopped -> {
                     recording.remove(e.roomId)
+                    metrics.remove(e.roomId)
                 }
 
                 else -> {}

@@ -29,7 +29,10 @@ class PostProcessorComponent(
     val jobs = Hashtable<String, Job>()
 
     private inner class RoomProcessor {
-        val channel = Channel<FileReady>(capacity = 8)
+        // Post-processing events are small; make the per-room queue unbounded so the
+        // actor loop never blocks on `send`. Global concurrency is still bounded by
+        // `semaphore`, and the per-room consumer processes serially.
+        val channel = Channel<FileReady>(Channel.UNLIMITED)
         var job: Job? = null
     }
 
@@ -77,10 +80,10 @@ class PostProcessorComponent(
                             }
                         }
                     }
-                    // send directly — this is a suspend call in handle(), so it only
-                    // blocks this actor's mailbox (not EventBus). other rooms are unaffected
-                    // because FileReady/RecordingStopped for different rooms dispatch immediately.
-                    rp.channel.send(e)
+                    val sent = rp.channel.trySend(e)
+                    if (sent.isFailure) {
+                        logger.error("PostProcessor room queue closed, dropping FileReady: {}", e.file)
+                    }
                 }
 
                 is RecordingStopped -> {

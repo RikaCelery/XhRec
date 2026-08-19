@@ -12,5 +12,6 @@ data class SystemConfig(
     val hosts: HostsConfig = HostsConfig.DEFAULT,
     val listConfPath: String = "list.conf",
     val configPath: String = "xhrec.json",
-    val maskSensitiveLogs: Boolean = true
+    val maskSensitiveLogs: Boolean = true,
+    val apiToken: String = ""
 )

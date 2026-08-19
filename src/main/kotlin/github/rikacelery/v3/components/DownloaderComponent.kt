@@ -76,21 +76,34 @@ class DownloaderComponent(
             hooks.forEach { url = it.beforeDownload(url) }
 
             val job = workerScope.launch {
-                active.semaphore.withPermit {
-                    eventBus.publish(DownloadStarted(cmd.roomId, idx, url, System.currentTimeMillis()))
-                    val result = downloadSegment(url, idx)
-                    val hooked = hooks.fold(result) { acc, hook -> hook.onDownloadResult(cmd.roomId, acc) }
-                    active.emitter.complete(idx.toLong(), hooked)
+                try {
+                    active.semaphore.withPermit {
+                        eventBus.publish(DownloadStarted(cmd.roomId, idx, url, System.currentTimeMillis()))
+                        val result = downloadSegment(url, idx)
+                        val hooked = hooks.fold(result) { acc, hook -> hook.onDownloadResult(cmd.roomId, acc) }
+                        active.emitter.complete(idx.toLong(), hooked)
 
-                    when (result) {
-                        is DownloadResult.Success -> {
-                            eventBus.publish(SegmentDownloaded(cmd.roomId, idx, seg.url,
-                                result.meta.fetchDurationMs, result.meta.proxied, result.data.size, active.generation))
+                        when (result) {
+                            is DownloadResult.Success -> {
+                                eventBus.publish(SegmentDownloaded(cmd.roomId, idx, seg.url,
+                                    result.meta.fetchDurationMs, result.meta.proxied, result.data.size, active.generation))
+                            }
+                            is DownloadResult.Failed -> {
+                                eventBus.publish(DownloadError(cmd.roomId, idx, seg.url, result.reason))
+                            }
+                            is DownloadResult.CutPoint -> {}
                         }
-                        is DownloadResult.Failed -> {
-                            eventBus.publish(DownloadError(cmd.roomId, idx, seg.url, result.reason))
-                        }
-                        is DownloadResult.CutPoint -> {}
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Still account for the segment so OrderedEmitter cannot stall forever.
+                    withContext(NonCancellable) {
+                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, "cancelled"))
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Download worker failed: idx=$idx, url=${seg.url}", e)
+                    withContext(NonCancellable) {
+                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, e.message ?: "worker error"))
                     }
                 }
             }
@@ -107,6 +120,7 @@ class DownloaderComponent(
     }
 
     private val raceThresholdMs: Long = 15_000
+    private val segmentTimeoutMs: Long = 60_000
 
     private suspend fun downloadSegment(url: String, idx: Int): DownloadResult {
         val start = System.currentTimeMillis()
@@ -115,42 +129,54 @@ class DownloaderComponent(
         val cdnHost = CdnSelector.hostOf(resolvedUrl)
 
         return try {
-            val directDeferred = scope.async {
-                downloadWithClient(ClientManager.getClient("dl_${Random.nextInt(32)}"), resolvedUrl, idx, false)
-            }
-
-            val directResult = withTimeoutOrNull(raceThresholdMs.milliseconds) { directDeferred.await() }
-            if (directResult is DownloadResult.Success) {
-                val dur = System.currentTimeMillis() - start
-                CdnSelector.record(cdnHost, directResult.data.size.toLong(), dur)
-                return directResult.copy(meta = directResult.meta.copy(fetchDurationMs = dur, proxied = false))
-            }
-
-            logger.debug("Direct download slow/failed for idx={}, falling back to proxy race", idx)
-            // Phase 2: proxy joins the race
-            val proxyDeferred = scope.async {
-                downloadWithClient(ClientManager.getProxiedClient("px_${Random.nextInt(5)}"), resolvedUrl, idx, true)
-            }
-
-            val result = select<DownloadResult> {
-                directDeferred.onAwait { r ->
-                    (r as? DownloadResult.Success)?.copy(meta = r.meta.copy(
-                        fetchDurationMs = System.currentTimeMillis() - start, proxied = false)) ?: r
+            withTimeoutOrNull(segmentTimeoutMs.milliseconds) {
+                val directDeferred = scope.async {
+                    downloadWithClient(ClientManager.getClient("dl_${Random.nextInt(32)}"), resolvedUrl, idx, false)
                 }
-                proxyDeferred.onAwait { r ->
-                    (r as? DownloadResult.Success)?.copy(meta = r.meta.copy(
-                        fetchDurationMs = System.currentTimeMillis() - start, proxied = true)) ?: r
+
+                val directResult = withTimeoutOrNull(raceThresholdMs.milliseconds) { directDeferred.await() }
+                if (directResult is DownloadResult.Success) {
+                    val dur = System.currentTimeMillis() - start
+                    CdnSelector.record(cdnHost, directResult.data.size.toLong(), dur)
+                    return@withTimeoutOrNull directResult.copy(meta = directResult.meta.copy(fetchDurationMs = dur, proxied = false))
                 }
-            }
 
-            if (!directDeferred.isCompleted) directDeferred.cancel()
-            if (!proxyDeferred.isCompleted) proxyDeferred.cancel()
+                logger.debug("Direct download slow/failed for idx={}, falling back to proxy race", idx)
+                val proxyDeferred = scope.async {
+                    downloadWithClient(ClientManager.getProxiedClient("px_${Random.nextInt(5)}"), resolvedUrl, idx, true)
+                }
 
-            (result as? DownloadResult.Success)?.let {
-                CdnSelector.record(cdnHost, it.data.size.toLong(), System.currentTimeMillis() - start)
+                val result = if (directDeferred.isCompleted) {
+                    // Direct already finished with a non-success result. Give the proxy a real
+                    // chance instead of letting select() immediately return the direct failure.
+                    withTimeoutOrNull(raceThresholdMs.milliseconds) { proxyDeferred.await() }
+                        ?: DownloadResult.Failed(idx, resolvedUrl, "proxy timeout")
+                } else {
+                    select<DownloadResult> {
+                        directDeferred.onAwait { r ->
+                            (r as? DownloadResult.Success)?.copy(meta = r.meta.copy(
+                                fetchDurationMs = System.currentTimeMillis() - start, proxied = false)) ?: r
+                        }
+                        proxyDeferred.onAwait { r ->
+                            (r as? DownloadResult.Success)?.copy(meta = r.meta.copy(
+                                fetchDurationMs = System.currentTimeMillis() - start, proxied = true)) ?: r
+                        }
+                    }
+                }
+
+                if (!directDeferred.isCompleted) directDeferred.cancel()
+                if (!proxyDeferred.isCompleted) proxyDeferred.cancel()
+
+                (result as? DownloadResult.Success)?.let {
+                    CdnSelector.record(cdnHost, it.data.size.toLong(), System.currentTimeMillis() - start)
+                }
+                if (result is DownloadResult.Failed) CdnSelector.recordFailure(cdnHost)
+                result
+            } ?: DownloadResult.Failed(idx, resolvedUrl, "segment timeout after ${segmentTimeoutMs}ms").also {
+                CdnSelector.recordFailure(cdnHost)
             }
-            if (result is DownloadResult.Failed) CdnSelector.recordFailure(cdnHost)
-            result
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             CdnSelector.recordFailure(cdnHost)
             logger.error("downloadSegment failed: idx=$idx, url=$url", e)

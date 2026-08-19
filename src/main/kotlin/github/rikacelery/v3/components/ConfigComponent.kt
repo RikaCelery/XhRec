@@ -36,6 +36,7 @@ class ConfigComponent(
     private var persistedStreamAuthKey: String = config.streamAuthKey
     private val persistedDecryptKeys = config.decryptKeys.toMutableMap()
     private var maskSensitiveLogs = config.maskSensitiveLogs
+    private var apiToken: String = config.apiToken
     private var hostsConfig: HostsConfig = config.hosts
 
     private suspend fun loadConfig() {
@@ -49,6 +50,7 @@ class ConfigComponent(
                 persistedDecryptKeys[k] = v.jsonPrimitive.content
             }
             json["maskSensitiveLogs"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()?.let { maskSensitiveLogs = it }
+            json["apiToken"]?.jsonPrimitive?.content?.let { apiToken = it }
             hostsConfig = HostsConfig.fromJson(json)
             SensitiveStringRegistry.enabled = maskSensitiveLogs
             applyHosts()
@@ -68,6 +70,7 @@ class ConfigComponent(
                         buildJsonObject {
                             put("streamAuthKey", persistedStreamAuthKey)
                             put("maskSensitiveLogs", maskSensitiveLogs)
+                            put("apiToken", apiToken)
                             hostsConfig.toJson().forEach { (k, v) -> put(k, v) }
                             put("decryptKeys", buildJsonObject {
                                 persistedDecryptKeys.forEach { (k, v) -> put(k, v) }

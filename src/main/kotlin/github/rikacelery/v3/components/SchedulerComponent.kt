@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.events.*
+import github.rikacelery.v3.utils.ClientManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -133,6 +134,7 @@ class SchedulerComponent(
                 armed.remove(env.command.roomId)
                 logger.info("Room {} deactivated", env.command.roomId)
                 sessionComponent.tell(DoStop(env.command.roomId))
+                ClientManager.removeRoomClients(env.command.roomId)
                 OkResponse
             }
 
@@ -146,6 +148,7 @@ class SchedulerComponent(
                 gracefulStop = true
                 armed.forEach { (id, _) ->
                     sessionComponent.tell(DoBreak(id, EndReason.UserStop))
+                    ClientManager.removeRoomClients(id)
                 }
                 OkResponse
             }

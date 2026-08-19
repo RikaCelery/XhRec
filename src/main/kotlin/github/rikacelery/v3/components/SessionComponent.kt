@@ -43,6 +43,7 @@ data class RoomSession(
     @Volatile var roomName: String,
     @Volatile var quality: String,
     @Volatile var targetquality: String,
+    val mutex: Mutex = Mutex(),
     @Volatile var state: SessionState = SessionState.Idle,
     @Volatile var playlistUrl: String = "",
     @Volatile var initUrl: String? = null,
@@ -208,7 +209,11 @@ class SessionComponent(
                 rs.token = token.takeIf { it.isNotEmpty() }
                 lastBlockReason.remove(roomId)
             }
+
+            if (sessions[roomId] !== rs || rs.state == SessionState.Closing) return@launch
+
             val config = requestBus.request<RoomConfigResponse>(GetRoomConfig(roomId))
+            if (sessions[roomId] !== rs || rs.state == SessionState.Closing) return@launch
             rs.timeLimit = config.timeLimit
             rs.sizeLimitBytes = config.sizeLimitBytes
             try {
@@ -228,30 +233,40 @@ class SessionComponent(
                 rs.targetquality = selected
                 rs.playlistUrl = buildFallbackPlaylistUrl(rs, useRaw)
             }
-            logger.info("Session starting: roomId={}, name={}, quality={}", roomId, name, rs.quality)
-            dataChannel.send(StreamStart(roomId, name, rs.startTime, rs.quality))
-            rs.pollingJob = launch { pollingLoop(rs) }
-            eventBus.publish(RecordingStarted(roomId, rs.quality))
+
+            if (sessions[roomId] !== rs || rs.state == SessionState.Closing) return@launch
+
+            // Commit atomically with stopSession so a stop cannot be interleaved
+            // between StreamStart and polling-loop registration.
+            rs.mutex.withLock {
+                if (sessions[roomId] !== rs || rs.state == SessionState.Closing) return@launch
+                logger.info("Session starting: roomId={}, name={}, quality={}", roomId, name, rs.quality)
+                dataChannel.send(StreamStart(roomId, name, rs.startTime, rs.quality))
+                rs.pollingJob = launch { pollingLoop(rs) }
+                eventBus.publish(RecordingStarted(roomId, rs.quality))
+            }
         }
     }
 
     private suspend fun stopSession(roomId: Long) {
         val rs = sessions[roomId] ?: return
-        logger.info("Session stopping: roomId={}, name={}, state={}", roomId, rs.roomName, rs.state)
-        rs.state = SessionState.Closing
-        rs.pollingJob?.cancel()
-        downloader.tell(
-            DoCutPoint(
-                CutPoint(
-                    roomId,
-                    rs.segmentIndex,
-                    rs.roomName,
-                    Instant.now(),
-                    EndReason.UserStop,
-                    rs.quality
+        rs.mutex.withLock {
+            logger.info("Session stopping: roomId={}, name={}, state={}", roomId, rs.roomName, rs.state)
+            rs.state = SessionState.Closing
+            rs.pollingJob?.cancel()
+            downloader.tell(
+                DoCutPoint(
+                    CutPoint(
+                        roomId,
+                        rs.segmentIndex,
+                        rs.roomName,
+                        Instant.now(),
+                        EndReason.UserStop,
+                        rs.quality
+                    )
                 )
             )
-        )
+        }
     }
 
     private suspend fun handleEvent(event: Any) {
@@ -502,6 +517,14 @@ class SessionComponent(
                 return master
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: ClientRequestException) {
+                if (e.response.status.value in 400..499) {
+                    logger.warn("[{}] master playlist business error on {}: {}", rs.roomName, host, e.response.status)
+                    throw e
+                }
+                lastErr = e
+                CdnSelector.recordFailure(host)
+                logger.warn("[{}] master playlist fetch failed on {}: {}", rs.roomName, host, e.message)
             } catch (e: Exception) {
                 lastErr = e
                 CdnSelector.recordFailure(host)
@@ -740,12 +763,26 @@ class SessionComponent(
                     CdnSelector.recordFailure(CdnSelector.hostOf(rs.playlistUrl))
                     if (configureSession(rs.roomId, rs.roomName) == null) {
                         logger.info("[STOP] [{}] Room off or non-public", rs.roomName)
+                        rs.state = SessionState.Closing
+                        downloader.tell(
+                            DoCutPoint(
+                                CutPoint(
+                                    rs.roomId,
+                                    rs.segmentIndex - 1,
+                                    rs.roomName,
+                                    Instant.now(),
+                                    EndReason.UserStop,
+                                    rs.quality
+                                )
+                            )
+                        )
+                        break
                     }
                     try {
                         rs.masterPlaylist = fetchAndCacheMasterPlaylist(rs)
                         rs.playlistUrl = resolveVariantUrl(rs)
-                    } catch (e: Exception) {
-                        logger.error("[{}] Failed to refresh master playlist during recovery", rs.roomName, e)
+                    } catch (e2: Exception) {
+                        logger.error("[{}] Failed to refresh master playlist during recovery", rs.roomName, e2)
                         continue
                     }
                 }

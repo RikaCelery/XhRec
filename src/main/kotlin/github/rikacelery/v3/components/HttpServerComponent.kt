@@ -35,7 +35,8 @@ class HttpServerComponent(
     private val metricComponent: MetricComponent,
     private val postProcessorComponent: PostProcessorComponent,
     private val scope: CoroutineScope,
-    private val mseStore: MseStore = MseStore()
+    private val mseStore: MseStore = MseStore(),
+    private val apiToken: String = ""
 ) {
     private val logger = LoggerFactory.getLogger("v3.HttpServer")
     private val stopping = AtomicBoolean(false)
@@ -74,6 +75,22 @@ class HttpServerComponent(
                 keyStorePath = keyStoreFile
             }
         }) {
+            if (apiToken.isNotBlank()) {
+                intercept(ApplicationCallPipeline.Plugins) {
+                    val path = call.request.uri.substringBefore('?')
+                    if (path == "/") return@intercept
+
+                    val token = call.request.queryParameters["token"]
+                        ?: call.request.headers["Authorization"]
+                            ?.takeIf { it.startsWith("Bearer ", ignoreCase = true) }
+                            ?.substring(7)
+                            ?.trim()
+                    if (token != apiToken) {
+                        call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                        return@intercept
+                    }
+                }
+            }
             install(CORS) { anyHost() }
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
 
