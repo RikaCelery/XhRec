@@ -219,19 +219,16 @@ class SessionComponent(
             try {
                 rs.masterPlaylist = fetchAndCacheMasterPlaylist(rs)
                 val availableNames = rs.masterPlaylist!!.variants.map { it.name }
-                val selected = selectQuality(availableNames, rs.quality)
-                rs.quality = selected
-                rs.targetquality = selected
+                rs.quality = selectQuality(availableNames, rs.targetquality)
                 rs.playlistUrl = resolveVariantUrl(rs)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                logger.error("[{}] Master playlist failed, falling back to API: {}", rs.roomName, e.message, e)
-                val qualities = apiClient.roomQualities(rs.roomName)
-                val selected = selectQuality(qualities, rs.quality)
-                val rawQuality = qualities.firstOrNull()
-                val useRaw = selected == rawQuality
-                rs.quality = selected
-                rs.targetquality = selected
-                rs.playlistUrl = buildFallbackPlaylistUrl(rs, useRaw)
+                logger.error("[{}] Master playlist failed: {}", rs.roomName, e.message, e)
+                sessions.remove(roomId)
+                delay(5.seconds)
+                requestBus.request<OkResponse>(RefreshRoomCmd(roomId))
+                return@launch
             }
 
             if (sessions[roomId] !== rs || rs.state == SessionState.Closing) return@launch
@@ -389,23 +386,20 @@ class SessionComponent(
     }
 
     private suspend fun pollQualityForRoom(rs: RoomSession) {
+        // Already on the user-requested quality: keep the periodic loop alive but
+        // do nothing to avoid unnecessary master playlist requests.
+        if (rs.quality == rs.targetquality) return
+
         try {
             val master = fetchAndCacheMasterPlaylist(rs)
             val availableNames = master.variants.map { it.name }
             if (availableNames.isNotEmpty()) {
                 eventBus.publish(QualitiesAvailable(rs.roomId, availableNames))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            logger.error("[{}] Master playlist poll failed, falling back to API: {}", rs.roomName, e.message, e)
-            try {
-                val qualities = apiClient.roomQualities(rs.roomName)
-                if (qualities.isNotEmpty()) {
-                    eventBus.publish(QualitiesAvailable(rs.roomId, qualities))
-                }
-            } catch (e: Exception) {
-                logger.error("[{}] Both master and API quality poll failed", rs.roomName, e)
-                // both master and API failed; ignore
-            }
+            logger.error("[{}] Master playlist quality poll failed: {}", rs.roomName, e.message, e)
         }
     }
 
@@ -478,24 +472,6 @@ class SessionComponent(
 
     private fun buildMasterUrl(roomId: Long, host: String = Hosts.current.hlsMasterHost): String =
         "https://" + host + "/hls/" + roomId + "/master/" + roomId + "_auto.m3u8"
-
-    private fun buildFallbackPlaylistUrl(rs: RoomSession, useRaw: Boolean = false): String {
-        val token = rs.token
-        return buildUrl {
-            protocol = URLProtocol.HTTPS
-            host = CdnSelector.select()
-            encodedPath = if (useRaw) "b-hls-%d/%d/%d.m3u8".format(
-                22, rs.roomId, rs.roomId
-            ) else "b-hls-%d/%d/%d_%s.m3u8".format(
-                22, rs.roomId, rs.roomId, rs.quality
-            )
-            parameters["psch"] = "v2"
-            parameters["pkey"] = rs.pkey
-            if (token != null) {
-                parameters["aclAuth"] = token
-            }
-        }.toString()
-    }
 
     private suspend fun fetchAndCacheMasterPlaylist(rs: RoomSession): MasterPlaylist {
         val client = ClientManager.getProxiedClient("master_" + rs.roomId)
