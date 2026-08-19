@@ -6,6 +6,7 @@ import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Hosts
+import github.rikacelery.v3.data.RoomStatus
 import github.rikacelery.v3.data.StreamEvent
 import github.rikacelery.v3.data.StreamStart
 import github.rikacelery.v3.data.User
@@ -287,16 +288,18 @@ class SessionComponent(
         when (event) {
             is RoomStatusChanged -> {
                 val rs = sessions[event.roomId] ?: return
-                if (event.newStatus == "public" || event.newStatus == "groupShow") {
+                if (RoomStatus.isPublic(event.newStatus) || RoomStatus.isGroupShow(event.newStatus) ||
+                    RoomStatus.isPrivate(event.newStatus)
+                ) {
                     if (rs.state == SessionState.Armed) {
-                        if (event.newStatus == "groupShow") {
-                            // SchedulerComponent handles groupShow via DoStart→startSession→configureSession
+                        if (RoomStatus.isGroupShow(event.newStatus) || RoomStatus.isPrivate(event.newStatus)) {
+                            // SchedulerComponent handles paid/private shows via DoStart→startSession→configureSession
                             return
                         }
                         startSession(event.roomId, rs.roomName, rs.quality, rs.pkey)
                     }
 
-                } else if (event.newStatus == "offline" || event.newStatus == "private") {
+                } else if (RoomStatus.isOffline(event.newStatus)) {
                     if (rs.state == SessionState.Recording) {
                         rs.state = SessionState.Closing
                         rs.pollingJob?.cancel()
@@ -457,15 +460,15 @@ class SessionComponent(
         try {
             val info = apiClient.roomFetchBroadcastInfo(roomName)
             val status = info.PathSingle("item.status").asString()
-            when (status) {
-                "public" -> return ""
-                "groupShow" -> {
+            when {
+                RoomStatus.isPublic(status) -> return ""
+                RoomStatus.isGroupShow(status) -> {
                     val config = requestBus.request<RoomConfigResponse>(GetRoomConfig(roomId))
                     sessions[roomId]?.let { rs ->
                         rs.timeLimit = config.timeLimit
                         rs.sizeLimitBytes = config.sizeLimitBytes
                     }
-                    if (!config.autoPay) {
+                    if (!config.autoPayTicket) {
                         val reason = "autopay disabled"
                         if (lastBlockReason.put(roomId, reason) != reason)
                             logger.warn("[{}] Room not enable autopay", roomName)
@@ -490,6 +493,63 @@ class SessionComponent(
                     }
                     if (token == null) {
                         logger.warn("[{}] Failed to get model token", roomName)
+                        return null
+                    }
+                    return token
+                }
+
+                // paid/private shows (private/p2p/virtualPrivate/...): price and token are only
+                // visible on AUTHENTICATED camInfo (anonymous user == null for these rooms)
+                RoomStatus.isPrivate(status) -> {
+                    val config = requestBus.request<RoomConfigResponse>(GetRoomConfig(roomId))
+                    sessions[roomId]?.let { rs ->
+                        rs.timeLimit = config.timeLimit
+                        rs.sizeLimitBytes = config.sizeLimitBytes
+                    }
+                    if (!config.autoPaySpy) {
+                        val reason = "autopay disabled"
+                        if (lastBlockReason.put(roomId, reason) != reason)
+                            logger.warn("[{}] Room not enable autopay (private)", roomName)
+                        return null
+                    }
+                    val u = requestBus.request<List<User>>(GetValidPaymentAccount(0)).firstOrNull()
+                    if (u == null) {
+                        val reason = "no account"
+                        if (lastBlockReason.put(roomId, reason) != reason)
+                            logger.warn("[{}] No user account to use for private show", roomName)
+                        return null
+                    }
+                    val camInfo = apiClient.roomFetchCamInfo(roomName, u.cookie)
+                    // TODO: verify `user.user.privateRate` on a real authenticated camInfo payload
+                    // (confirmed: anonymous camInfo has no user object for p2p rooms)
+                    val price = camInfo.PathSingleOrNull("user.user.privateRate")?.asInt() ?: run {
+                        val reason = "price unavailable"
+                        if (lastBlockReason.put(roomId, reason) != reason)
+                            logger.warn("[{}] privateRate not found in authenticated camInfo", roomName)
+                        return null
+                    }
+                    if (u.coins < price) {
+                        val reason = "insufficient balance"
+                        if (lastBlockReason.put(roomId, reason) != reason)
+                            logger.warn("[{}] No account to pay. price={}", roomName, price)
+                        return null
+                    }
+                    var token = camInfo.PathSingle("cam.modelToken").asString().ifBlank { null }
+                    if (token == null) {
+                        // TODO: verify the spy endpoint verb/params/idempotency and the modelToken
+                        // fill timing on a real private show; the bounded retry below is a guess
+                        apiClient.roomRequestSpyShow(roomId, u)
+                        for (attempt in 1..4) {
+                            delay(if (attempt == 1) 500L else 1500L)
+                            val cam = apiClient.roomFetchCamInfo(roomName, u.cookie)
+                            token = cam.PathSingle("cam.modelToken").asString().ifBlank { null }
+                            if (token != null) break
+                        }
+                    }
+                    if (token == null) {
+                        val reason = "no token"
+                        if (lastBlockReason.put(roomId, reason) != reason)
+                            logger.warn("[{}] Failed to get private-show model token", roomName)
                         return null
                     }
                     return token

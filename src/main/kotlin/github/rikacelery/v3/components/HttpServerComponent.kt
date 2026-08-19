@@ -104,7 +104,8 @@ class HttpServerComponent(
                     val quality = call.request.queryParameters["quality"] ?: "highest"
                     val active = call.request.queryParameters["active"]?.toBooleanStrictOrNull() ?: false
                     val limit = call.request.queryParameters["limit"]?.toLongOrNull() ?: 0L
-                    val autopay = call.request.queryParameters["autopay"]?.toBooleanStrictOrNull() ?: false
+                    val autopayTicket = call.request.queryParameters["autopayTicket"]?.toBooleanStrictOrNull() ?: false
+                    val autoPaySpy = call.request.queryParameters["autoPaySpy"]?.toBooleanStrictOrNull() ?: false
                     val pkey = call.request.queryParameters["pkey"] ?: ""
                     val sizeBytes = call.request.queryParameters["size"]?.let {
                         try {
@@ -125,7 +126,8 @@ class HttpServerComponent(
                                 pkey,
                                 if (limit > 0) limit.seconds else Duration.INFINITE,
                                 sizeBytes,
-                                autopay
+                                autopayTicket,
+                                autoPaySpy
                             ), timeoutMs = 30_000
                         )
                         if (active) {
@@ -230,9 +232,14 @@ class HttpServerComponent(
                     )
                     val v = call.request.queryParameters["v"]?.toBooleanStrictOrNull()
                         ?: return@get call.respondText("Missing v (true/false)", status = HttpStatusCode.BadRequest)
-                    requestBus.request<OkResponse>(SetRoomAutoPay(id, v))
+                    val kind = when (call.request.queryParameters["kind"]) {
+                        "private" -> AutoPayKind.PRIVATE
+                        "ticket", null -> AutoPayKind.GROUP_SHOW
+                        else -> return@get call.respondText("Invalid kind (expected 'ticket' or 'private')", status = HttpStatusCode.BadRequest)
+                    }
+                    requestBus.request<OkResponse>(SetRoomAutoPay(id, kind, v))
                     persistConfig()
-                    call.respondText("Autopay set to $v")
+                    call.respondText("Autopay ($kind) set to $v")
                 }
                 get("/limit") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull() ?: return@get call.respondText(
@@ -333,7 +340,7 @@ class HttpServerComponent(
                                         put("name", r.name); put("id", r.id); put("quality", r.quality)
                                         put("status", r.status)
                                         put("timeLimit", if (r.timeLimit == Duration.INFINITE) 0L else r.timeLimit.inWholeMilliseconds)
-                                        put("sizeLimitBytes", r.sizeLimitBytes); put("autoPay", r.autoPay)
+                                        put("sizeLimitBytes", r.sizeLimitBytes); put("autoPayTicket", r.autoPayTicket); put("autoPaySpy", r.autoPaySpy)
                                     })
                                 })
                             }

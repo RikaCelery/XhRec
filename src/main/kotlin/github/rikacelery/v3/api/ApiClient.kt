@@ -201,6 +201,32 @@ object ApiClient {
         return response.status.value in 200..299
     }
 
+    // TODO: verify the private-show (spy) endpoint verb/params/idempotency on a real show —
+    // modeled on the group-show endpoint, currently unconfirmed. If the response body carries
+    // the model token it should be parsed and returned instead of a second cam-info poll.
+    suspend fun roomRequestSpyShow(roomId: Long, user: User): Boolean {
+        val initial = userFetchInitial(user)
+        val response = withHostFallback { host ->
+            withRetry(3, stopIf = { false }) {
+                val r = apiClient.put(
+                    apiUrl(host, "api/front/show/models/" + roomId + "/viewers/" + user.userId + "/spy") +
+                        "?source=proposePrivate"
+                ) {
+                    header("Cookie", user.cookie)
+                    contentType(ContentType.Application.Json)
+                    setBody(buildJsonObject {
+                        put("csrfToken", initial.PathSingle("initial.client.csrfToken").asString())
+                        put("csrfTimestamp", initial.PathSingle("initial.client.csrfTimestamp").asString())
+                    })
+                }
+                // transient server errors should retry/fail over; 4xx are business results
+                if (r.status.value >= 500) throw IllegalStateException("HTTP " + r.status.value + " from " + host)
+                r
+            }
+        }
+        return response.status.value in 200..299
+    }
+
     suspend fun roomQualities(roomName: String): List<String> {
         val info = roomFetchBroadcastInfo(roomName)
         val presetElem = info.PathSingleOrNull("item.settings.presets") ?: run {

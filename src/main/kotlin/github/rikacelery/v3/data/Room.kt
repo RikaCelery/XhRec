@@ -17,7 +17,8 @@ data class Room(
     @Serializable(with = DurationMillisSerializer::class)
     val timeLimit: Duration = Duration.INFINITE,
     val sizeLimitBytes: Long,
-    val autoPay: Boolean,
+    val autoPayTicket: Boolean = false,
+    val autoPaySpy: Boolean = false,
     val lastSeen: String?,
     val status: String = "",
     val pkey: String = ""

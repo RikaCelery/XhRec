@@ -28,10 +28,16 @@ data class SetRoomTimeLimit(val roomId: Long, val limit: Duration) : Request {
 data class SetRoomSizeLimit(val roomId: Long, val limitBytes: Long) : Request {
     override fun toString() = "SetRoomSizeLimit(roomId=$roomId, limitBytes=$limitBytes)"
 }
-data class SetRoomAutoPay(val roomId: Long, val autoPay: Boolean) : Request {
-    override fun toString() = "SetRoomAutoPay(roomId=$roomId, autoPay=$autoPay)"
+enum class AutoPayKind { GROUP_SHOW, PRIVATE }
+
+data class SetRoomAutoPay(val roomId: Long, val kind: AutoPayKind, val autoPay: Boolean) : Request {
+    override fun toString() = "SetRoomAutoPay(roomId=$roomId, kind=$kind, autoPay=$autoPay)"
 }
-data class AddRoom(val name: String, val quality: String, val pkey: String = "", val timeLimit: Duration = Duration.INFINITE, val sizeLimitBytes: Long = 0, val autoPay: Boolean = false) : Request {
+data class AddRoom(
+    val name: String, val quality: String, val pkey: String = "",
+    val timeLimit: Duration = Duration.INFINITE, val sizeLimitBytes: Long = 0,
+    val autoPayTicket: Boolean = false, val autoPaySpy: Boolean = false
+) : Request {
     override fun toString() = "AddRoom(name=$name, quality=$quality)"
 }
 data class RemoveRoom(val roomId: Long) : Request {
@@ -129,7 +135,8 @@ data class RoomConfigResponse(
     val quality: String,
     val timeLimit: Duration,
     val sizeLimitBytes: Long,
-    val autoPay: Boolean,
+    val autoPayTicket: Boolean = false,
+    val autoPaySpy: Boolean = false,
     val pkey: String = ""
 ) : Response {
     override fun toString() = "RoomConfigResponse(quality=$quality, timeLimit=$timeLimit, sizeLimitBytes=$sizeLimitBytes)"

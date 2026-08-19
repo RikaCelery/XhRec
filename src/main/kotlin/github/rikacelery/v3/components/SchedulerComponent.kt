@@ -3,6 +3,7 @@ package github.rikacelery.v3.components
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.RoomStatus
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.ClientManager
 import github.rikacelery.v3.utils.StreamProbe
@@ -23,7 +24,8 @@ data class ArmedRoom(
     val roomName: String,
     val quality: String,
     val pkey: String = "",
-    val autoPay: Boolean = false
+    val autoPayTicket: Boolean = false,
+    val autoPaySpy: Boolean = false
 )
 
 class SchedulerComponent(
@@ -82,12 +84,19 @@ class SchedulerComponent(
                 if (gracefulStop) return
                 val a = armed[event.roomId] ?: return
                 roomStatuses[event.roomId] = event.newStatus
-                if (event.newStatus == "public" || (event.newStatus == "groupShow" && a.autoPay)) {
+                val recordable = RoomStatus.isPublic(event.newStatus) ||
+                    (RoomStatus.isGroupShow(event.newStatus) && a.autoPayTicket) ||
+                    (RoomStatus.isPrivate(event.newStatus) && a.autoPaySpy)
+                if (recordable) {
                     logger.debug("Armed room {} ({}) became {}, waiting for stream", event.roomId, a.roomName, event.newStatus)
                     val streamStatus = streamStatuses[event.roomId]
                     when {
                         // stream already distributing → start immediately
                         streamStatus == "distributing" -> tryStartRecording(event.roomId, a)
+                        // private shows: the anonymous probe can never succeed (master needs the
+                        // show token) and configureSession itself acquires the token, so start
+                        // directly and let configureSession gate readiness
+                        RoomStatus.isPrivate(event.newStatus) -> tryStartRecording(event.roomId, a)
                         // stream status unknown (e.g. first boot: already streaming, no event will come)
                         // → probe the master playlist; start at once when it is reachable
                         streamStatus == null -> probeAndStart(event.roomId, a)
@@ -137,12 +146,15 @@ class SchedulerComponent(
         }
     }
 
-    /** True when the armed room is currently recordable (public, or groupShow with auto-pay). */
+    /** True when the armed room is currently recordable (public / groupShow with ticket autopay / paid with private autopay). */
     private fun canRecord(roomId: Long, a: ArmedRoom): Boolean {
         val status = roomStatuses[roomId] ?: return false
-        if (status != "public" && status != "groupShow") return false
-        if (status == "groupShow" && !a.autoPay) return false
-        return true
+        return when {
+            RoomStatus.isPublic(status) -> true
+            RoomStatus.isGroupShow(status) -> a.autoPayTicket
+            RoomStatus.isPrivate(status) -> a.autoPaySpy
+            else -> false
+        }
     }
 
     /** Start recording now (guard: graceful stop / room recordable). */
@@ -185,8 +197,8 @@ class SchedulerComponent(
         pendingStarts.remove(roomId)?.cancel()
     }
 
-    fun internalAdd(room: Long, name1: String, quality: String, pkey: String, isArmed: Boolean, autoPay: Boolean) {
-        armed[room] = ArmedRoom(room, name1, quality, pkey, autoPay)
+    fun internalAdd(room: Long, name1: String, quality: String, pkey: String, isArmed: Boolean, autoPayTicket: Boolean, autoPaySpy: Boolean) {
+        armed[room] = ArmedRoom(room, name1, quality, pkey, autoPayTicket, autoPaySpy)
         if (isArmed) logger.info("Room {} ({}) armed and waiting", name1, room)
     }
 
@@ -199,7 +211,7 @@ class SchedulerComponent(
                     val name = requestBus.request<RoomNameResponse>(GetRoomName(env.command.roomId)).name
                     val config = requestBus.request<RoomConfigResponse>(GetRoomConfig(env.command.roomId))
                     armed[env.command.roomId] =
-                        ArmedRoom(env.command.roomId, name, config.quality, config.pkey, config.autoPay)
+                        ArmedRoom(env.command.roomId, name, config.quality, config.pkey, config.autoPayTicket, config.autoPaySpy)
                     logger.info("Room {} ({}) activated (armed)", name, env.command.roomId)
                     requestBus.request<OkResponse>(RefreshRoomCmd(env.command.roomId))
                 }

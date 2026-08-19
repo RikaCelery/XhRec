@@ -140,7 +140,8 @@ class RoomComponent(
                     r.quality,
                     r.timeLimit,
                     r.sizeLimitBytes,
-                    r.autoPay,
+                    r.autoPayTicket,
+                    r.autoPaySpy,
                     r.pkey
                 )
             }
@@ -165,7 +166,13 @@ class RoomComponent(
             }
 
             is SetRoomAutoPay -> {
-                rooms[cmd.roomId]?.let { rooms[it.id] = it.copy(autoPay = cmd.autoPay) }; OkResponse
+                rooms[cmd.roomId]?.let {
+                    rooms[it.id] = when (cmd.kind) {
+                        AutoPayKind.GROUP_SHOW -> it.copy(autoPayTicket = cmd.autoPay)
+                        AutoPayKind.PRIVATE -> it.copy(autoPaySpy = cmd.autoPay)
+                    }
+                }
+                OkResponse
             }
 
             is AddRoom -> {
@@ -183,7 +190,8 @@ class RoomComponent(
                             cmd.quality,
                             cmd.timeLimit,
                             cmd.sizeLimitBytes,
-                            cmd.autoPay,
+                            cmd.autoPayTicket,
+                            cmd.autoPaySpy,
                             null,
                             pkey = cmd.pkey
                         )
@@ -277,10 +285,11 @@ class RoomComponent(
         quality: String,
         timeLimit: Duration,
         sizeLimitBytes: Long,
-        autoPay: Boolean,
+        autoPayTicket: Boolean,
+        autoPaySpy: Boolean,
         pkey: String = ""
     ) {
-        rooms[id] = Room(id, name, quality, timeLimit, sizeLimitBytes, autoPay, null, pkey = pkey)
+        rooms[id] = Room(id, name, quality, timeLimit, sizeLimitBytes, autoPayTicket, autoPaySpy, null, pkey = pkey)
         // let LiveEventSource subscribe the room's status channels
         eventBus.publish(RoomAdded(id, name))
     }
@@ -299,7 +308,11 @@ class RoomComponent(
                     if (room.timeLimit != Duration.INFINITE) sb.append(" limit:${room.timeLimit.inWholeSeconds}")
                     if (room.sizeLimitBytes > 0) sb.append(" size:${formatSize(room.sizeLimitBytes)}")
                     if (room.pkey.isNotBlank()) sb.append(" pkey:${room.pkey}")
-                    if (room.autoPay) sb.append(" autopay")
+                    when {
+                        room.autoPayTicket && room.autoPaySpy -> sb.append(" autopay")
+                        room.autoPayTicket -> sb.append(" autopay:ticket")
+                        room.autoPaySpy -> sb.append(" autopay:private")
+                    }
                     sb.toString()
                 }.let { lines -> if (lines.isNotEmpty()) lines + "\n" else "" }
                 withContext(Dispatchers.IO) {
