@@ -11,6 +11,7 @@ import github.rikacelery.v3.hooks.DownloaderHook
 import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.ClientManager
 import io.ktor.client.*
+import io.ktor.client.plugins.ResponseException
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.utils.io.*
@@ -97,13 +98,13 @@ class DownloaderComponent(
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     // Still account for the segment so OrderedEmitter cannot stall forever.
                     withContext(NonCancellable) {
-                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, "cancelled"))
+                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, "cancelled", transportError = true))
                     }
                     throw e
                 } catch (e: Exception) {
                     logger.error("Download worker failed: idx=$idx, url=${seg.url}", e)
                     withContext(NonCancellable) {
-                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, e.message ?: "worker error"))
+                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, e.message ?: "worker error", transportError = true))
                     }
                 }
             }
@@ -150,7 +151,7 @@ class DownloaderComponent(
                     // Direct already finished with a non-success result. Give the proxy a real
                     // chance instead of letting select() immediately return the direct failure.
                     withTimeoutOrNull(raceThresholdMs.milliseconds) { proxyDeferred.await() }
-                        ?: DownloadResult.Failed(idx, resolvedUrl, "proxy timeout")
+                        ?: DownloadResult.Failed(idx, resolvedUrl, "proxy timeout", transportError = true)
                 } else {
                     select<DownloadResult> {
                         directDeferred.onAwait { r ->
@@ -170,9 +171,10 @@ class DownloaderComponent(
                 (result as? DownloadResult.Success)?.let {
                     CdnSelector.record(cdnHost, it.data.size.toLong(), System.currentTimeMillis() - start)
                 }
-                if (result is DownloadResult.Failed) CdnSelector.recordFailure(cdnHost)
+                // only connection-level failures implicate the CDN host; HTTP status errors don't
+                if (result is DownloadResult.Failed && result.transportError) CdnSelector.recordFailure(cdnHost)
                 result
-            } ?: DownloadResult.Failed(idx, resolvedUrl, "segment timeout after ${segmentTimeoutMs}ms").also {
+            } ?: DownloadResult.Failed(idx, resolvedUrl, "segment timeout after ${segmentTimeoutMs}ms", transportError = true).also {
                 CdnSelector.recordFailure(cdnHost)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -180,7 +182,7 @@ class DownloaderComponent(
         } catch (e: Exception) {
             CdnSelector.recordFailure(cdnHost)
             logger.error("downloadSegment failed: idx=$idx, url=$url", e)
-            DownloadResult.Failed(idx, url, e.message ?: "download failed")
+            DownloadResult.Failed(idx, url, e.message ?: "download failed", transportError = true)
         }
     }
 
@@ -201,9 +203,13 @@ class DownloaderComponent(
         } catch (e: kotlinx.coroutines.CancellationException) {
             // the download race was resolved and this coroutine was cancelled — not an error
             throw e
+        } catch (e: ResponseException) {
+            // HTTP status errors (404 etc.) are routine — one line, no stack trace
+            logger.warn("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied, status=${e.response.status}")
+            DownloadResult.Failed(idx, url, "HTTP " + e.response.status, transportError = false)
         } catch (e: Exception) {
             logger.error("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied", e)
-            DownloadResult.Failed(idx, url, e.message ?: "download failed")
+            DownloadResult.Failed(idx, url, e.message ?: "download failed", transportError = true)
         }
     }
 }
