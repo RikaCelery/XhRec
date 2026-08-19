@@ -17,6 +17,7 @@ import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.utils.io.ClosedWriteChannelException
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
@@ -417,7 +418,11 @@ class HttpServerComponent(
                                 }
                                 flush()
                             }
-                        }catch(e:Exception){
+                        } catch (e: ClosedWriteChannelException) {
+                            // client (browser) closed the preview — normal, not an error
+                            logger.debug("SSE client disconnected for room $id")
+                            return@respondOutputStream
+                        } catch (e: Exception) {
                             logger.error("SSE stream error for room $id: ${e.message}", e)
                             return@respondOutputStream
                         } finally {

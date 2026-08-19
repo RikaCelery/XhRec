@@ -92,11 +92,15 @@ class MseStore : DataHook {
 
     private fun onStreamEnd(roomId: Long) {
         rooms[roomId]?.generation?.inc()?.let { rooms[roomId]?.generation = it }
+        // terminate open SSE streams so their HTTP connections close instead of lingering
+        rooms[roomId]?.sseChannels?.forEach { it.close() }
+        rooms[roomId]?.sseChannels?.clear()
     }
 
     // ── SSE streaming ───────────────────────────────────────────────
     fun subscribe(roomId: Long): Channel<SseChunk> {
-        val ch = Channel<SseChunk>(Channel.UNLIMITED)
+        // bounded so slow/disconnected clients can't accumulate an unbounded backlog
+        val ch = Channel<SseChunk>(capacity = 64)
         val state = rooms.computeIfAbsent(roomId) { RoomState() }
         state.sseChannels.add(ch)
 
