@@ -260,7 +260,7 @@
                         class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
                         <i class="fa-solid fa-globe text-sm"></i>
                     </button>
-                    <button @click="hostsDialog = true; syncHostForm()" :title="'Domain Settings / 域名设置'"
+                    <button @click="hostsDialog = true; syncHostForm()" :title="$t('Domain Settings')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
                         <i class="fa-solid fa-network-wired text-sm"></i>
                     </button>
@@ -525,58 +525,58 @@
         <div v-if="hostsDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="hostsDialog=false">
             <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-2xl w-full p-5 border border-slate-200 dark:border-slate-700">
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-bold text-slate-800 dark:text-slate-100">Domain Settings / 域名设置</h2>
+                    <h2 class="text-lg font-bold text-slate-800 dark:text-slate-100">{{ $t('Domain Settings') }}</h2>
                     <button @click="hostsDialog=false" class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-200"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                     <label class="block">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">API 域名 (逗号分隔, 自动 fallback)</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ $t('API Domains (comma-separated, auto fallback)') }}</span>
                         <input v-model="hostForm.platformHosts" type="text" placeholder="stripchat.com, mirror.example.com"
                             class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
                     </label>
                     <label class="block">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">WebSocket 域名 (逗号分隔)</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ $t('WebSocket Domains (comma-separated)') }}</span>
                         <input v-model="hostForm.webSocketHosts" type="text" placeholder="websocket-v6.xhamsterlive.com"
                             class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
                     </label>
                     <label class="block">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">CDN 域名 (测速优选, 逗号分隔)</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ $t('CDN Domains (speed-based selection, comma-separated)') }}</span>
                         <input v-model="hostForm.hlsHosts" type="text" placeholder="media-hls.doppiocdn.org"
                             class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
                     </label>
                     <label class="block">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">Master playlist 域名</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ $t('Master Playlist Domain') }}</span>
                         <input v-model="hostForm.hlsMasterHost" type="text" placeholder="edge-hls.doppiocdn.org"
                             class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
                     </label>
                     <label class="block">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">Web 链接域名</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ $t('Web Link Domain') }}</span>
                         <input v-model="hostForm.webHost" type="text" placeholder="xhamsterlive.com"
                             class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
                     </label>
                     <label class="block">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">预览 API 域名</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ $t('Preview API Domain') }}</span>
                         <input v-model="hostForm.previewHost" type="text" placeholder="zh.xhamsterlive.com"
                             class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
                     </label>
                     <label class="block">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">缩略图域名</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ $t('Thumbnail Domain') }}</span>
                         <input v-model="hostForm.thumbHost" type="text" placeholder="img.doppiocdn.org"
                             class="mt-1 w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100">
                     </label>
                 </div>
                 <div class="mt-4" v-if="Object.keys(cdnStats).length">
-                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">CDN 测速 (bytes/s)</div>
+                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{{ $t('CDN Speed (bytes/s)') }}</div>
                     <div class="text-xs grid grid-cols-1 gap-1">
                         <div v-for="(stat, host) in cdnStats" :key="host" class="flex justify-between px-2 py-1 rounded bg-slate-50 dark:bg-slate-900">
                             <span class="font-mono">{{host}}</span>
-                            <span>{{formatBytes(stat.speedBps)}}/s · {{stat.samples}} samples · {{stat.failures}} failures{{stat.coolingDown ? ' · cooling': ''}}</span>
+                            <span>{{formatBytes(stat.speedBps)}}/s · {{stat.samples}} {{ $t('samples') }} · {{stat.failures}} {{ $t('failures') }}{{stat.coolingDown ? ' · ' + $t('cooling') : ''}}</span>
                         </div>
                     </div>
                 </div>
                 <div class="mt-5 flex justify-end gap-2">
-                    <button @click="hostsDialog=false" class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">Cancel</button>
-                    <button @click="saveHosts()" class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm">Save / 保存</button>
+                    <button @click="hostsDialog=false" class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">{{ $t('Cancel') }}</button>
+                    <button @click="saveHosts()" class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm">{{ $t('Save') }}</button>
                 </div>
             </div>
         </div>
@@ -658,6 +658,20 @@
                             'XhRec Dashboard': 'XhRec 控制台', 'XhRec Manager': 'XhRec 管理器',
                             'Actual recording quality': '实际录制画质',
                             'Log Masking — hides sensitive data (model names, cookies, tokens) in logs. CRC32 hash stays stable per session, changes on restart.': '日志脱敏 — 在日志中隐藏敏感信息（主播名、Cookie、Token）。CRC32 哈希在同一次运行中保持一致，重启后变化。',
+                            'Domain Settings': '域名设置',
+                            'API Domains (comma-separated, auto fallback)': 'API 域名（逗号分隔，自动 fallback）',
+                            'WebSocket Domains (comma-separated)': 'WebSocket 域名（逗号分隔）',
+                            'CDN Domains (speed-based selection, comma-separated)': 'CDN 域名（测速优选，逗号分隔）',
+                            'Master Playlist Domain': 'Master playlist 域名',
+                            'Web Link Domain': 'Web 链接域名',
+                            'Preview API Domain': '预览 API 域名',
+                            'Thumbnail Domain': '缩略图域名',
+                            'CDN Speed (bytes/s)': 'CDN 测速 (bytes/s)',
+                            'samples': '样本',
+                            'failures': '失败',
+                            'cooling': '冷却中',
+                            'Cancel': '取消',
+                            'Save': '保存',
                         }
                     },
                 }
