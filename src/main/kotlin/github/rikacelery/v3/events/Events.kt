@@ -22,6 +22,10 @@ data class RoomRemoved(val roomId: Long, val name: String) {
 data class RoomStatusChanged(val roomId: Long, val oldStatus: String, val newStatus: String) {
     override fun toString() = "RoomStatusChanged(roomId=$roomId, $oldStatus → $newStatus)"
 }
+/** Stream lifecycle status (created/probing/publishing/distributing/finished) — distinct from room status. */
+data class StreamStatusChanged(val roomId: Long, val oldStatus: String, val newStatus: String) {
+    override fun toString() = "StreamStatusChanged(roomId=$roomId, $oldStatus → $newStatus)"
+}
 
 // ── Recording Events ──
 

@@ -12,6 +12,7 @@ import github.rikacelery.v3.events.RecordingStopped
 import github.rikacelery.v3.events.RoomAdded
 import github.rikacelery.v3.events.RoomRemoved
 import github.rikacelery.v3.events.RoomStatusChanged
+import github.rikacelery.v3.events.StreamStatusChanged
 import github.rikacelery.v3.events.WsDisconnected
 import github.rikacelery.v3.events.WsReconnected
 import github.rikacelery.v3.utils.ClientManager
@@ -47,6 +48,7 @@ class LiveEventSource(
     // rooms currently recording — get the full channel set
     private val recordingRooms = ConcurrentHashMap.newKeySet<Long>()
     private val roomStatuses = ConcurrentHashMap<Long, String>()
+    private val streamStatuses = ConcurrentHashMap<Long, String>()
     private val seq = AtomicInteger(0)
     private val wsFailover = HostFailover(listOf(HostsConfig.DEFAULT_WS_HOST))
     private val pools = (0 until wsPoolCount).map { WsPool(it) }
@@ -319,14 +321,32 @@ class LiveEventSource(
                 val pub = push["pub"]?.jsonObject ?: continue
                 val data = pub["data"]?.jsonObject ?: continue
 
-                if (type == "broadcastChanged" || type == "streamChanged") {
+                // Room/model status (public/groupShow/private/virtualPrivate/off/idle...)
+                // arrives via two events: broadcastChanged (top-level "status") and
+                // modelStatusChanged (nested "model.status").
+                if (type == "broadcastChanged" || type == "modelStatusChanged") {
                     val status = data["status"]?.jsonPrimitive?.content
-                        ?: data["broadcast"]?.jsonObject?.get("status")?.jsonPrimitive?.content
+                        ?: data["model"]?.jsonObject?.get("status")?.jsonPrimitive?.content
                         ?: "offline"
                     val oldStatus = roomStatuses[roomId] ?: ""
-                    logger.debug("WS event: type={}, roomId={}, status={}", type, roomId, status)
-                    roomStatuses[roomId] = status
-                    eventBus.publish(RoomStatusChanged(roomId, oldStatus, status))
+                    if (status != oldStatus) {
+                        logger.debug("WS room/model status: roomId={}, {} -> {}", roomId, oldStatus, status)
+                        roomStatuses[roomId] = status
+                        eventBus.publish(RoomStatusChanged(roomId, oldStatus, status))
+                    }
+                }
+
+                // streamChanged carries the STREAM lifecycle status (created/probing/publishing/
+                // distributing/finished) — a separate domain from room status.
+                if (type == "streamChanged") {
+                    val status = data["status"]?.jsonPrimitive?.content ?: ""
+                    if (status.isNotEmpty()) {
+                        val oldStatus = streamStatuses[roomId] ?: ""
+                        if (status != oldStatus) {
+                            streamStatuses[roomId] = status
+                            eventBus.publish(StreamStatusChanged(roomId, oldStatus, status))
+                        }
+                    }
                 }
 
                 // broadcast-settings / stream changes may alter available qualities — hint the session

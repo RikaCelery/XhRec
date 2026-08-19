@@ -10,6 +10,7 @@ import github.rikacelery.v3.data.StreamEvent
 import github.rikacelery.v3.data.StreamStart
 import github.rikacelery.v3.data.User
 import github.rikacelery.v3.events.*
+import kotlinx.serialization.json.*
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.m3u8.MasterPlaylist
 import github.rikacelery.v3.utils.*
@@ -236,7 +237,11 @@ class SessionComponent(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                logger.error("[{}] Master playlist failed: {}", rs.roomName, e.message, e)
+                if (e is ResponseException) {
+                    logger.warn("[{}] Master playlist failed: status={}", rs.roomName, e.response.status)
+                } else {
+                    logger.error("[{}] Master playlist failed: {}", rs.roomName, e.message, e)
+                }
                 sessions.remove(roomId)
                 delay(5.seconds)
                 requestBus.request<OkResponse>(RefreshRoomCmd(roomId))
@@ -313,7 +318,12 @@ class SessionComponent(
             }
 
             is LiveMessage -> {
-                dataChannel.send(StreamEvent(event.roomId, Instant.now(), event.body.toString()))
+                // record the event type alongside its payload in the .event file
+                val json = buildJsonObject {
+                    put("type", event.type)
+                    put("data", event.body)
+                }.toString()
+                dataChannel.send(StreamEvent(event.roomId, Instant.now(), json))
             }
 
             is QualitiesAvailable -> {
@@ -425,6 +435,8 @@ class SessionComponent(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: ResponseException) {
+            logger.warn("[{}] Master playlist quality poll failed: status={}", rs.roomName, e.response.status)
         } catch (e: Exception) {
             logger.error("[{}] Master playlist quality poll failed: {}", rs.roomName, e.message, e)
         }
