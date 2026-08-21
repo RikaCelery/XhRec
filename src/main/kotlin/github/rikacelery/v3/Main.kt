@@ -12,6 +12,7 @@ import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.PredictionStore
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
@@ -153,6 +154,13 @@ fun main(vararg args: String) {
         )
         val schedulerComponent = SchedulerComponent(requestBus, sessionComponent, eventBus, appScope, config.streamAuthKey)
 
+        // Prediction persistence (loads on init, auto-saves periodically, saves on stop)
+        val predictionStore = PredictionStore(
+            "xhrec-predictions.json",
+            appScope,
+            saveIntervalMs = 60_000
+        )
+
         val httpServer = HttpServerComponent(
             config.port,
             eventBus,
@@ -176,6 +184,7 @@ fun main(vararg args: String) {
         postProcessorComponent.start()
         sessionComponent.start()
         schedulerComponent.start()
+        predictionStore.start()
 
         // 4. Bootstrap: load users, processors, rooms from config files
         val bootstrap =
@@ -208,6 +217,7 @@ fun main(vararg args: String) {
             roomComponent.stop()
             authComponent.stop()
             configComponent.stop()
+            predictionStore.stop() // suspend: persist final state before scope is cancelled
             dataChannel.close()
             appScope.cancel()
             println("XhRec v3 shut down")

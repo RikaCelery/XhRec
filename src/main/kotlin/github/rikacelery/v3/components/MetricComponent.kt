@@ -3,6 +3,8 @@ package github.rikacelery.v3.components
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.events.*
+import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.ModelSchedule
 import kotlinx.coroutines.CoroutineScope
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -55,6 +57,7 @@ class MetricComponent(
         subscribe<PlaylistRefreshed>(PlaylistRefreshed::class)
         subscribe<RecordingStarted>(RecordingStarted::class)
         subscribe<RecordingStopped>(RecordingStopped::class)
+        subscribe<RoomStatusChanged>(RoomStatusChanged::class)
         subscribe<CommandEnvelope>(CommandEnvelope::class)
     }
 
@@ -68,6 +71,7 @@ class MetricComponent(
         is PlaylistRefreshed -> OnMetricEvent(event)
         is RecordingStarted -> OnMetricEvent(event)
         is RecordingStopped -> OnMetricEvent(event)
+        is RoomStatusChanged -> OnMetricEvent(event)
         is CommandEnvelope -> HandleMetricCommand(event)
         else -> null
     }
@@ -164,6 +168,13 @@ class MetricComponent(
                     metrics.remove(e.roomId)
                 }
 
+                is RoomStatusChanged -> {
+                    // Record model schedule when room goes live (not offline)
+                    if (!github.rikacelery.v3.data.RoomStatus.isOffline(e.newStatus)) {
+                        ModelSchedule.record(e.roomId, System.currentTimeMillis())
+                    }
+                }
+
                 else -> {}
             }
         }
@@ -232,6 +243,24 @@ class MetricComponent(
             sb.appendLine("# TYPE xhrec_segment_downloaded_current gauge")
             sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
         }
+        // CDN host duration metrics
+        val cdnStats = CdnSelector.snapshot()
+        cdnStats.forEach { (host, stat) ->
+            val durLabel = if (stat.estimatedDurationMs.isNaN()) "-1" else stat.estimatedDurationMs.toLong().toString()
+            sb.appendLine("# HELP xhrec_cdn_estimated_duration_ms CDN host estimated duration at current time")
+            sb.appendLine("# TYPE xhrec_cdn_estimated_duration_ms gauge")
+            sb.appendLine("xhrec_cdn_estimated_duration_ms{host=\"$host\",source=\"${stat.estimateSource}\"} $durLabel")
+            sb.appendLine("# HELP xhrec_cdn_confidence CDN host prediction confidence (0-1)")
+            sb.appendLine("# TYPE xhrec_cdn_confidence gauge")
+            sb.appendLine("xhrec_cdn_confidence{host=\"$host\"} ${stat.confidence}")
+            sb.appendLine("# HELP xhrec_cdn_total_successes CDN host total successful downloads")
+            sb.appendLine("# TYPE xhrec_cdn_total_successes counter")
+            sb.appendLine("xhrec_cdn_total_successes{host=\"$host\"} ${stat.totalSuccesses}")
+            sb.appendLine("# HELP xhrec_cdn_total_errors CDN host total errors")
+            sb.appendLine("# TYPE xhrec_cdn_total_errors counter")
+            sb.appendLine("xhrec_cdn_total_errors{host=\"$host\"} ${stat.totalErrors}")
+        }
+
         return sb.toString()
     }
 }

@@ -264,6 +264,10 @@
                         class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
                         <i class="fa-solid fa-network-wired text-sm"></i>
                     </button>
+                    <button @click="scheduleDialog = true; fetchModelSchedules()" :title="$t('Model Schedule')"
+                        class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
+                        <i class="fa-solid fa-calendar text-sm"></i>
+                    </button>
                     <button @click="poweroff()" :title="$t('Power Off Server')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-colors ml-2">
                         <i class="fa-solid fa-power-off text-sm"></i>
@@ -337,11 +341,17 @@
                         <tr v-for="room in roomDisplay" :key="room.name"
                             class="hover:bg-slate-50 transition-colors group">
                             <td class="px-3 py-1.5 font-medium text-indigo-600 text-xs">
-                                <a :href="`https://${hosts.webHost}/${room.name}`" target="_blank"
-                                    class="hover:underline flex items-center gap-0.5">
-                                    {{room.name}} <i
-                                        class="fa-solid fa-arrow-up-right-from-square text-[0.6rem] text-slate-400"></i>
-                                </a>
+                                <div class="flex items-center gap-1">
+                                    <a :href="`https://${hosts.webHost}/${room.name}`" target="_blank"
+                                        class="hover:underline flex items-center gap-0.5">
+                                        {{room.name}} <i
+                                            class="fa-solid fa-arrow-up-right-from-square text-[0.6rem] text-slate-400"></i>
+                                    </a>
+                                    <button @click="showModelDetail(room)" :title="$t('Schedule Details')"
+                                        class="w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors">
+                                        <i class="fa-solid fa-chart-bar text-[0.6rem]"></i>
+                                    </button>
+                                </div>
                             </td>
                             <td class="px-2 py-1.5 text-center text-xs text-slate-500">
                                 {{room.roomStatus}}
@@ -583,11 +593,32 @@
                     </label>
                 </div>
                 <div class="mt-4" v-if="Object.keys(cdnStats).length">
-                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{{ $t('CDN Speed (bytes/s)') }}</div>
+                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{{ $t('CDN Performance') }}</div>
                     <div class="text-xs grid grid-cols-1 gap-1">
-                        <div v-for="(stat, host) in cdnStats" :key="host" class="flex justify-between px-2 py-1 rounded bg-slate-50 dark:bg-slate-900">
-                            <span class="font-mono">{{host}}</span>
-                            <span>{{formatBytes(stat.speedBps)}}/s · {{stat.samples}} {{ $t('samples') }} · {{stat.failures}} {{ $t('failures') }}{{stat.coolingDown ? ' · ' + $t('cooling') : ''}}</span>
+                        <div v-for="(stat, host) in cdnStats" :key="host" class="px-2 py-1.5 rounded bg-slate-50 dark:bg-slate-900">
+                            <div class="flex justify-between items-center">
+                                <span class="font-mono font-semibold">{{host}}</span>
+                                <span class="flex items-center gap-1.5">
+                                    <button v-if="stat.coolingDown" @click="clearCooldown(host)"
+                                        :title="$t('Clear cooldown')"
+                                        class="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 hover:bg-amber-200 text-amber-700 border border-amber-200 transition-colors">
+                                        <i class="fa-solid fa-broom mr-0.5"></i>{{ $t('Clear') }}
+                                    </button>
+                                    <span :class="stat.coolingDown ? 'text-red-500' : 'text-green-500'">
+                                        {{stat.coolingDown ? $t('cooling') : $t('active')}}
+                                    </span>
+                                </span>
+                            </div>
+                            <div class="mt-1 text-slate-600 dark:text-slate-400">
+                                <span class="font-mono">{{formatDuration(stat.estimatedDurationMs)}}</span>
+                                <span class="mx-1">·</span>
+                                <span>{{$t(stat.estimateSource || 'unknown')}}</span>
+                                <span class="mx-1">·</span>
+                                <span>{{$t('confidence')}}: {{(stat.confidence * 100).toFixed(0)}}%</span>
+                            </div>
+                            <div class="mt-0.5 text-slate-500 dark:text-slate-500">
+                                {{stat.totalSuccesses}} {{$t('success')}} · {{stat.totalErrors}} {{$t('errors')}}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -597,7 +628,109 @@
                 </div>
             </div>
         </div>
+    <!-- Model Schedule Dialog -->
+    <div v-if="scheduleDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-[90vw] max-w-2xl max-h-[80vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    <i class="fa-solid fa-calendar text-indigo-500 mr-2"></i>
+                    {{ $t('Model Schedule Prediction') }}
+                </h2>
+                <button @click="scheduleDialog=false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div v-if="modelSchedules.length === 0" class="text-sm text-slate-500 dark:text-slate-400 py-4 text-center">
+                {{ $t('No schedule data available') }}
+            </div>
+            <div v-else class="space-y-3">
+                <div v-for="s in modelSchedules" :key="s.roomId" class="p-3 rounded-lg bg-slate-50 dark:bg-slate-900">
+                    <div class="flex justify-between items-center">
+                        <span class="font-semibold text-slate-800 dark:text-slate-100">{{s.name || ('Room #' + s.roomId)}}</span>
+                        <span class="text-xs text-slate-500">{{s.totalRecordings}} {{$t('recordings')}}</span>
+                    </div>
+                    <div class="mt-2 flex items-center gap-2">
+                        <span class="text-xs text-slate-500">{{$t('Top hours')}}:</span>
+                        <span v-for="h in s.topHours" :key="h" class="px-2 py-0.5 text-xs rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-200 font-mono">
+                            {{h}}:00
+                        </span>
+                    </div>
+                    <div v-if="s.nextPredictedHour !== null && s.nextPredictedHour !== undefined" class="mt-1 text-xs text-green-600 dark:text-green-400">
+                        <i class="fas fa-clock mr-1"></i>{{$t('Next predicted')}}: {{s.nextPredictedHour}}:00
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 flex justify-end">
+                <button @click="scheduleDialog=false" class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">{{ $t('Close') }}</button>
+            </div>
+        </div>
     </div>
+    <!-- Model Schedule Detail Dialog -->
+    <div v-if="modelDetailDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="modelDetailDialog=false">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-[90vw] max-w-3xl max-h-[85vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    <i class="fa-solid fa-chart-bar text-indigo-500 mr-2"></i>
+                    {{ $t('Schedule Details') }} - <span class="font-mono">{{modelDetail ? modelDetail.name : ''}}</span>
+                </h2>
+                <button @click="modelDetailDialog=false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <template v-if="modelDetail">
+                <div class="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 mb-4">
+                    <span><i class="fa-solid fa-hashtag mr-1"></i>{{modelDetail.roomId}}</span>
+                    <span><i class="fa-solid fa-video mr-1"></i>{{modelDetail.totalRecordings}} {{ $t('recordings') }}</span>
+                    <span v-if="modelDetail.nextPredictedHour !== null && modelDetail.nextPredictedHour !== undefined">
+                        <i class="fa-solid fa-clock mr-1 text-green-500"></i>{{ $t('Next predicted') }}: {{modelDetail.nextPredictedHour}}:00
+                    </span>
+                </div>
+
+                <!-- 24h histogram -->
+                <div class="mb-2">
+                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{{ $t('24h Start Time Distribution') }}</div>
+                    <div class="flex items-end gap-px h-32 bg-slate-50 dark:bg-slate-900 rounded p-2">
+                        <div v-for="(prob, hour) in modelDetail.hourDistribution" :key="hour"
+                            class="flex-1 flex flex-col justify-end h-full group relative"
+                            :title="hour + ':00 - ' + prob + '%'">
+                            <div class="w-full rounded-sm transition-colors"
+                                :class="prob > 0 ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-slate-200 dark:bg-slate-700'"
+                                :style="{ height: (Math.max(prob, 2) / 100) * 100 + '%', opacity: prob > 0 ? (0.4 + prob/200) : 0.3 }">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex gap-px mt-1 text-[9px] text-slate-400">
+                        <span v-for="(prob, hour) in modelDetail.hourDistribution" :key="'l'+hour" class="flex-1 text-center" v-if="hour % 2 === 0">{{hour}}</span>
+                        <span v-else :key="'n'+hour" class="flex-1"></span>
+                    </div>
+                </div>
+
+                <!-- Top hours -->
+                <div class="mt-3">
+                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{{ $t('Top hours') }}</div>
+                    <div class="flex flex-wrap gap-2">
+                        <span v-for="h in modelDetail.topHours" :key="h.hour"
+                            class="px-2 py-1 text-xs rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-200 font-mono">
+                            {{h.hour}}:00 ({{h.probability}}%)
+                        </span>
+                        <span v-if="!modelDetail.topHours || modelDetail.topHours.length === 0" class="text-xs text-slate-400">
+                            {{ $t('No schedule data available') }}
+                        </span>
+                    </div>
+                </div>
+            </template>
+
+            <div class="mt-4 flex justify-end">
+                <button @click="modelDetailDialog=false" class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">{{ $t('Close') }}</button>
+            </div>
+        </div>
+    </div>
+
+    </div>
+
+
+
 
     <script type="module">
         import { createApp, defineComponent } from 'vue'
@@ -634,7 +767,11 @@
                     darkMode: false,
                     maskEnabled: true,
                     hostsDialog: false,
+                    scheduleDialog: false,
+                    modelDetailDialog: false,
                     cdnStats: {},
+                    modelSchedules: [],
+                    modelDetail: null,
                     hosts: {
                         platformHosts: ["stripchat.com"],
                         webSocketHosts: ["websocket-v6.xhamsterlive.com"],
@@ -664,6 +801,15 @@
                             'Recording': '录制中', 'Fetching': '获取中', 'Listening': '监听中', 'Offline': '离线',
                             'Mask ON': '脱敏 开', 'Mask OFF': '脱敏 关', 'Network Error': '网络错误',
                             'Invalid limit value': '无效的限时值', 'Invalid size value': '无效的大小值',
+                            'CDN Performance': 'CDN 性能', 'Clear cooldown': '清除冷却', 'Clear': '清除', 'Cooldown cleared': '冷却已清除', 'active': '正常', 'confidence': '置信度',
+                            'success': '成功', 'errors': '错误', 'unknown': '未知',
+                            'hour+day': '小时+日', 'hour': '小时', 'block+day': '时段+日',
+                            'block': '时段', 'global': '全局',
+                            'Model Schedule': '开播预测', 'Model Schedule Prediction': '开播时间预测',
+                            'No schedule data available': '暂无开播数据', 'recordings': '次记录',
+                            'Top hours': '主要时段', 'Next predicted': '下次预测',
+                            'Close': '关闭', 'Schedule Details': '开播详情',
+                            '24h Start Time Distribution': '24小时开播时间分布',
                             'Please enter a room name or URL': '请输入直播间名称或 URL',
                             'Room added successfully': '添加成功',
                             'No rooms found. Add a room to start recording.': '未找到直播间，请添加直播间开始录制。',
@@ -741,7 +887,9 @@
                             return this.sort["Size"] === 1 ? (a.bytesWrite || 0) - (b.bytesWrite || 0) : (b.bytesWrite || 0) - (a.bytesWrite || 0);
                         }
                         if (this.sort["Room"]) {
-                            return this.sort["Room"] === 1 ? a.name.toLowerCase().localeCompare(b.name.toLowerCase()) : b.name.toLowerCase().localeCompare(a.name.toLowerCase());
+                            const aName = (a.name || '').toLowerCase();
+                            const bName = (b.name || '').toLowerCase();
+                            return this.sort["Room"] === 1 ? aName.localeCompare(bName) : bName.localeCompare(aName);
                         }
                         return 0;
                     });
@@ -786,6 +934,13 @@
                             this.cdnStats = j.cdnStats || {};
                         }
                     } catch (_) {}
+                },
+                async clearCooldown(host) {
+                    try {
+                        await fetch(HOST + '/cdn/clear-cooldown?host=' + encodeURIComponent(host || ''));
+                        this.showToast(this.$t('Cooldown cleared'));
+                        await this.fetchHostsConfig();
+                    } catch (e) { console.error('Failed to clear cooldown', e); }
                 },
                 syncHostForm() {
                     this.hostForm = {
@@ -837,11 +992,38 @@
                     this.sort[by] = this.sort[by] === 1 ? 2 : (this.sort[by] === 2 ? undefined : 1);
                 },
                 formatBytes(bytes) {
-                    if (!bytes) return `0 B`;
+                    if (!bytes) return '0 B';
                     const units = ["B", "KB", "MB", "GB", "TB"];
                     let i = 0;
                     while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
-                    return `${bytes.toFixed(2)} ${units[i]}`;
+                    return bytes.toFixed(2) + ' ' + units[i];
+                },
+                formatDuration(ms) {
+                    if (!ms || ms < 0 || !isFinite(ms)) return '-';
+                    if (ms < 1000) return ms.toFixed(0) + 'ms';
+                    return (ms / 1000).toFixed(1) + 's';
+                },
+                async fetchModelSchedules() {
+                    try {
+                        const res = await fetch(HOST + '/model/schedule/all');
+                        this.modelSchedules = await res.json();
+                    } catch (e) { console.error('Failed to fetch model schedules', e); }
+                },
+                async showModelDetail(room) {
+                    try {
+                        const res = await fetch(HOST + '/model/schedule?id=' + (room.id || ''));
+                        const data = await res.json();
+                        this.modelDetail = {
+                            name: room.name,
+                            roomId: room.id,
+                            totalRecordings: data.totalRecordings || 0,
+                            lastStartTime: data.lastStartTime || 0,
+                            hourDistribution: data.hourDistribution || [],
+                            topHours: (data.topHours || []).slice(0, 5),
+                            nextPredictedHour: data.nextPredictedHour
+                        };
+                        this.modelDetailDialog = true;
+                    } catch (e) { console.error('Failed to fetch model detail', e); }
                 },
                 async setQuality(quality, roomId) {
                     try {
@@ -1032,6 +1214,9 @@
 
                 // Domain hosts config
                 await this.fetchHostsConfig();
+
+                // Model schedules
+                await this.fetchModelSchedules();
 
                 // Load cache
                 try { this.snapshotcache = JSON.parse(localStorage.getItem("xhrec-thumb")) || {}; }

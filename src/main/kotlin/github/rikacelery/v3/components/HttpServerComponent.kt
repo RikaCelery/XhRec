@@ -6,6 +6,7 @@ import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.ModelSchedule
 import io.ktor.http.*
 import io.ktor.network.tls.certificates.*
 import io.ktor.serialization.kotlinx.json.*
@@ -364,15 +365,37 @@ class HttpServerComponent(
                 get("/config/hosts") {
                     val hosts = requestBus.request<HostsConfigResponse>(GetHostsConfig).hosts
                     val cdnStats = CdnSelector.snapshot()
+                    val now = System.currentTimeMillis()
                     call.respond(buildJsonObject {
                         hosts.toJson().forEach { (k, v) -> put(k, v) }
                         put("cdnStats", buildJsonObject {
                             cdnStats.forEach { (host, stat) ->
                                 put(host, buildJsonObject {
-                                    put("speedBps", stat.speedBps.toLong())
-                                    put("samples", stat.samples)
+                                    put("estimatedDurationMs", if (stat.estimatedDurationMs.isNaN()) -1 else stat.estimatedDurationMs.toLong())
+                                    put("estimateSource", stat.estimateSource)
+                                    put("confidence", stat.confidence)
+                                    put("globalEwma", if (stat.globalEwma.isNaN()) -1 else stat.globalEwma.toLong())
+                                    put("globalSamples", stat.globalSamples)
+                                    put("totalErrors", stat.totalErrors)
+                                    put("totalSuccesses", stat.totalSuccesses)
                                     put("failures", stat.failures)
-                                    put("coolingDown", stat.cooldownUntil > System.currentTimeMillis())
+                                    put("coolingDown", stat.cooldownUntil > now)
+                                    run {
+                                        val ps = CdnSelector.probeSnapshot(host)
+                                        put("probeSamples", JsonPrimitive(ps?.samples ?: 0))
+                                        put("probeFailures", JsonPrimitive(ps?.failures ?: 0))
+                                        put("probeSuccesses", JsonPrimitive(ps?.successes ?: 0))
+                                        put("probeDurationMs", JsonPrimitive(ps?.durationMs?.takeIf { !it.isNaN() }?.toLong() ?: -1))
+                                    }
+                                    put("hourData", buildJsonArray {
+                                        for (h in 0 until 24) {
+                                            add(buildJsonObject {
+                                                put("hour", h)
+                                                put("durationMs", if (stat.hourEwma[h].isNaN()) -1 else stat.hourEwma[h].toLong())
+                                                put("samples", stat.hourSamples[h])
+                                            })
+                                        }
+                                    })
                                 })
                             }
                         })
@@ -430,6 +453,89 @@ class HttpServerComponent(
                         }
                     }
                 }
+                get("/model/schedule") {
+                    val name = call.request.queryParameters["name"] ?: ""
+                    val idParam = call.request.queryParameters["id"] ?: ""
+
+                    // Resolve roomId from name or id
+                    val roomId: Long = when {
+                        idParam.isNotEmpty() -> idParam.toLongOrNull() ?: run {
+                            call.respond(HttpStatusCode.BadRequest, buildJsonObject { put("error", JsonPrimitive("invalid id")) })
+                            return@get
+                        }
+                        name.isNotEmpty() -> {
+                            val rooms = requestBus.request<List<Room>>(GetRooms)
+                            val room = rooms.find { it.name == name }
+                            if (room == null) {
+                                call.respond(HttpStatusCode.NotFound, buildJsonObject { put("error", JsonPrimitive("room not found")) })
+                                return@get
+                            }
+                            room.id
+                        }
+                        else -> {
+                            call.respond(HttpStatusCode.BadRequest, buildJsonObject { put("error", JsonPrimitive("name or id parameter required")) })
+                            return@get
+                        }
+                    }
+
+                    val snapshot = ModelSchedule.snapshot(roomId)
+                    if (snapshot == null) {
+                        call.respond(buildJsonObject {
+                            put("roomId", JsonPrimitive(roomId))
+                            put("totalRecordings", JsonPrimitive(0))
+                            put("message", JsonPrimitive("No data available"))
+                        })
+                        return@get
+                    }
+
+                    call.respond(buildJsonObject {
+                        put("roomId", JsonPrimitive(snapshot.roomId))
+                        put("totalRecordings", JsonPrimitive(snapshot.totalCount))
+                        put("lastStartTime", JsonPrimitive(snapshot.lastStartTime))
+                        put("hourDistribution", buildJsonArray {
+                            snapshot.hourDistribution.forEach { add(JsonPrimitive((it * 100).toInt())) }
+                        })
+                        put("topHours", buildJsonArray {
+                            snapshot.topHours.forEach { (h, p) ->
+                                add(buildJsonObject {
+                                    put("hour", JsonPrimitive(h))
+                                    put("probability", JsonPrimitive((p * 100).toInt()))
+                                })
+                            }
+                        })
+                        snapshot.nextPredictedHour?.let { put("nextPredictedHour", JsonPrimitive(it)) }
+                        put("recentCount", JsonPrimitive(snapshot.recentCount))
+                    })
+                }
+
+                get("/model/schedule/all") {
+                    val rooms = requestBus.request<List<Room>>(GetRooms)
+                    val nameById = rooms.associate { it.id to it.name }
+                    val roomIds = ModelSchedule.getAllRoomIds()
+
+                    call.respond(buildJsonArray {
+                        roomIds.forEach { roomId ->
+                            ModelSchedule.snapshot(roomId)?.let { snapshot ->
+                                add(buildJsonObject {
+                                    put("roomId", JsonPrimitive(snapshot.roomId))
+                                    put("name", JsonPrimitive(nameById[roomId] ?: ""))
+                                    put("totalRecordings", JsonPrimitive(snapshot.totalCount))
+                                    put("topHours", buildJsonArray {
+                                        snapshot.topHours.take(3).forEach { (h, _) -> add(JsonPrimitive(h)) }
+                                    })
+                                    snapshot.nextPredictedHour?.let { put("nextPredictedHour", JsonPrimitive(it)) }
+                                })
+                            }
+                        }
+                    })
+                }
+
+                get("/cdn/clear-cooldown") {
+                    val host = call.request.queryParameters["host"] ?: ""
+                    CdnSelector.clearCooldown(host)
+                    call.respondText("ok")
+                }
+
                 get("/stop-server") {
                     if (stopping.getAndSet(true)) {
                         call.respondText("Already shutting down...", status = HttpStatusCode.NotAcceptable)

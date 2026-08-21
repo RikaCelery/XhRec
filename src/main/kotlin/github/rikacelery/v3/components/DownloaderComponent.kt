@@ -71,6 +71,29 @@ class DownloaderComponent(
         if (!active.active) return
         active.generation = cmd.generation
 
+        // Fire probe round on the first segment of each batch, then throttle by time.
+        val probeBaseUrl = cmd.urls.firstOrNull()?.url ?: ""
+        if (probeBaseUrl.isNotEmpty() && System.currentTimeMillis() - probeLastAt >= probeIntervalMs
+            && probeInFlight.compareAndSet(false, true)) {
+            probeCounter.incrementAndGet()
+            val currentHost = CdnSelector.hostOf(probeBaseUrl)
+            val probeTargets = CdnSelector.hosts.filter { it != currentHost && it.isNotEmpty() }
+            if (probeTargets.isNotEmpty()) {
+                val probeUrl = probeBaseUrl
+                workerScope.launch {
+                    try {
+                        probeHosts(probeTargets, probeUrl)
+                    } finally {
+                        probeInFlight.set(false)
+                        probeLastAt = System.currentTimeMillis()
+                    }
+                }
+            } else {
+                probeInFlight.set(false)
+                probeLastAt = System.currentTimeMillis()
+            }
+        }
+
         for (seg in cmd.urls) {
             val idx = active.idx.incrementAndGet()
             var url = seg.url
@@ -123,6 +146,16 @@ class DownloaderComponent(
     private val raceThresholdMs: Long = 15_000
     private val segmentTimeoutMs: Long = 60_000
 
+    // ── Probe scheduling ──
+    /** Probe interval: fire probes for non-selected hosts this often (ms). */
+    private val probeIntervalMs: Long = 15_000
+    /** Counter of segments since last probe round (per downloader). */
+    private val probeCounter = java.util.concurrent.atomic.AtomicInteger(0)
+    /** Allow one probe round at a time to avoid probe storms. */
+    private val probeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Last time a probe round was fired. */
+    @Volatile private var probeLastAt: Long = 0L
+
     private suspend fun downloadSegment(url: String, idx: Int): DownloadResult {
         val start = System.currentTimeMillis()
         // CDN host selection: rewrite to the fastest measured host (with epsilon exploration)
@@ -138,7 +171,7 @@ class DownloaderComponent(
                 val directResult = withTimeoutOrNull(raceThresholdMs.milliseconds) { directDeferred.await() }
                 if (directResult is DownloadResult.Success) {
                     val dur = System.currentTimeMillis() - start
-                    CdnSelector.record(cdnHost, directResult.data.size.toLong(), dur)
+                    CdnSelector.record(cdnHost, dur)
                     return@withTimeoutOrNull directResult.copy(meta = directResult.meta.copy(fetchDurationMs = dur, proxied = false))
                 }
 
@@ -169,9 +202,9 @@ class DownloaderComponent(
                 if (!proxyDeferred.isCompleted) proxyDeferred.cancel()
 
                 (result as? DownloadResult.Success)?.let {
-                    CdnSelector.record(cdnHost, it.data.size.toLong(), System.currentTimeMillis() - start)
+                    CdnSelector.record(cdnHost, System.currentTimeMillis() - start)
                 }
-                // only connection-level failures implicate the CDN host; HTTP status errors don't
+                // connection-level failures AND slow HTTP errors (404 etc. from timeout) implicate the CDN host
                 if (result is DownloadResult.Failed && result.transportError) CdnSelector.recordFailure(cdnHost)
                 result
             } ?: DownloadResult.Failed(idx, resolvedUrl, "segment timeout after ${segmentTimeoutMs}ms", transportError = true).also {
@@ -210,6 +243,34 @@ class DownloaderComponent(
         } catch (e: Exception) {
             logger.error("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied", e)
             DownloadResult.Failed(idx, url, e.message ?: "download failed", transportError = true)
+        }
+    }
+
+    /**
+     * Probe non-selected CDN hosts with a lightweight HEAD request, recording results
+     * into CdnSelector's independent probe stats. Runs concurrently with main downloads;
+     * probe failures (404/timeout) do NOT cool down the host immediately.
+     */
+    private suspend fun probeHosts(hosts: List<String>, url: String) {
+        for (host in hosts) {
+            try {
+                val rewritten = CdnSelector.rewriteHost(url, host)
+                val probeStart = System.currentTimeMillis()
+                val client = ClientManager.getClient("probe_" + Random.nextInt(32))
+                try {
+                    withTimeoutOrNull(5_000) {
+                        client.head(rewritten)
+                    }
+                    CdnSelector.probe(host, System.currentTimeMillis() - probeStart)
+                } catch (e: ResponseException) {
+                    // 404 etc. during probe: record as probe failure, do NOT cooldown
+                    CdnSelector.probeFailure(host)
+                } catch (e: Exception) {
+                    CdnSelector.probeFailure(host)
+                }
+            } catch (e: Exception) {
+                logger.debug("Probe failed for host={}", host)
+            }
         }
     }
 }
