@@ -12,6 +12,7 @@ import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.PredictionStore
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CompletableDeferred
@@ -160,6 +161,8 @@ fun main(vararg args: String) {
             appScope,
             saveIntervalMs = 60_000
         )
+        // LightGBM-style GBDT: samples + models in working directory (Docker WORKDIR=/config)
+        PredictionEngine.start(appScope, trainIntervalMs = 30 * 60_000L)
 
         val httpServer = HttpServerComponent(
             config.port,
@@ -217,7 +220,8 @@ fun main(vararg args: String) {
             roomComponent.stop()
             authComponent.stop()
             configComponent.stop()
-            predictionStore.stop() // suspend: persist final state before scope is cancelled
+            predictionStore.stop()
+            PredictionEngine.stop() // suspend: persist final state before scope is cancelled
             dataChannel.close()
             appScope.cancel()
             println("XhRec v3 shut down")

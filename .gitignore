@@ -60,3 +60,5 @@ users.txt
 *.log
 .java-version
 xhrec.keystore
+
+*.jsonl

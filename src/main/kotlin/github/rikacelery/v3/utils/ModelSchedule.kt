@@ -1,5 +1,7 @@
 package github.rikacelery.v3.utils
 
+import github.rikacelery.v3.ml.PredictionEngine
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -90,6 +92,7 @@ object ModelSchedule {
             stat.recentIdx++
             stat.recentCount = minOf(stat.recentCount + 1, 100)
         }
+        try { PredictionEngine.onRoomWentLive(roomId, startTime) } catch (_: Exception) { }
     }
 
     /**
@@ -121,6 +124,23 @@ object ModelSchedule {
     }
 
     /**
+     * Raw per-room statistics WITHOUT triggering ML prediction.
+     * Used by PredictionEngine feature extraction to avoid recursion
+     * (snapshot() calls getNextPredictedHour() which consults the ML model).
+     */
+    data class RawStats(
+        val totalCount: Long,
+        val lastStartTime: Long
+    )
+
+    fun rawStats(roomId: Long): RawStats? {
+        val stat = rooms[roomId] ?: return null
+        return synchronized(stat) {
+            RawStats(totalCount = stat.totalCount, lastStartTime = stat.lastStartTime)
+        }
+    }
+
+    /**
      * Get the top N most likely start hours for a room.
      *
      * @param roomId The room's identifier.
@@ -145,6 +165,9 @@ object ModelSchedule {
      * @return Probability of going live within the lookahead window, or null if no data.
      */
     fun predictLiveSoon(roomId: Long, lookaheadHours: Int = 2): Double? {
+        try {
+            PredictionEngine.predictLiveSoonMl(roomId, lookaheadHours)?.let { return it }
+        } catch (_: Exception) { }
         val dist = getDistribution(roomId) ?: return null
         val now = ZonedDateTime.now()
         val currentHour = now.hour
@@ -165,6 +188,9 @@ object ModelSchedule {
      * @return The hour (0-23) with highest probability that hasn't passed today, or null.
      */
     fun getNextPredictedHour(roomId: Long): Int? {
+        try {
+            PredictionEngine.nextPredictedHourMl(roomId)?.let { return it }
+        } catch (_: Exception) { }
         val dist = getDistribution(roomId) ?: return null
         val currentHour = ZonedDateTime.now().hour
 

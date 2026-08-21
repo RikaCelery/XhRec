@@ -1,5 +1,7 @@
 package github.rikacelery.v3.utils
 
+import github.rikacelery.v3.ml.PredictionEngine
+
 import io.ktor.http.Url
 import io.ktor.http.buildUrl
 import io.ktor.http.takeFrom
@@ -223,6 +225,8 @@ object CdnSelector {
             }
             stat.globalSamples++
         }
+        // ML sample (outside lock)
+        try { PredictionEngine.onCdnSuccess(host, durationMs, now) } catch (_: Exception) { }
     }
 
     /**
@@ -243,6 +247,7 @@ object CdnSelector {
                 stat.cooldownUntil = now + backoff
             }
         }
+        try { PredictionEngine.onCdnFailure(host, now) } catch (_: Exception) { }
     }
     /**
      * Record a probe result (independent measurement, not a main download).
@@ -295,7 +300,9 @@ object CdnSelector {
         if (avail.isEmpty()) return hosts.firstOrNull() ?: ""
         if (avail.size == 1) return avail[0]
 
-        val best = bestAvailable(avail, now)
+        // LightGBM-style model first (falls back to EWMA hierarchy when cold).
+        val mlBest = try { PredictionEngine.selectBestCdn(avail, now) } catch (_: Exception) { null }
+        val best = mlBest ?: bestAvailable(avail, now)
         if (best == null) {
             return avail[Random.nextInt(avail.size)]
         }

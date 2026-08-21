@@ -5,6 +5,7 @@ import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.events.*
+import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.ModelSchedule
 import io.ktor.http.*
@@ -19,6 +20,8 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.utils.io.ClosedWriteChannelException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
@@ -527,6 +530,31 @@ class HttpServerComponent(
                                 })
                             }
                         }
+                    })
+                }
+
+                get("/ml/status") {
+                    val s = PredictionEngine.status()
+                    call.respond(buildJsonObject {
+                        put("dataDir", JsonPrimitive(s.dataDir))
+                        put("cdnSamples", JsonPrimitive(s.cdnSamples))
+                        put("scheduleSamples", JsonPrimitive(s.scheduleSamples))
+                        put("cdnModelReady", JsonPrimitive(s.cdnModelReady))
+                        put("scheduleModelReady", JsonPrimitive(s.scheduleModelReady))
+                        put("cdnTrees", JsonPrimitive(s.cdnTrees))
+                        put("scheduleTrees", JsonPrimitive(s.scheduleTrees))
+                    })
+                }
+
+                get("/ml/train") {
+                    withContext(Dispatchers.IO) { PredictionEngine.trainAll() }
+                    val s = PredictionEngine.status()
+                    call.respond(buildJsonObject {
+                        put("ok", JsonPrimitive(true))
+                        put("cdnModelReady", JsonPrimitive(s.cdnModelReady))
+                        put("scheduleModelReady", JsonPrimitive(s.scheduleModelReady))
+                        put("cdnSamples", JsonPrimitive(s.cdnSamples))
+                        put("scheduleSamples", JsonPrimitive(s.scheduleSamples))
                     })
                 }
 
