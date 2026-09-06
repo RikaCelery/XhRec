@@ -14,8 +14,10 @@ import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.m3u8.ParsedPlaylist
 import github.rikacelery.v3.utils.ClientManager
 import github.rikacelery.v3.utils.withRetry
+import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.security.SecureRandom
@@ -44,7 +46,7 @@ data class RoomSession(
 
 enum class RecordingEvent {
     StartRecording, StopRecording,
-    PlaylistFetched, PlaylistFetchFailed,
+    PlaylistFetched, PlaylistFetchFailed, PlaylistUnusable,
     PlaylistRetryExhausted,
     SegmentDownloaded, CutPointDone, LimitReached, InitChanged,
 }
@@ -207,6 +209,13 @@ class SessionEntry(
             }
         } catch (e: TimeoutCancellationException) {
             SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = "timeout"))
+        } catch (e: ClientRequestException) {
+            if (e.response.status == HttpStatusCode.NotFound || e.response.status == HttpStatusCode.Forbidden) {
+                // playlist is no longer usable: end the session, the scheduler will reconfigure
+                SessionSignal(roomId, RecordingEvent.PlaylistUnusable, RecordingDriveData(failReason = e.response.status.toString()))
+            } else {
+                SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = e.message))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -281,6 +290,9 @@ private fun buildSessionFsm(ctx: SessionEntry) =
             }
             on(RecordingEvent.InitChanged) to RecordingState.Closing action {
                 cutFile(EndReason.NewInit)
+            }
+            on(RecordingEvent.PlaylistUnusable) to RecordingState.Closing action {
+                cutFile(EndReason.StreamEnd)
             }
             on(RecordingEvent.PlaylistRetryExhausted) to RecordingState.Closing action {
                 cutFile(EndReason.StreamEnd)

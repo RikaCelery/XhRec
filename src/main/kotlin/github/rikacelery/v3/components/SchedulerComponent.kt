@@ -33,6 +33,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
@@ -198,6 +199,9 @@ class SchedulerEntry(
             val keyName = matchPkey(master)
             val variant = selectVariant(master, targetQuality)
             val url = resolveVariantUrl(variant, keyName, token)
+            if (!playlistUsable(url)) {
+                return SchedulerSignal(roomId, SchedulerEvent.PreconfigFailed, SchedulerDriveData(failReason = "playlist unusable"))
+            }
             SchedulerSignal(
                 roomId, SchedulerEvent.PreconfigDone,
                 SchedulerDriveData(playlistUrl = url, quality = variant.name, token = token, pkey = keyName)
@@ -375,6 +379,21 @@ class SchedulerEntry(
             token?.takeIf { it.isNotEmpty() }?.let { parameters["aclAuth"] = it }
         }.toString()
         return CdnSelector.resolve(url)
+    }
+
+    /** Verify the resolved variant playlist is actually fetchable before handing it to the Session. */
+    private suspend fun playlistUsable(url: String): Boolean {
+        return try {
+            withTimeout(5.seconds) {
+                val client = ClientManager.getProxiedClient("preconfig_$roomId")
+                val response = withRetry(2) { client.get(url) }
+                response.status.value in 200..299
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
     }
 }
 
