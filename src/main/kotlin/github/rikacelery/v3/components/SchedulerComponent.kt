@@ -484,6 +484,10 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 }
             }
             on(SchedulerEvent.SessionExit) to KEEP action { d ->
+                if (component.gracefulStop) {
+                    self(SchedulerEvent.BackToArmed)
+                    return@action
+                }
                 lastIndex = d?.lastIndex
                 val reason = d?.exitReason ?: EndReason.UserStop
                 when (reason) {
@@ -509,6 +513,10 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
 
         state(SchedulerState.Stopping) {
             on(SchedulerEvent.SessionExit) to KEEP action { d ->
+                if (component.gracefulStop) {
+                    self(SchedulerEvent.BackToArmed)
+                    return@action
+                }
                 lastIndex = d?.lastIndex
                 val reason = d?.exitReason ?: EndReason.UserStop
                 when (reason) {
@@ -556,7 +564,7 @@ class SchedulerComponent(
 ) : Actor<SchedulerMsg>("SchedulerComponent", eventBus, parentScope) {
 
     private val entries = ConcurrentHashMap<Long, SchedulerEntry>()
-    private var gracefulStop = false
+    internal var gracefulStop = false
 
     override suspend fun onStart(scope: CoroutineScope) {
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
@@ -566,6 +574,7 @@ class SchedulerComponent(
         subscribe<CommandEnvelope>(CommandEnvelope::class)
         subscribe<WriterFatal>(WriterFatal::class)
         subscribe<AuthExpired>(AuthExpired::class)
+        subscribe<StopEvent>(StopEvent::class)
     }
 
     override suspend fun wrapEvent(event: Any): SchedulerMsg? = when (event) {
@@ -576,6 +585,7 @@ class SchedulerComponent(
         is CommandEnvelope -> SchedulerHandleCommand(event)
         is WriterFatal -> SchedulerBus(event)
         is AuthExpired -> SchedulerBus(event)
+        is StopEvent -> SchedulerBus(event)
         else -> null
     }
 
@@ -598,6 +608,17 @@ class SchedulerComponent(
                 entries.remove(event.roomId)?.scope?.cancel()
             }
             is AuthExpired -> logger.warn("Auth expired user {}", event.userId)
+            is StopEvent -> {
+                if (gracefulStop) return
+                gracefulStop = true
+                logger.info("Stop event received: scheduler will not start new recordings")
+                entries.values.forEach { e ->
+                    when (e.fsm.currentState) {
+                        SchedulerState.Armed, SchedulerState.Preconfiguring -> e.scope.cancel()
+                        else -> {}   // Recording/Stopping sessions stop themselves
+                    }
+                }
+            }
         }
     }
 

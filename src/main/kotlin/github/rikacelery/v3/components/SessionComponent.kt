@@ -291,6 +291,7 @@ private fun buildSessionFsm(ctx: SessionEntry) =
             on(RecordingEvent.CutPointDone) to RecordingState.Idle action { d ->
                 launch {
                     component.publish(SessionExit(roomId, lastSegmentId, d?.stopReason ?: EndReason.UserStop))
+                    component.publish(RecordingStopped(roomId))
                 }
             }
             on(RecordingEvent.StartRecording) to KEEP
@@ -324,12 +325,14 @@ class SessionComponent(
         subscribe(SegmentDownloaded::class)
         subscribe(CutPointDone::class)
         subscribe(CommandEnvelope::class)
+        subscribe(StopEvent::class)
     }
 
     override suspend fun wrapEvent(event: Any): SessionMsg? = when (event) {
         is SegmentDownloaded -> SessionBus(event)
         is CutPointDone -> SessionBus(event)
         is CommandEnvelope -> SessionHandleCommand(event)
+        is StopEvent -> SessionBus(event)
         else -> null
     }
 
@@ -408,6 +411,15 @@ class SessionComponent(
                     RecordingEvent.CutPointDone,
                     RecordingDriveData(segGeneration = event.generation, stopReason = event.reason)
                 )?.let { logger.error("Session FSM drive failed", it) }
+            }
+            is StopEvent -> {
+                logger.info("Stop event received: stopping all active sessions")
+                entries.values.forEach { e ->
+                    if (e.fsm.currentState == RecordingState.Recording) {
+                        e.fsm.driveCatch(RecordingEvent.StopRecording, RecordingDriveData(stopReason = EndReason.UserStop))
+                            ?.let { logger.error("Session FSM drive failed", it) }
+                    }
+                }
             }
         }
     }

@@ -129,6 +129,10 @@ object WsDisconnected {
 object WsReconnected {
     override fun toString() = "WsReconnected"
 }
+/** Published when a graceful shutdown is requested; every component starts its stop flow */
+object StopEvent {
+    override fun toString() = "StopEvent"
+}
 /** Published when the WS reports a broadcast-settings / stream change — a hint to re-check quality */
 data class QualityChangeHint(val roomId: Long) {
     override fun toString() = "QualityChangeHint(roomId=$roomId)"
