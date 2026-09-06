@@ -7,8 +7,8 @@ import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.StreamStart
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.fsm.KEEP
+import github.rikacelery.v3.fsm.LoopTimer
 import github.rikacelery.v3.fsm.StateMachine
-import github.rikacelery.v3.fsm.Timer
 import github.rikacelery.v3.fsm.buildFsm
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.m3u8.ParsedPlaylist
@@ -44,7 +44,7 @@ data class RoomSession(
 
 enum class RecordingEvent {
     StartRecording, StopRecording,
-    FetchPlaylist, PlaylistFetched, PlaylistFetchFailed, PlaylistFetchTimeout,
+    PlaylistFetched, PlaylistFetchFailed,
     PlaylistRetryExhausted,
     SegmentDownloaded, CutPointDone, LimitReached, InitChanged,
 }
@@ -76,7 +76,7 @@ data class StartRecording(
 
 data class StopRecording(val roomId: Long, val reason: EndReason) : SessionMsg
 
-/** Timer async-result envelope fed back into the mailbox */
+/** Async-result envelope fed back into the mailbox */
 data class SessionSignal(val roomId: Long, val event: RecordingEvent, val data: RecordingDriveData?) : SessionMsg
 
 /** Wrapper for bus events */
@@ -126,13 +126,11 @@ class SessionEntry(
     var retryCount: Int = 0
     val circleCache = CircleCache(100)
 
-    // —— scope / timer ——
+    // —— scope / loop timer ——
     val scope = CoroutineScope(
         component.ioScope.coroutineContext + SupervisorJob(component.ioScope.coroutineContext[Job])
     )
-    val playlistTicker = Timer<Unit>(scope)
-    val playlistFetcher = Timer<Unit>(scope)
-    val playlistWatchdog = Timer<Unit>(scope)
+    val playlistLoop = LoopTimer<Unit>(scope)
 
     // —— fsm ——
     val fsm: StateMachine<RecordingState, RecordingEvent, RecordingDriveData, SessionEntry> =
@@ -151,9 +149,7 @@ class SessionEntry(
     }
 
     internal fun cutFile(reason: EndReason) {
-        playlistTicker.cancel()
-        playlistFetcher.cancel()
-        playlistWatchdog.cancel()
+        playlistLoop.cancel()
         launch {
             component.downloader.tell(
                 DoCutPoint(CutPoint(roomId, segmentIndex - 1, roomName, Instant.now(), reason, quality, generation))
@@ -197,13 +193,20 @@ class SessionEntry(
 
     internal suspend fun fetchPlaylistSignal(): SessionMsg {
         return try {
-            val client = ClientManager.getProxiedClient("m3u8_$roomId")
-            val response = withRetry(3) { client.get(playlistUrl) }
-            val text = response.bodyAsText()
-            val key = (component.requestBus.request<ConfigResponse>(GetDecryptKey(pkey)).value as? String)
-                ?: return SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = "no decrypt key"))
-            val parsed = component.m3u8Parser.parse(text, key)
-            SessionSignal(roomId, RecordingEvent.PlaylistFetched, RecordingDriveData(playlist = parsed))
+            withTimeout(10.seconds) {
+                val client = ClientManager.getProxiedClient("m3u8_$roomId")
+                val response = withRetry(3) { client.get(playlistUrl) }
+                val text = response.bodyAsText()
+                val key = (component.requestBus.request<ConfigResponse>(GetDecryptKey(pkey)).value as? String)
+                    ?: return@withTimeout SessionSignal(
+                        roomId, RecordingEvent.PlaylistFetchFailed,
+                        RecordingDriveData(failReason = "no decrypt key")
+                    )
+                val parsed = component.m3u8Parser.parse(text, key)
+                SessionSignal(roomId, RecordingEvent.PlaylistFetched, RecordingDriveData(playlist = parsed))
+            }
+        } catch (e: TimeoutCancellationException) {
+            SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = "timeout"))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -229,7 +232,7 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 retryCount = 0
                 circleCache.clear()   // a new file must re-download the init; media segments are skipped via the lastSegmentId threshold
                 launch { component.dataChannel.send(StreamStart(roomId, roomName, startTime, quality)) }
-                playlistTicker.start(Duration.ZERO) { component.tell(SessionSignal(roomId, RecordingEvent.FetchPlaylist, null)) }
+                playlistLoop.start(3.seconds) { component.tell(fetchPlaylistSignal()) }
             }
             on(RecordingEvent.StopRecording) to KEEP
             on(RecordingEvent.SegmentDownloaded) to KEEP
@@ -237,15 +240,8 @@ private fun buildSessionFsm(ctx: SessionEntry) =
         }
 
         state(RecordingState.Recording) {
-            on(RecordingEvent.FetchPlaylist) to KEEP action {
-                playlistTicker.start(3.seconds) { component.tell(SessionSignal(roomId, RecordingEvent.FetchPlaylist, null)) }
-                if (playlistFetcher.isRunning) return@action
-                playlistWatchdog.start(10.seconds) { component.tell(SessionSignal(roomId, RecordingEvent.PlaylistFetchTimeout, null)) }
-                playlistFetcher.start(Duration.ZERO) { component.tell(fetchPlaylistSignal()) }
-            }
             on(RecordingEvent.PlaylistFetched) to KEEP action { d ->
                 retryCount = 0
-                playlistWatchdog.cancel()
                 val parsed = d?.playlist ?: return@action
                 val initUrl = parsed.initUrl
                 if (lastInitUrl != null && initUrl != null && lastInitUrl != initUrl) {
@@ -268,19 +264,12 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 }
             }
             on(RecordingEvent.PlaylistFetchFailed) to KEEP action { d ->
-                playlistWatchdog.cancel()
                 if (++retryCount >= MAX_PLAYLIST_RETRY) {
                     launch {
                         component.tell(
                             SessionSignal(roomId, RecordingEvent.PlaylistRetryExhausted, RecordingDriveData(failReason = d?.failReason))
                         )
                     }
-                }
-            }
-            on(RecordingEvent.PlaylistFetchTimeout) to KEEP action {
-                playlistFetcher.cancel()
-                if (++retryCount >= MAX_PLAYLIST_RETRY) {
-                    launch { component.tell(SessionSignal(roomId, RecordingEvent.PlaylistRetryExhausted, null)) }
                 }
             }
             on(RecordingEvent.SegmentDownloaded) to KEEP action { d -> onSegment(d) }
