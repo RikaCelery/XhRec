@@ -62,3 +62,6 @@ users.txt
 xhrec.keystore
 
 *.jsonl
+
+/tmp/
+/doc/

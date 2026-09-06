@@ -14,13 +14,13 @@ class ScheduleApiVerifyTest {
         val zone = ZoneId.systemDefault()
         val now = ZonedDateTime.of(2024, 1, 15, 10, 30, 0, 0, zone).toInstant().toEpochMilli()
         ModelSchedule.reset()
-        // 记录数据产生分布
+        // Record a distribution of observations
         repeat(3) { ModelSchedule.record(55L, now) }
         val later = ZonedDateTime.of(2024, 1, 15, 14, 0, 0, 0, zone).toInstant().toEpochMilli()
         ModelSchedule.record(55L, later)
 
         val snapshot = ModelSchedule.snapshot(55L)!!
-        // 复刻 /model/schedule 的 buildJsonObject 序列化
+        // Replicate the /model/schedule buildJsonObject serialization
         val json = buildJsonObject {
             put("roomId", JsonPrimitive(snapshot.roomId))
             put("totalRecordings", JsonPrimitive(snapshot.totalCount))

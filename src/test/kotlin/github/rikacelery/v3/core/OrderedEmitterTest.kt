@@ -61,18 +61,18 @@ class OrderedEmitterTest {
     }
 
     @Test
-    fun `CutPoint triggers StreamEnd and StreamStart`() = runTest(UnconfinedTestDispatcher()) {
+    fun `CutPoint emits only StreamEnd`() = runTest(UnconfinedTestDispatcher()) {
         val emitted = mutableListOf<DataChannelMsg>()
         val emitter = OrderedEmitter(42) { emitted.add(it) }
 
         emitter.complete(0, success(42, 0))
         emitter.complete(1, cutPoint(42, EndReason.NewInit))
 
-        assertEquals(3, emitted.size)
+        assertEquals(2, emitted.size)
         assertEquals(0, (emitted[0] as StreamData).segmentIndex)
         assertTrue(emitted[1] is StreamEnd)
         assertEquals(EndReason.NewInit, (emitted[1] as StreamEnd).reason)
-        assertTrue(emitted[2] is StreamStart)
+        // New architecture: the next StartRecording's StreamStart opens the new file; CutPoint no longer auto-opens one
     }
 
     @Test

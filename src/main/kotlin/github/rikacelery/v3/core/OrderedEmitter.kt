@@ -48,10 +48,9 @@ class OrderedEmitter(
             }
 
             is DownloadResult.CutPoint -> {
+                // New architecture: CutPoint only closes the old file; the next StartRecording's StreamStart opens the new one
                 val cut = result.cut
                 output(StreamEnd(roomId, cut.reason))
-                if (cut.reason != EndReason.UserStop)
-                    output(StreamStart(roomId, cut.roomName, cut.startTime, cut.quality))
             }
         }
     }

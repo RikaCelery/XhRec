@@ -35,6 +35,14 @@ data class RecordingStarted(val roomId: Long, val quality: String = "") {
 data class RecordingStopped(val roomId: Long) {
     override fun toString() = "RecordingStopped(roomId=$roomId)"
 }
+/** Session exit report: lastIndex is the highest written HLS segment id; the Scheduler derives the resume point from it */
+data class SessionExit(val roomId: Long, val lastIndex: Long?, val reason: EndReason) {
+    override fun toString() = "SessionExit(roomId=$roomId, lastIndex=$lastIndex, reason=$reason)"
+}
+/** Downloader cut-point confirmation: the StreamEnd has entered the DataChannel FIFO */
+data class CutPointDone(val roomId: Long, val generation: Long, val reason: EndReason) {
+    override fun toString() = "CutPointDone(roomId=$roomId, gen=$generation, reason=$reason)"
+}
 data class FileReady(val roomId: Long, val file: File, val reason: EndReason, val roomName: String, val startTime: Long, val endTime: Long, val durationMs: Long, val quality: String) {
     override fun toString() = "FileReady(roomId=$roomId, file=${file.name}, reason=$reason, duration=${durationMs}ms)"
 }
@@ -62,7 +70,7 @@ data class SegmentDownloaded(
     val durationMs: Long,
     val proxied: Boolean,
     val bytes: Int,
-    val generation: Int
+    val generation: Long
 ) {
     override fun toString() = "SegmentDownloaded(roomId=$roomId, idx=$idx, bytes=$bytes, duration=${durationMs}ms, gen=$generation)"
 }
@@ -138,7 +146,7 @@ data class RoomSizeLimitChanged(val roomId: Long, val limitBytes: Long) {
 
 // ── Misc ──
 
-enum class EndReason { SizeLimit, TimeLimit, StreamEnd, UserStop, NewInit }
+enum class EndReason { SizeLimit, TimeLimit, StreamEnd, UserStop, NewInit, StatusChanged }
 
 interface Request
 interface Response
