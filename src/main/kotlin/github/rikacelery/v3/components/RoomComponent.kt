@@ -59,6 +59,7 @@ class RoomComponent(
         subscribe<PersistConfig>(PersistConfig::class)
         subscribe<WsDisconnected>(WsDisconnected::class)
         subscribe<WsReconnected>(WsReconnected::class)
+        subscribe<StopEvent>(StopEvent::class)
         scope.launch {
             tell(RefreshRooms)
             while (isActive && !stopRefresh) {
@@ -73,6 +74,7 @@ class RoomComponent(
         is PersistConfig -> OnRoomEvent(event)
         is WsDisconnected -> OnRoomEvent(event)
         is WsReconnected -> OnRoomEvent(event)
+        is StopEvent -> OnRoomEvent(event)
         else -> null
     }
 
@@ -102,6 +104,11 @@ class RoomComponent(
                         delay(refreshDebounceMs)
                         tell(RefreshRooms)
                     }
+                }
+
+                is StopEvent -> {
+                    logger.info("Stop event received: room refresh stopped")
+                    stopRefresh = true
                 }
 
                 else -> {}

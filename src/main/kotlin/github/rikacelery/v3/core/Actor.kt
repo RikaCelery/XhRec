@@ -14,9 +14,14 @@ abstract class Actor<T : Any>(
 ) {
     private val mailbox = Channel<T>(capacity = mailboxCapacity)
     protected val logger = LoggerFactory.getLogger(name)
-    protected val scope =
+    internal val scope =
         parentScope + SupervisorJob() + CoroutineName(name) + CoroutineExceptionHandler { context, throwable ->
             logger.error("Unhandled exception {}",context[CoroutineName.Key], throwable)
+        }
+    /** Component-level async scope: FSM entries derive their Timer / launch helpers from here */
+    internal val ioScope =
+        parentScope + SupervisorJob() + CoroutineName("$name-io") + CoroutineExceptionHandler { context, throwable ->
+            logger.error("Unhandled io exception in {}", context[CoroutineName.Key], throwable)
         }
 
     private var started = false

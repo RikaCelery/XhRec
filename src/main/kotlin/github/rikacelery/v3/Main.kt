@@ -11,17 +11,11 @@ import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
-import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.ml.PredictionEngine
+import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.PredictionStore
 import github.rikacelery.v3.utils.SensitiveStringRegistry
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -117,8 +111,8 @@ fun main(vararg args: String) {
         dataChannel.installHook(mseStore)
         eventBus.installHook(object : EventHook {
             override suspend fun intercept(event: Any): Any {
-                if (mainLogger.isTraceEnabled){
-                    mainLogger.trace("[BUS] {}",event)
+                if (mainLogger.isTraceEnabled) {
+                    mainLogger.trace("[BUS] {}", event)
                 }
                 return event
             }
@@ -148,12 +142,17 @@ fun main(vararg args: String) {
             downloaderComponent,
             M3u8Parser,
             requestBus,
+            eventBus,
+            appScope
+        )
+        val schedulerComponent = SchedulerComponent(
+            requestBus,
+            sessionComponent,
             ApiClient,
             config.streamAuthKey,
             eventBus,
             appScope
         )
-        val schedulerComponent = SchedulerComponent(requestBus, sessionComponent, eventBus, appScope, config.streamAuthKey)
 
         // Prediction persistence (loads on init, auto-saves periodically, saves on stop)
         val predictionStore = PredictionStore(

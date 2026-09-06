@@ -11,17 +11,17 @@ class ExportVerifyTest {
         val zone = ZoneId.systemDefault()
         val now = ZonedDateTime.of(2024, 1, 15, 10, 30, 0, 0, zone).toInstant().toEpochMilli()
         CdnSelector.reset()
-        // 记录数据（包含大量槽位，触发EWMA数组序列化）
+        // Record data (many slots, triggers EWMA array serialization)
         repeat(5) {
             CdnSelector.record("cdn-a.com", 200, now = now)
             CdnSelector.record("cdn-b.com", 500, now = now)
         }
         CdnSelector.recordFailure("cdn-a.com", now)
-        // 导出不应抛出异常
+        // Export must not throw
         val json = CdnSelector.exportState()
         assertTrue(json.isNotEmpty())
         assertTrue(json.contains("slotEwma"))
-        assertTrue(json.contains("-1.0"), "NaN应该导出为-1.0哨兵")
+        assertTrue(json.contains("-1.0"), "NaN should be exported as the -1.0 sentinel")
         println("EXPORT_OK, json length: " + json.length)
     }
 

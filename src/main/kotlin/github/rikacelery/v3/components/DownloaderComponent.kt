@@ -35,7 +35,7 @@ data class ActiveDownload(
     val semaphore: Semaphore,
     val runningJobs: MutableSet<Job> = ConcurrentHashMap.newKeySet(),
     var idx: AtomicInteger = AtomicInteger(-1),
-    @Volatile var generation: Int = 0,
+    @Volatile var generation: Long = 0L,
     @Volatile var active: Boolean = true
 )
 
@@ -70,6 +70,7 @@ class DownloaderComponent(
         }
         if (!active.active) return
         active.generation = cmd.generation
+        val gen = cmd.generation   // capture the batch generation so workers never read a newer one at completion
 
         // Fire probe round on the first segment of each batch, then throttle by time.
         val probeBaseUrl = cmd.urls.firstOrNull()?.url ?: ""
@@ -110,7 +111,7 @@ class DownloaderComponent(
                         when (result) {
                             is DownloadResult.Success -> {
                                 eventBus.publish(SegmentDownloaded(cmd.roomId, idx, seg.url,
-                                    result.meta.fetchDurationMs, result.meta.proxied, result.data.size, active.generation))
+                                    result.meta.fetchDurationMs, result.meta.proxied, result.data.size, gen))
                             }
                             is DownloadResult.Failed -> {
                                 eventBus.publish(DownloadError(cmd.roomId, idx, seg.url, result.reason))
@@ -140,7 +141,9 @@ class DownloaderComponent(
         val active = rooms[cut.roomId] ?: return
         val idx = active.idx.incrementAndGet().toLong()
         logger.info("CutPoint roomId={}, index={}, reason={}", cut.roomId, cut.index, cut.reason)
-        active.emitter.complete(idx,  DownloadResult.CutPoint(cut))
+        // once complete returns, StreamEnd is in the DataChannel FIFO; Session restart is safe only after that
+        active.emitter.complete(idx, DownloadResult.CutPoint(cut))
+        eventBus.publish(CutPointDone(cut.roomId, cut.generation, cut.reason))
     }
 
     private val raceThresholdMs: Long = 15_000

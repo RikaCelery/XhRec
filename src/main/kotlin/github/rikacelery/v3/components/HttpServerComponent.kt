@@ -157,8 +157,8 @@ class HttpServerComponent(
                     call.respondTextWriter {
                         write("Stopping server...\n"); flush()
 
-                        requestBus.request<OkResponse>(ShutdownCmd)
-                        write("Canceled scheduler.\n"); flush()
+                        eventBus.publish(StopEvent)
+                        write("Stop event published.\n"); flush()
 
                         val sessions = requestBus.request<List<RoomSession>>(GetSessions)
                             .filter { it.state == SessionState.Recording || it.state == SessionState.Fetching }
@@ -166,10 +166,24 @@ class HttpServerComponent(
                         if (sessions.isNotEmpty()) {
                             for (s in sessions) {
                                 write("Waiting ${s.roomName}.\n"); flush()
-                                requestBus.request<OkResponse>(DeactivateCmd(s.roomId))
                             }
                             waitSessionsDone(sessions, "Exited", 120_000L) { write(it); flush() }
                         }
+
+                        // let the final FileReady reach the post-processor, then wait for its queue to drain
+                        delay(0.5.seconds)
+                        try {
+                            withTimeout(3.minutes.inWholeMilliseconds.milliseconds) {
+                                while (postProcessorComponent.jobs.any { !it.value.isCompleted }) {
+                                    delay(0.5.seconds)
+                                }
+                            }
+                            write("Post-processing drained.\n"); flush()
+                        } catch (e: TimeoutCancellationException) {
+                            logger.error("Timeout waiting for post-processing")
+                            write("Timeout waiting for post-processing.\n"); flush()
+                        }
+
                         write("OK\n"); flush()
                     }
                     engine.stop(1000, 5000)
@@ -573,8 +587,8 @@ class HttpServerComponent(
                     call.respondTextWriter {
                         write("Stopping server...\n"); flush()
 
-                        requestBus.request<OkResponse>(ShutdownCmd)
-                        write("Canceled scheduler.\n"); flush()
+                        eventBus.publish(StopEvent)
+                        write("Stop event published.\n"); flush()
 
                         val sessions = requestBus.request<List<RoomSession>>(GetSessions)
                             .filter { it.state == SessionState.Recording || it.state == SessionState.Fetching }
