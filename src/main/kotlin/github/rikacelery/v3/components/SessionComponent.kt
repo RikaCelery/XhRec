@@ -352,7 +352,7 @@ class SessionComponent(
                     quality = e.quality,
                     state = when (e.fsm.currentState) {
                         RecordingState.Recording -> SessionState.Recording
-                        RecordingState.Closing -> SessionState.Closing
+                        RecordingState.Closing -> SessionState.Recording   // still active until CutPointDone
                         else -> SessionState.Idle
                     },
                     startTime = e.startTime
