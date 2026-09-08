@@ -211,7 +211,7 @@ class SessionEntry(
             SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = "timeout"))
         } catch (e: ClientRequestException) {
             if (e.response.status == HttpStatusCode.NotFound || e.response.status == HttpStatusCode.Forbidden) {
-                // playlist is no longer usable: end the session, the scheduler will reconfigure
+                refreshRoomStatus()
                 SessionSignal(roomId, RecordingEvent.PlaylistUnusable, RecordingDriveData(failReason = e.response.status.toString()))
             } else {
                 SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = e.message))
@@ -220,6 +220,16 @@ class SessionEntry(
             throw e
         } catch (e: Exception) {
             SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = e.message))
+        }
+    }
+
+    private suspend fun refreshRoomStatus() {
+        try {
+            component.requestBus.request<OkResponse>(RefreshRoomCmd(roomId))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            sessionLogger.warn("Playlist unavailable and room status refresh failed roomId={}: {}", roomId, e.message)
         }
     }
 }
