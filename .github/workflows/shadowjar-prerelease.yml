@@ -2,76 +2,51 @@ name: Build and Publish ShadowJar Pre-release
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# Keep an active release update intact; newer pushes replace only the pending run.
+concurrency:
+  group: dev-build-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Test and package
+        uses: ./.github/actions/gradle-build
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release script
+        uses: actions/checkout@v7
         with:
-          java-version: '17'
-          distribution: 'zulu'
-          cache: 'gradle'
+          persist-credentials: false
 
-      - name: chmod
-        run: chmod +x gradlew
-
-      - name: Validate Gradle wrapper
-        uses: gradle/gradle-build-action@v2
+      - name: Download tested artifacts
+        uses: actions/download-artifact@v8
         with:
-          arguments: help --no-daemon
+          name: xhrec-build
+          path: build/ci-artifacts
 
-      - name: Build with Gradle
-        uses: gradle/gradle-build-action@v2
-        with:
-          arguments: shadowJar --no-daemon
-
-      - name: Pack browser extension
-        run: tar -cvf extension.tar extension
-
-      - name: Delete existing Pre-release
+      - name: Update dev-build release
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          gh release delete dev-build --cleanup-tag --yes || true
-
-      - name: Update dev-build tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # remove old tag
-          git tag -d dev-build || true
-          git push origin :refs/tags/dev-build || true
-          # pointer tag to new commit
-          git tag dev-build
-          git push origin dev-build
-
-      - name: Get current time
-        run: echo "CURRENT_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
-
-      - name: Create Pre-release and Upload Asset
-        uses: softprops/action-gh-release@v2
-        if: success()
-        with:
-          tag_name: dev-build
-          target_commitish: ${{ github.sha }}
-          name: CI builds
-          draft: false
-          prerelease: true
-          files: |
-            build/libs/*-all.jar
-            extension.tar
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/publish-dev-build.sh

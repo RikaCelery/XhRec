@@ -1,0 +1,57 @@
+name: Test and package XhRec
+description: Shared Java setup, Gradle validation, tests, and release artifacts.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v6
+      with:
+        java-version: '17'
+        distribution: zulu
+
+    - name: Set up Gradle and validate wrapper
+      uses: gradle/actions/setup-gradle@v6
+      with:
+        cache-provider: basic
+        cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+    - name: Test and build ShadowJar
+      shell: bash
+      run: ./gradlew check shadowJar --no-daemon --build-cache --stacktrace
+
+    - name: Upload test reports
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: test-reports
+        path: |
+          build/reports/tests/
+          build/test-results/
+        if-no-files-found: ignore
+        retention-days: 7
+        overwrite: true
+
+    - name: Package release assets
+      shell: bash
+      run: |
+        jars=(build/libs/*-all.jar)
+        if [[ ${#jars[@]} -ne 1 || ! -f "${jars[0]}" ]]; then
+          echo "Expected exactly one ShadowJar in build/libs" >&2
+          exit 1
+        fi
+        mkdir -p build/ci-artifacts
+        cp "${jars[0]}" build/ci-artifacts/XhRec-all.jar
+        tar -cf build/ci-artifacts/extension.tar extension
+        cd build/ci-artifacts
+        sha256sum XhRec-all.jar extension.tar > SHA256SUMS
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: xhrec-build
+        path: build/ci-artifacts/
+        if-no-files-found: error
+        retention-days: 7
+        compression-level: 0
+        overwrite: true
