@@ -90,7 +90,12 @@ object ClientManager {
         }
         install(WebSockets)
         install(HttpRequestRetry) {
-            retryOnException(maxRetries = 3, retryOnTimeout = true)
+            // Retry transport failures (incl. timeouts) in-place, but NOT HTTP status errors:
+            // a 404/4xx must surface immediately (expired assignments are permanent and
+            // the segment-level retry loop switches host instead of burning time here).
+            retryOnExceptionIf(maxRetries = 3) { _, cause ->
+                cause !is ResponseException
+            }
             constantDelay(300)
         }
         install(DefaultRequest.Plugin) {

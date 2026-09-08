@@ -40,6 +40,8 @@ class CdnSelectorPredictionTest {
         CdnSelector.reset()
         CdnSelector.updateHosts(listOf("cdn-a.com", "cdn-b.com", "cdn-c.com"))
         CdnSelector.exploreProbability = 0.0 // Disable exploration for deterministic tests
+        CdnSelector.spreadTolerance = 0.0 // Disable load-balancing spread for deterministic tests
+        CdnSelector.spreadAbsMs = 0.0
     }
 
     // -- Test 1: Basic prediction accuracy --

@@ -16,6 +16,8 @@ class CdnProbeAndCooldownTest {
         CdnSelector.reset()
         CdnSelector.updateHosts(listOf("cdn-a.com", "cdn-b.com"))
         CdnSelector.exploreProbability = 0.0
+        CdnSelector.spreadTolerance = 0.0 // Disable load-balancing spread for deterministic tests
+        CdnSelector.spreadAbsMs = 0.0
     }
 
     @Test

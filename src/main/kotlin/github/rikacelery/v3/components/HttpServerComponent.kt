@@ -30,7 +30,6 @@ import java.security.KeyStore
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 class HttpServerComponent(
@@ -586,14 +585,22 @@ class HttpServerComponent(
                             waitSessionsDone(sessions, "Cancelled", 120_000L) { write(it); flush() }
                         }
                         delay(2.seconds)
-                        val processors = postProcessorComponent.jobs.filter { !it.value.isCompleted }
-                        for (s in processors) {
-                            write("Waiting ${s.key}.\n"); flush()
-                            waitProcessorDone(
-                                processors,
-                                "Processed",
-                                3.minutes.inWholeMilliseconds
-                            ) { write(it); flush() }
+                        // 动态排空后处理队列: 关停期间新落盘的文件(FileReady)也会被纳入
+                        // 等待 —— 若只等一次快照, 快照外的任务会在 stop() 时被取消,
+                        // 留下半成品文件。
+                        // 后处理任务不设超时，必须等待结束后才能继续关停。
+                        val seen = mutableSetOf<String>()
+                        while (true) {
+                            val running = postProcessorComponent.jobs.filter { !it.value.isCompleted }
+                            if (running.isEmpty()) break
+                            running.keys.filter { seen.add(it) }
+                                .forEach { write("Waiting ${it}.\n"); flush() }
+                            var remain = running.size
+                            for ((key, job) in running) {
+                                job.join()
+                                remain--
+                                write("Processed $key. remain: $remain\n"); flush()
+                            }
                         }
 
                         write("OK\n"); flush()
@@ -607,34 +614,7 @@ class HttpServerComponent(
         return engine
     }
 
-    suspend fun waitProcessorDone(
-        sessions: Map<String, Job>, verb: String, timeoutMs: Long,
-        onProgress: suspend (String) -> Unit
-    ) {
-        val stopped = mutableSetOf<String>()
-        var remaining = sessions.size
-        try {
-            withTimeout(timeoutMs.milliseconds) {
-                while (remaining > 0) {
-                    delay(0.5.seconds)
-                    val current = postProcessorComponent.jobs.filter { !it.value.isCompleted }
-                    for (s in sessions) {
-                        if (s.key !in stopped) {
-                            val cur = current[s.key]
-                            if (cur == null || cur.isCompleted) {
-                                stopped.add(s.key)
-                                remaining--
-                                onProgress("$verb ${s.key}. remain: $remaining\n")
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: TimeoutCancellationException) {
-            logger.error("Timeout waiting for processors", e)
-            onProgress("Timeout waiting for processors.\n")
-        }
-    }
+
 
     private fun persistConfig() {
         scope.launch { eventBus.publish(PersistConfig) }

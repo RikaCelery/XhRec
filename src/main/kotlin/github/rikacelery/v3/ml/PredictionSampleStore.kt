@@ -24,7 +24,7 @@ object PredictionSampleStore {
     var dataDir: File = File(".")
         private set
 
-    private const val MAX_CDN = 8000
+    private const val MAX_CDN = 80000
     private const val MAX_SCHEDULE = 8000
 
     private val cdnSamples = CopyOnWriteArrayList<CdnSample>()

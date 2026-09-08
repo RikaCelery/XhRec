@@ -10,13 +10,13 @@ suspend fun <T> withRetry(i: Int, stopIf: (Throwable) -> Boolean = { isBusiness4
     var err: Throwable? = null
     (0 until i).forEach { j ->
         runCatching {
-            return function(i)
+            return function(j) // pass the attempt index, not the total count
         }.onFailure {
             if (stopIf(it)) {
                 throw it
             }
             err = it
-            delay(1000)
+            if (j < i - 1) delay(1000) // no pointless sleep after the final attempt
         }
     }
     throw err!!
@@ -30,7 +30,7 @@ suspend fun <T> withRetryOrNull(i: Int, stopIf: (Throwable) -> Boolean = { isBus
             if (stopIf(it)) {
                 return null
             }
-            delay(1000)
+            if (j < i - 1) delay(1000)
         }
     }
     return null

@@ -136,6 +136,19 @@ object CdnSelector {
     @Volatile
     var exploreProbability: Double = 0.03
 
+    /**
+     * Load-balancing spread: hosts scoring within best*(1+spreadTolerance) + spreadAbsMs
+     * are considered "near-best" and share traffic via weighted-random selection
+     * (weight ∝ bestScore/score — the fastest host still gets the largest share).
+     * Set to 0.0 (and spreadAbsMs = 0.0) to restore strict winner-take-all selection.
+     */
+    @Volatile
+    var spreadTolerance: Double = 0.25
+
+    /** Absolute slack (ms) added to the near-best threshold (matters when durations are tiny). */
+    @Volatile
+    var spreadAbsMs: Double = 30.0
+
     // ── Constants ───────────────────────────────────────────────────────────
 
     private const val EWMA_ALPHA = 0.3
@@ -300,17 +313,54 @@ object CdnSelector {
         if (avail.isEmpty()) return hosts.firstOrNull() ?: ""
         if (avail.size == 1) return avail[0]
 
-        // LightGBM-style model first (falls back to EWMA hierarchy when cold).
-        val mlBest = try { PredictionEngine.selectBestCdn(avail, now) } catch (_: Exception) { null }
-        val best = mlBest ?: bestAvailable(avail, now)
-        if (best == null) {
+        val scores = scoredHosts(avail, now)
+        if (scores.isEmpty()) {
             return avail[Random.nextInt(avail.size)]
         }
+        val bestScore = scores.minOf { it.second }
+        val best = scores.first { it.second == bestScore }.first
+
+        // ε-exploration: occasionally try a host outside the near-best pool
+        // (keeps the stats of non-preferred hosts fresh).
         if (Random.nextDouble() < exploreProbability) {
-            val others = avail.filter { it != best }
+            val threshold = bestScore * (1.0 + spreadTolerance) + spreadAbsMs
+            val others = avail.filter { h -> scores.none { it.first == h && it.second <= threshold } }
+                .ifEmpty { avail.filter { it != best } }
             if (others.isNotEmpty()) return others[Random.nextInt(others.size)]
         }
-        return best
+
+        // Load balancing: when several CDNs perform similarly ("near-best" pool),
+        // spread the load across them with probability proportional to bestScore/score,
+        // so equally-good hosts get roughly equal share and the best one slightly more.
+        val threshold = bestScore * (1.0 + spreadTolerance) + spreadAbsMs
+        val pool = scores.filter { it.second <= threshold }
+        if (pool.size == 1) return pool[0].first
+        val weights = pool.map { bestScore / it.second.coerceAtLeast(1.0) }
+        var r = Random.nextDouble(weights.sum())
+        for (i in pool.indices) {
+            r -= weights[i]
+            if (r <= 0.0) return pool[i].first
+        }
+        return pool.last().first
+    }
+
+    /**
+     * Hosts ordered best-first by current score. Hosts without any score yet are appended
+     * in shuffled order (they need traffic to build stats). Hosts in cooldown are excluded
+     * unless [includeCooling] (useful for hard retries: cooldowns are short and a cooled-down
+     * host may still be the only working path). [exclude] filters already-tried hosts.
+     */
+    fun rankedHosts(
+        now: Long = System.currentTimeMillis(),
+        includeCooling: Boolean = false,
+        exclude: Set<String> = emptySet()
+    ): List<String> {
+        val pool = (if (includeCooling) hosts else availableHosts(now)).filter { it !in exclude }
+        if (pool.size <= 1) return pool
+        val scores = scoredHosts(pool, now)
+        val ranked = scores.sortedBy { it.second }.map { it.first }
+        val unscored = pool.filter { h -> scores.none { it.first == h } }.shuffled()
+        return ranked + unscored
     }
 
     fun resolve(url: String, now: Long = System.currentTimeMillis()): String {
@@ -394,6 +444,8 @@ object CdnSelector {
         stats.clear()
         hosts = emptyList()
         exploreProbability = 0.03
+        spreadTolerance = 0.25
+        spreadAbsMs = 30.0
     }
     /**
      * Clear cooling state for a specific host (or all hosts if host is empty),
@@ -452,6 +504,8 @@ object CdnSelector {
         }
         val json = buildJsonObject {
             put("exploreProbability", JsonPrimitive(exploreProbability))
+            put("spreadTolerance", JsonPrimitive(spreadTolerance))
+            put("spreadAbsMs", JsonPrimitive(spreadAbsMs))
             put("hosts", buildJsonArray { hosts.forEach { add(JsonPrimitive(it)) } })
             put("stats", statsJson)
         }
@@ -507,6 +561,8 @@ object CdnSelector {
             importHosts(newHosts)
             newStats.forEach { (k, v) -> stats[k] = v }
             exploreProbability = root["exploreProbability"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: exploreProbability
+            spreadTolerance = root["spreadTolerance"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: spreadTolerance
+            spreadAbsMs = root["spreadAbsMs"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: spreadAbsMs
         } catch (e: Exception) {
             // If import fails, keep current in-memory state
         }
@@ -596,15 +652,21 @@ object CdnSelector {
         }
     }
 
-    private fun bestAvailable(avail: List<String>, now: Long): String? {
+    /**
+     * Score every host (lower = better). LightGBM-style model first when it can predict
+     * ALL given hosts; otherwise the EWMA hierarchy blended with probe measurements.
+     * Hosts without any data are omitted from the result.
+     */
+    private fun scoredHosts(avail: List<String>, now: Long): List<Pair<String, Double>> {
+        val ml = try { PredictionEngine.predictAllCdn(avail, now) } catch (_: Exception) { null }
+        if (ml != null) return avail.mapNotNull { h -> ml[h]?.let { h to it } }
+
         val zdt = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault())
         val hour = zdt.hour
         val day = DaySlot.of(zdt.dayOfWeek)
         val block = BlockSlot.ofHour(hour)
 
-        var best: String? = null
-        var bestScore = Double.MAX_VALUE
-
+        val out = ArrayList<Pair<String, Double>>(avail.size)
         for (host in avail) {
             val stat = stats[host] ?: continue
             val (duration, _) = synchronized(stat) { hierarchicalEstimate(stat, hour, day, block) }
@@ -617,12 +679,9 @@ object CdnSelector {
             } else {
                 duration
             }
-            if (score < bestScore) {
-                bestScore = score
-                best = host
-            }
+            out += host to score
         }
-        return best
+        return out
     }
 
     private fun updateEwma(ewma: DoubleArray, samples: IntArray, idx: Int, value: Double) {

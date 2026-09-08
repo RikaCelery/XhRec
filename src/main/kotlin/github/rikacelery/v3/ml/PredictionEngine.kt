@@ -177,21 +177,23 @@ object PredictionEngine {
     }
 
     /**
+     * Predict durations for ALL [hosts]. Null if the model is not ready or any host
+     * cannot be predicted (all-or-nothing, so scores are mutually comparable).
+     */
+    fun predictAllCdn(hosts: List<String>, now: Long = System.currentTimeMillis()): Map<String, Double>? {
+        if (cdnModel.get() == null || hosts.size < 2) return null
+        val out = LinkedHashMap<String, Double>(hosts.size)
+        for (h in hosts) {
+            out[h] = predictCdnDurationMs(h, now) ?: return null
+        }
+        return out
+    }
+
+    /**
      * Pick host with lowest predicted duration among [hosts]. Null if model not ready.
      */
-    fun selectBestCdn(hosts: List<String>, now: Long = System.currentTimeMillis()): String? {
-        if (cdnModel.get() == null || hosts.size < 2) return null
-        var best: String? = null
-        var bestScore = Double.MAX_VALUE
-        for (h in hosts) {
-            val d = predictCdnDurationMs(h, now) ?: return null
-            if (d < bestScore) {
-                bestScore = d
-                best = h
-            }
-        }
-        return best
-    }
+    fun selectBestCdn(hosts: List<String>, now: Long = System.currentTimeMillis()): String? =
+        predictAllCdn(hosts, now)?.minByOrNull { it.value }?.key
 
     /**
      * Probability that [roomId] goes live at [hour] (0-23). Null if model not ready.
