@@ -33,7 +33,10 @@ class RoomComponent(
     eventBus: EventBus,
     parentScope: CoroutineScope,
     /** Slow catch-up cadence; live status changes arrive via WebSocket */
-    private val refreshInterval: Duration = 5.minutes
+    private val refreshInterval: Duration = 5.minutes,
+    private val roomStatusFetcher: suspend (String) -> String = { roomName ->
+        apiClient.roomFetchBroadcastInfo(roomName).PathSingle("item.status").asString()
+    }
 ) : Actor<RoomMsg>("RoomComponent", eventBus, parentScope) {
 
     private val rooms = ConcurrentHashMap<Long, Room>()
@@ -59,6 +62,7 @@ class RoomComponent(
         subscribe<PersistConfig>(PersistConfig::class)
         subscribe<WsDisconnected>(WsDisconnected::class)
         subscribe<WsReconnected>(WsReconnected::class)
+        subscribe<StopEvent>(StopEvent::class)
         scope.launch {
             tell(RefreshRooms)
             while (isActive && !stopRefresh) {
@@ -73,6 +77,7 @@ class RoomComponent(
         is PersistConfig -> OnRoomEvent(event)
         is WsDisconnected -> OnRoomEvent(event)
         is WsReconnected -> OnRoomEvent(event)
+        is StopEvent -> OnRoomEvent(event)
         else -> null
     }
 
@@ -104,10 +109,22 @@ class RoomComponent(
                     }
                 }
 
+                is StopEvent -> {
+                    logger.info("Stop event received: room refresh stopped")
+                    stopRefresh = true
+                }
+
                 else -> {}
             }
 
-            is HandleRoomCommand -> {
+            is HandleRoomCommand -> if (msg.env.command is RefreshRoomCmd) {
+                try {
+                    handleCommand(msg.env)
+                } catch (e: Exception) {
+                    logger.error("handleCommand failed for ${msg.env.command}", e)
+                    eventBus.publish(CommandAck(msg.env.id, ErrorResponse(e.message ?: "error")))
+                }
+            } else {
                 scope.launch {
                     try {
                         handleCommand(msg.env)
@@ -219,19 +236,9 @@ class RoomComponent(
 
             is GetRooms -> rooms.values.map { it.copy() }
             is RefreshRoomCmd -> {
-                scope.launch {
-                    val room = rooms[cmd.roomId] ?: return@launch
-                    try {
-                        val info = apiClient.roomFetchBroadcastInfo(room.name)
-                        val status = info.PathSingle("item.status").asString()
-                        if (status != room.status) {
-                            rooms[room.id] = room.copy(status = status)
-                        }
-                        eventBus.publish(RoomStatusChanged(room.id, room.status, status))
-                    } catch (e: Exception) {
-                        logger.error("Failed to refresh status for room ${cmd.roomId}", e)
-                    }
-                }
+                val room = rooms[cmd.roomId]
+                    ?: throw NoSuchElementException("room ${cmd.roomId} not found")
+                refreshRoomStatus(room)
                 OkResponse
             }
 
@@ -243,6 +250,16 @@ class RoomComponent(
             else -> return
         }
         eventBus.publish(CommandAck(env.id, ack))
+    }
+
+    private suspend fun refreshRoomStatus(room: Room) {
+        val status = roomStatusFetcher(room.name)
+        val current = rooms[room.id] ?: return
+        if (status != current.status) {
+            rooms[room.id] = current.copy(status = status)
+            eventBus.publish(RoomStatusChanged(room.id, current.status, status))
+            logger.debug("refreshRoom: room {} status {} -> {}", room.id, current.status, status)
+        }
     }
 
     private val refreshLock = Mutex()

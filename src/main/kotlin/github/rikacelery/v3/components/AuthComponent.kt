@@ -26,6 +26,7 @@ class AuthComponent(
     override suspend fun onStart(scope: CoroutineScope) {
         subscribe<AuthExpired>(AuthExpired::class)
         subscribe<PersistConfig>(PersistConfig::class)
+        subscribe<CommandEnvelope>(CommandEnvelope::class)
     }
 
     override suspend fun wrapEvent(event: Any): AuthMsg? = when (event) {

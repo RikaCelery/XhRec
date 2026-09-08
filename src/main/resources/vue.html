@@ -324,6 +324,11 @@
                             </th>
                             <th class="px-2 py-2.5 text-center text-xs">{{ $t('Segments') }}</th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-right text-xs"
+                                @click="sortToggle('Elapsed')">
+                                {{ $t('Elapsed') }} <i class="fa-solid ml-0.5 text-[9px]"
+                                    :class="!sort['Elapsed'] ? 'fa-sort text-slate-300' : (sort['Elapsed'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
+                            </th>
+                            <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-right text-xs"
                                 @click="sortToggle('Size')">
                                 {{ $t('Size') }} <i class="fa-solid ml-0.5 text-[9px]"
                                     :class="!sort['Size'] ? 'fa-sort text-slate-300' : (sort['Size'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
@@ -333,7 +338,7 @@
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         <tr v-if="roomDisplay.length === 0">
-                            <td colspan="11" class="px-4 py-12 text-center text-slate-400">
+                            <td colspan="12" class="px-4 py-12 text-center text-slate-400">
                                 <i class="fa-solid fa-inbox text-3xl mb-2"></i>
                                 <p>{{ $t('No rooms found. Add a room to start recording.') }}</p>
                             </td>
@@ -489,6 +494,9 @@
                                     </span>
                                 </div>
                                 <span v-else class="text-slate-300 text-xs">-</span>
+                            </td>
+                            <td class="px-2 py-1.5 text-right font-mono text-xs text-slate-600">
+                                {{formatElapsed(room.sessionStartTime)}}
                             </td>
                             <td class="px-2 py-1.5 text-right font-mono text-xs text-slate-600">
                                 {{formatBytes(room.bytesWrite)}}
@@ -827,7 +835,7 @@
                         en: {},
                         'zh-CN': {
                             'Room': '直播间', 'Status': '状态', 'Preview': '预览', 'ID': 'ID', 'Quality': '画质',
-                            'Limit': '限时', 'State': '状态', 'Auto Pay': '自动付费', 'Segments': '分片', 'Size': '大小',
+                            'Limit': '限时', 'State': '状态', 'Auto Pay': '自动付费', 'Segments': '分片', 'Elapsed': '已录制', 'Size': '大小',
                             'Actions': '操作', 'Room URL or Slug': '直播间 URL 或名称',
                             'LimitPlaceholder': '限时', 'SizePlaceholder': '大小',
                             'Add & Activate': '添加并激活', 'Add Only': '仅添加', 'Toggle Dark Mode': '切换深色模式',
@@ -924,6 +932,12 @@
                         }
                         if (this.sort["Limit"] && a.timeLimit !== b.timeLimit) {
                             return this.sort["Limit"] === 1 ? (b.timeLimit || 0) - (a.timeLimit || 0) : (a.timeLimit || 0) - (b.timeLimit || 0);
+                        }
+                        if (this.sort["Elapsed"] && a.sessionStartTime !== b.sessionStartTime) {
+                            const ae = a.sessionStartTime || 0, be = b.sessionStartTime || 0;
+                            if (ae === 0) return 1;
+                            if (be === 0) return -1;
+                            return this.sort["Elapsed"] === 1 ? be - ae : ae - be;
                         }
                         if (this.sort["Size"] && a.bytesWrite !== b.bytesWrite) {
                             return this.sort["Size"] === 1 ? (a.bytesWrite || 0) - (b.bytesWrite || 0) : (b.bytesWrite || 0) - (a.bytesWrite || 0);
@@ -1084,6 +1098,15 @@
                         this.modelDetailDialog = true;
                     } catch (e) { console.error('Failed to fetch model detail', e); }
                 },
+                formatElapsed(startTimeMs) {
+                    if (!startTimeMs) return '-';
+                    let totalSeconds = Math.max(0, Math.floor((Date.now() - startTimeMs) / 1000));
+                    const h = Math.floor(totalSeconds / 3600);
+                    const m = Math.floor((totalSeconds % 3600) / 60);
+                    const s = totalSeconds % 60;
+                    const pad = (n) => String(n).padStart(2, '0');
+                    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+                },
                 async setQuality(quality, roomId) {
                     try {
                         const r1 = await fetch(`${HOST}/quality?id=${roomId}&q=${quality}`);
@@ -1198,6 +1221,7 @@
                             Object.assign(newRoomInfo[room.room.name], {
                                 sessionStatus: room.session.status,
                                 sessionQuality: room.session.quality,
+                                sessionStartTime: room.session.startTime || 0,
                                 roomStatus: room.room.status,
                                 ...room.room,
                             });

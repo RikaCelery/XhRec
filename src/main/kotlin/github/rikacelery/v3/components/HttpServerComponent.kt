@@ -156,8 +156,8 @@ class HttpServerComponent(
                     call.respondTextWriter {
                         write("Stopping server...\n"); flush()
 
-                        requestBus.request<OkResponse>(ShutdownCmd)
-                        write("Canceled scheduler.\n"); flush()
+                        eventBus.publish(StopEvent)
+                        write("Stop event published.\n"); flush()
 
                         val sessions = requestBus.request<List<RoomSession>>(GetSessions)
                             .filter { it.state == SessionState.Recording || it.state == SessionState.Fetching }
@@ -165,10 +165,18 @@ class HttpServerComponent(
                         if (sessions.isNotEmpty()) {
                             for (s in sessions) {
                                 write("Waiting ${s.roomName}.\n"); flush()
-                                requestBus.request<OkResponse>(DeactivateCmd(s.roomId))
                             }
                             waitSessionsDone(sessions, "Exited", 120_000L) { write(it); flush() }
                         }
+
+                        // let the final FileReady reach the post-processor, then wait for its queue to drain
+                        delay(0.5.seconds)
+                        // 后处理任务不设超时，等待队列排空后再关停。
+                        while (postProcessorComponent.jobs.any { !it.value.isCompleted }) {
+                            delay(0.5.seconds)
+                        }
+                        write("Post-processing drained.\n"); flush()
+
                         write("OK\n"); flush()
                     }
                     engine.stop(1000, 5000)
@@ -338,6 +346,7 @@ class HttpServerComponent(
                                         })
                                         put("active", s?.state == SessionState.Recording)
                                         put("quality", s?.quality ?: "")
+                                        put("startTime", if (isActive) s?.startTime?.toEpochMilli() ?: 0L else 0L)
                                     })
                                     put("listening", s != null || isArmed)
                                     put("room", buildJsonObject {
@@ -571,8 +580,8 @@ class HttpServerComponent(
                     call.respondTextWriter {
                         write("Stopping server...\n"); flush()
 
-                        requestBus.request<OkResponse>(ShutdownCmd)
-                        write("Canceled scheduler.\n"); flush()
+                        eventBus.publish(StopEvent)
+                        write("Stop event published.\n"); flush()
 
                         val sessions = requestBus.request<List<RoomSession>>(GetSessions)
                             .filter { it.state == SessionState.Recording || it.state == SessionState.Fetching }

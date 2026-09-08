@@ -165,10 +165,10 @@ object ApiClient {
         return Json.parseToJsonElement(response.bodyAsText()).jsonObject
     }
 
-    suspend fun roomFetchCamInfo(roomName: String, cookie: String): JsonObject {
+    suspend fun roomFetchCamInfo(roomId: Long, cookie: String): JsonObject {
         val response = withHostFallback { host ->
             withRetry(3) {
-                ensure2xx(host, apiClient.get(apiUrl(host, "api/front/v2/models/username/" + roomName + "/cam")) {
+                ensure2xx(host, apiClient.get(apiUrl(host, "api/front/v2/models/" + roomId + "/cam")) {
                     header("Cookie", cookie)
                 })
             }
@@ -176,9 +176,22 @@ object ApiClient {
         return Json.parseToJsonElement(response.bodyAsText()).jsonObject
     }
 
-    suspend fun roomFetchModelToken(roomName: String, user: User): String? {
-        val info = roomFetchCamInfo(roomName, user.cookie)
+    suspend fun roomFetchModelToken(roomId: Long, user: User): String? {
+        val info = roomFetchCamInfo(roomId, user.cookie)
         return info.PathSingle("cam.modelToken").asString().ifBlank { null }
+    }
+
+    suspend fun hasFreeSpyAccess(roomId: Long, user: User): Boolean {
+        val info = roomFetchCamInfo(roomId, user.cookie)
+        val subscription = info.PathSingleOrNull("cam.userFanClub.subscription")
+        if (subscription == null || subscription is JsonNull) return false
+        if (subscription.String("status") != "active") return false
+        val tier = subscription.String("tier")
+        val benefits = info.PathSingleOrNull("cam.userFanClub.benefits")?.jsonArray ?: return false
+        val freeSpyingBenefit = benefits.firstOrNull {
+            it.jsonObject["id"]?.asString() == "freeSpying"
+        } ?: return false
+        return freeSpyingBenefit.PathSingleOrNull("tiers.$tier.isActive")?.asBoolean() ?: false
     }
 
     suspend fun roomRequestGroupShow(roomId: Long, user: User): Boolean {

@@ -71,7 +71,7 @@ data class Download(
     val roomId: Long,
     val urls: List<Segment>,
     val startIndex: Int,
-    val generation: Int
+    val generation: Long
 ) {
     override fun toString() = "Download(roomId=$roomId, idx=$startIndex, gen=$generation, count=${urls.size})"
 }
@@ -82,9 +82,10 @@ data class CutPoint(
     val roomName: String,
     val startTime: java.time.Instant,
     val reason: EndReason,
-    val quality: String = ""
+    val quality: String = "",
+    val generation: Long = 0L
 ) {
-    override fun toString() = "CutPoint(roomId=$roomId, idx=$index, reason=$reason)"
+    override fun toString() = "CutPoint(roomId=$roomId, idx=$index, reason=$reason, gen=$generation)"
 }
 
 // ── Scheduler commands ──
