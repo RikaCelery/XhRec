@@ -125,12 +125,12 @@ fun requests(): List<MockRequest>
 
 **Files:** create XhrecIntegrationFixture and RoomRoutesIntegrationTest.
 
-- [ ] Write RED vertical slice: add inactive, verify unarmed, activate, push public, await Recording, remove, await file close, verify dashboard absence.
-- [ ] Build real Config/Room/LiveEvent/Downloader/Writer/Session/Scheduler/Metric/HTTP components with short timings, threshold 0, temp paths, no-proxy clients, and mock URLs.
-- [ ] Add bounded awaitEvent/awaitDashboard/awaitFile. Timeout errors include recent events/requests. Teardown closes every owned resource and only its temp directory.
-- [ ] Verify the first test twice.
-- [ ] Add RED/GREEN cases individually: active add; invalid/duplicate input; remove while preconfiguring/recording; activate/deactivate; break/restart; quality; limits; both autopays; list/dashboard; list.conf persistence/reload.
-- [ ] Run route/full tests; commit as `test: cover room control routes with mock platform`.
+- [x] Write RED vertical slice: add inactive, verify unarmed, activate, push public, await Recording, remove, await file close, verify dashboard absence.
+- [x] Build real Config/Room/LiveEvent/Downloader/Writer/Session/Scheduler/Metric/HTTP components with short timings, threshold 0, temp paths, no-proxy clients, and mock URLs.
+- [x] Add bounded awaitEvent/awaitDashboard/awaitFile. Timeout errors include recent events/requests. Teardown closes every owned resource and only its temp directory.
+- [x] Verify the first test twice.
+- [x] Add RED/GREEN cases individually: active add; invalid/duplicate input; remove while preconfiguring/recording; activate/deactivate; break/restart; quality; limits; both autopays; list/dashboard; list.conf persistence/reload.
+- [x] Run route/full tests; commit as `test: cover room control routes with mock platform`.
 
 ```kotlin
 fixture.get("/add?name=model&active=false").expectOk()
