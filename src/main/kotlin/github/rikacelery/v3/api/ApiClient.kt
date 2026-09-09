@@ -48,7 +48,9 @@ class ApiClient(
     }
 
     private val logger = LoggerFactory.getLogger("v3.ApiClient")
-    private val failover = HostFailover(initialHosts.ifEmpty { listOf(DEFAULT_PLATFORM_HOST) })
+    private val failover = HostFailover().apply {
+        updateHosts(initialHosts.ifEmpty { listOf(DEFAULT_PLATFORM_HOST) })
+    }
 
     /**
      * A 4xx response means the platform understood the request and answered with a
