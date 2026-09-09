@@ -29,7 +29,7 @@ class SchedulerRoomRemovalTest {
         val dataChannel = DataChannel()
         val downloader = DownloaderComponent(dataChannel, eventBus = eventBus, parentScope = backgroundScope)
         val session = SessionComponent(dataChannel, downloader, M3u8Parser, requestBus, eventBus, backgroundScope)
-        val scheduler = SchedulerComponent(requestBus, session, ApiClient, "streamKey", eventBus, backgroundScope)
+        val scheduler = SchedulerComponent(requestBus, session, ApiClient(), "streamKey", eventBus, backgroundScope)
         scheduler.start()
         advanceUntilIdle()
 

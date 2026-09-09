@@ -74,7 +74,7 @@ object SizeStrSerializer : KSerializer<Long> {
                 c.isDigit() || c == '.' -> { numberBuf += c; i++ }
                 c.isWhitespace() -> i++
                 c.isLetter() -> {
-                    val matched = keys.firstOrNull { upper.startsWith(it, i) }
+                    val matched = keys.firstOrNull { upper.startsWith(it.uppercase(), i) }
                         ?: throw IllegalArgumentException("Unknown unit at '$c' in '$input'")
                     if (numberBuf.isEmpty()) throw IllegalArgumentException("Missing number before '$matched' in '$input'")
                     total += (numberBuf.toDouble() * unitMap[matched]!!).toLong()

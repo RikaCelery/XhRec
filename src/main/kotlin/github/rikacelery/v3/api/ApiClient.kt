@@ -38,11 +38,19 @@ internal fun throwBroadcast404(body: String): Nothing {
  * The platform client runs with expectSuccess=false and handles HTTP statuses explicitly
  * so that 404-based business results (model renamed / deleted) can be detected.
  */
-object ApiClient {
-    const val DEFAULT_PLATFORM_HOST = "stripchat.com"
+class ApiClient(
+    initialHosts: List<String> = listOf(DEFAULT_PLATFORM_HOST),
+    private val httpClientProvider: HttpClientProvider = DefaultHttpClientProvider,
+    private val baseUrlBuilder: (String) -> String = { host -> "https://$host" }
+) {
+    companion object {
+        const val DEFAULT_PLATFORM_HOST = "stripchat.com"
+    }
 
     private val logger = LoggerFactory.getLogger("v3.ApiClient")
-    private val failover = HostFailover(listOf(DEFAULT_PLATFORM_HOST))
+    private val failover = HostFailover().apply {
+        updateHosts(initialHosts.ifEmpty { listOf(DEFAULT_PLATFORM_HOST) })
+    }
 
     /**
      * A 4xx response means the platform understood the request and answered with a
@@ -61,12 +69,12 @@ object ApiClient {
         logger.info("Platform hosts updated: {}", failover.hosts)
     }
 
-    private val apiClient by lazy { ClientManager.getProxiedClient("api", http1 = true, expectSuccess = false) }
+    private val apiClient by lazy { httpClientProvider.proxied("api", http1 = true, expectSuccess = false) }
 
     private fun apiUrl(host: String, path: String): String {
         val h = host.trim().trimEnd('/')
         require(h.isNotEmpty()) { "platformHost must not be blank" }
-        return "https://" + h + "/" + path
+        return baseUrlBuilder(h).trimEnd('/') + "/" + path
     }
 
     /**

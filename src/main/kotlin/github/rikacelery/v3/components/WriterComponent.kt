@@ -59,6 +59,7 @@ class WriterComponent(
     private val dataChannel: DataChannel,
     private val tmpDir: File,
     private val hooks: List<WriterHook> = emptyList(),
+    private val minOutputBytes: Long = 1024,
     eventBus: EventBus,
     parentScope: CoroutineScope
 ) : Actor<WriterMsg>("WriterComponent", eventBus, parentScope) {
@@ -150,7 +151,7 @@ class WriterComponent(
     private suspend fun closeActiveFile(active: ActiveFile, reason: EndReason) {
         withContext(Dispatchers.IO + NonCancellable) {
             try {
-                if (active.bytesWritten < 1024) {
+                if (active.bytesWritten < minOutputBytes) {
                     logger.info("Closed file: ${active.file.absolutePath}, reason=$reason (empty)")
                     active.dispose()
                     return@withContext

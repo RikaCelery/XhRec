@@ -3,6 +3,7 @@ package github.rikacelery.v3.components
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.CommandAck
 import github.rikacelery.v3.events.CommandEnvelope
 import github.rikacelery.v3.events.OkResponse
@@ -52,12 +53,12 @@ class RoomComponentTest {
         })
 
         val component = RoomComponent(
-            apiClient = ApiClient,
+            apiClient = ApiClient(),
             listConfPath = Files.createTempFile("xhrec-room-test", ".conf").toString(),
             requestBus = requestBus,
             eventBus = eventBus,
             parentScope = backgroundScope,
-            refreshInterval = Duration.INFINITE,
+            runtimeTuning = RuntimeTuning(roomPollInterval = Duration.INFINITE),
             roomStatusFetcher = { roomName ->
                 mockServer.get("https://mock.platform/broadcasts/$roomName").bodyAsText()
                     .substringAfter("\"status\":\"").substringBefore('"')

@@ -12,6 +12,8 @@ import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import java.io.File
@@ -21,6 +23,7 @@ data class HandleConfigQuery(val env: CommandEnvelope) : ConfigMsg
 
 class ConfigComponent(
     val config: SystemConfig,
+    private val apiClient: ApiClient,
     eventBus: EventBus,
     parentScope: CoroutineScope
 ) : Actor<ConfigMsg>("ConfigComponent", eventBus, parentScope) {
@@ -38,6 +41,8 @@ class ConfigComponent(
     private var maskSensitiveLogs = config.maskSensitiveLogs
     private var apiToken: String = config.apiToken
     private var hostsConfig: HostsConfig = config.hosts
+    /** Serializes writes: the startup save and a config-change save may otherwise interleave. */
+    private val saveLock = Mutex()
 
     private suspend fun loadConfig() {
         if (!configFile.exists()) return
@@ -61,26 +66,30 @@ class ConfigComponent(
     }
 
     private suspend fun saveConfig() {
-        withContext(Dispatchers.IO) {
-            try {
-                val json = Json { prettyPrint = true }
-                configFile.writeText(
-                    json.encodeToString(
-                        JsonElement.serializer(),
-                        buildJsonObject {
-                            put("streamAuthKey", persistedStreamAuthKey)
-                            put("maskSensitiveLogs", maskSensitiveLogs)
-                            put("apiToken", apiToken)
-                            hostsConfig.toJson().forEach { (k, v) -> put(k, v) }
-                            put("decryptKeys", buildJsonObject {
-                                persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
-                            })
-                        }
+        // Serialize saves and read the fields inside the lock: a save that started earlier
+        // must never overwrite a newer state with stale values.
+        saveLock.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    val json = Json { prettyPrint = true }
+                    configFile.writeText(
+                        json.encodeToString(
+                            JsonElement.serializer(),
+                            buildJsonObject {
+                                put("streamAuthKey", persistedStreamAuthKey)
+                                put("maskSensitiveLogs", maskSensitiveLogs)
+                                put("apiToken", apiToken)
+                                hostsConfig.toJson().forEach { (k, v) -> put(k, v) }
+                                put("decryptKeys", buildJsonObject {
+                                    persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
+                                })
+                            }
+                        )
                     )
-                )
-                logger.info("Saved config to ${config.configPath}")
-            } catch (e: Exception) {
-                logger.error("Failed to save config to ${config.configPath}: ${e.message}", e)
+                    logger.info("Saved config to ${config.configPath}")
+                } catch (e: Exception) {
+                    logger.error("Failed to save config to ${config.configPath}: ${e.message}", e)
+                }
             }
         }
     }
@@ -90,7 +99,7 @@ class ConfigComponent(
         val cfg = HostsConfig.sanitize(hostsConfig)
         hostsConfig = cfg
         Hosts.current = cfg
-        ApiClient.applyHosts(cfg.platformHosts)
+        apiClient.applyHosts(cfg.platformHosts)
         CdnSelector.updateHosts(cfg.hlsHosts)
         eventBus.publish(HostsChanged)
         logger.info("Hosts config applied: platform=${cfg.platformHosts}, ws=${cfg.webSocketHosts}, hls=${cfg.hlsHosts}, master=${cfg.hlsMasterHost}")

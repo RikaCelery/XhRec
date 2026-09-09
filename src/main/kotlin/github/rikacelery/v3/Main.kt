@@ -8,11 +8,13 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.HostsConfig
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.DefaultHttpClientProvider
 import github.rikacelery.v3.utils.PredictionStore
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.*
@@ -99,7 +101,9 @@ fun main(vararg args: String) {
 
         // Apply persisted runtime config before components start making API calls
         Hosts.current = persisted.hosts
-        ApiClient.applyHosts(persisted.hosts.platformHosts)
+        val httpClientProvider = DefaultHttpClientProvider
+        val runtimeTuning = RuntimeTuning()
+        val apiClient = ApiClient(persisted.hosts.platformHosts, httpClientProvider)
         CdnSelector.updateHosts(persisted.hosts.hlsHosts)
         SensitiveStringRegistry.enabled = persisted.maskSensitiveLogs
 
@@ -121,16 +125,20 @@ fun main(vararg args: String) {
 
         // 2. Components
         val metricComponent = MetricComponent(eventBus, appScope)
-        val configComponent = ConfigComponent(config, eventBus, appScope)
+        val configComponent = ConfigComponent(config, apiClient, eventBus, appScope)
         val authComponent = AuthComponent(cli.getOptionValue("users", "users.txt"), eventBus, appScope)
         val roomComponent =
-            RoomComponent(ApiClient, config.listConfPath, requestBus, eventBus, appScope)
+            RoomComponent(apiClient, config.listConfPath, requestBus, eventBus, appScope, runtimeTuning)
         // WS auth JWT is fetched dynamically at startup from config/initial (guest session),
         // refreshed on auth failure or after its (unknown) validity window.
-        val liveEventSource = LiveEventSource({ ApiClient.fetchGuestWsToken() }, eventBus, appScope)
+        val liveEventSource = LiveEventSource(
+            { apiClient.fetchGuestWsToken() }, eventBus, appScope,
+            httpClientProvider = httpClientProvider, runtimeTuning = runtimeTuning
+        )
 
         val downloaderComponent = DownloaderComponent(
-            dataChannel, eventBus = eventBus, parentScope = appScope, initialConcurrency = 64
+            dataChannel, eventBus = eventBus, parentScope = appScope, initialConcurrency = 64,
+            httpClientProvider = httpClientProvider, runtimeTuning = runtimeTuning
         )
         val writerComponent = WriterComponent(
             dataChannel, config.tmpDir,
@@ -143,15 +151,19 @@ fun main(vararg args: String) {
             M3u8Parser,
             requestBus,
             eventBus,
-            appScope
+            appScope,
+            httpClientProvider,
+            runtimeTuning
         )
         val schedulerComponent = SchedulerComponent(
             requestBus,
             sessionComponent,
-            ApiClient,
+            apiClient,
             config.streamAuthKey,
             eventBus,
-            appScope
+            appScope,
+            httpClientProvider,
+            runtimeTuning
         )
 
         // Prediction persistence (loads on init, auto-saves periodically, saves on stop)
@@ -190,7 +202,7 @@ fun main(vararg args: String) {
 
         // 4. Bootstrap: load users, processors, rooms from config files
         val bootstrap =
-            Bootstrap(ApiClient, roomComponent, authComponent, postProcessorComponent, schedulerComponent)
+            Bootstrap(apiClient, roomComponent, authComponent, postProcessorComponent, schedulerComponent)
         bootstrap.initialize(args.toList())
 
         // 5. Start HTTP server

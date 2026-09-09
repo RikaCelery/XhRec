@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.HostsConfig
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.HostsChanged
 import github.rikacelery.v3.events.LiveMessage
 import github.rikacelery.v3.events.QualityChangeHint
@@ -15,8 +16,9 @@ import github.rikacelery.v3.events.RoomStatusChanged
 import github.rikacelery.v3.events.StreamStatusChanged
 import github.rikacelery.v3.events.WsDisconnected
 import github.rikacelery.v3.events.WsReconnected
-import github.rikacelery.v3.utils.ClientManager
+import github.rikacelery.v3.utils.DefaultHttpClientProvider
 import github.rikacelery.v3.utils.HostFailover
+import github.rikacelery.v3.utils.HttpClientProvider
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
@@ -27,7 +29,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.time.Duration.Companion.seconds
 
 sealed interface LiveEventMsg
 data class OnLiveEvent(val event: Any) : LiveEventMsg
@@ -39,7 +40,10 @@ class LiveEventSource(
     private val tokenProvider: suspend () -> String,
     eventBus: EventBus,
     parentScope: CoroutineScope,
-    private val wsPoolCount: Int = 3
+    private val wsPoolCount: Int = 3,
+    private val httpClientProvider: HttpClientProvider = DefaultHttpClientProvider,
+    private val runtimeTuning: RuntimeTuning = RuntimeTuning(),
+    private val wsUrlBuilder: (String) -> String = { host -> "wss://$host/connection/websocket" }
 ) : Actor<LiveEventMsg>("LiveEventSource", eventBus, parentScope) {
 
     private val subscribed = ConcurrentHashMap.newKeySet<Long>()
@@ -171,22 +175,22 @@ class LiveEventSource(
     /** One WebSocket connection handling roughly 1/wsPoolCount of the subscribed rooms. */
     private inner class WsPool(private val index: Int) {
         @Volatile var wsSession: WebSocketSession? = null
-        private var backoff = 1.seconds
+        private var backoff = runtimeTuning.webSocketReconnectInitial
 
         suspend fun connectLoop() {
             while (scope.isActive) {
                 val host = wsFailover.currentHost() ?: HostsConfig.DEFAULT_WS_HOST
                 var opened = false
+                var frames = 0
                 try {
                     val token = ensureWsToken()
-                    val client = ClientManager.getProxiedClient("event_$index", http1 = true)
-                    client.webSocket("wss://" + host + "/connection/websocket") {
+                    val client = httpClientProvider.proxied("event_$index", http1 = true)
+                    client.webSocket(wsUrlBuilder(host)) {
                         wsSession = this
                         opened = true
                         send(authFrame(token))
                         resubscribeAllForPool(index)
                         eventBus.publish(WsReconnected)
-                        var frames = 0
                         for (frame in incoming) {
                             frames++
                             if (frame is Frame.Text) {
@@ -198,20 +202,41 @@ class LiveEventSource(
                                 }
                             }
                         }
-                        // closed by the server without delivering any frame — almost certainly an
-                        // auth failure (invalid/expired token) → refetch on the next attempt
-                        if (frames == 0) invalidateWsToken()
                     }
-                    wsFailover.markSuccess(host)
-                    backoff = 1.seconds
+                    if (frames == 0) {
+                        // closed without a single frame — almost certainly an auth rejection
+                        // (invalid/expired token). Refetch the token and back off instead of
+                        // hot-looping against the platform.
+                        invalidateWsToken()
+                        wsFailover.markFailure(host)
+                        logger.warn(
+                            "WS pool {} closed by {} without any frame, retrying in {}ms",
+                            index, host, backoff.inWholeMilliseconds
+                        )
+                        delay(backoff)
+                        backoff = minOf(backoff * 2, runtimeTuning.webSocketReconnectMax)
+                    } else {
+                        wsFailover.markSuccess(host)
+                        backoff = runtimeTuning.webSocketReconnectInitial
+                    }
                 } catch (e: CancellationException) {
-                    throw e
+                    // A server-side close surfaces as CancellationException from send(); only a
+                    // genuine scope cancellation may end the reconnect loop, otherwise a rejected
+                    // or dropped connection would kill it forever.
+                    if (!scope.isActive) throw e
+                    invalidateWsToken()
+                    logger.warn(
+                        "WS pool {} closed while connecting to {}: {}, retrying in {}ms",
+                        index, host, e.message, backoff.inWholeMilliseconds
+                    )
+                    delay(backoff)
+                    backoff = minOf(backoff * 2, runtimeTuning.webSocketReconnectMax)
                 } catch (e: Exception) {
                     invalidateWsToken()
                     wsFailover.markFailure(host)
                     logger.error("WS pool {} error on {}: {}, reconnecting in {}ms", index, host, e.message, backoff.inWholeMilliseconds)
                     delay(backoff)
-                    backoff = minOf(backoff.inWholeSeconds * 2, 30).seconds
+                    backoff = minOf(backoff * 2, runtimeTuning.webSocketReconnectMax)
                 } finally {
                     if (opened) {
                         wsSession = null
@@ -289,8 +314,11 @@ class LiveEventSource(
         }
     }
 
+    /** Channels needed only while recording; the status subset stays subscribed for tracked rooms. */
+    private val recordingOnlyChannels: List<String> = roomChannels - statusChannels.toSet()
+
     private suspend fun WebSocketSession.sendRoomFullUnsubscribes(roomId: Long) {
-        roomChannels.forEach { channel ->
+        recordingOnlyChannels.forEach { channel ->
             try {
                 send(Frame.Text(unsubscribeFrame("$channel@$roomId")))
             } catch (e: Exception) {
