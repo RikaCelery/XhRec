@@ -252,6 +252,8 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 retryCount = 0
                 circleCache.clear()   // a new file must re-download the init; media segments are skipped via the lastSegmentId threshold
                 launch { component.dataChannel.send(StreamStart(roomId, roomName, startTime, quality)) }
+                // LiveEventSource expands the WebSocket channel set and metrics start counting on this
+                launch { component.publish(RecordingStarted(roomId, quality)) }
                 playlistLoop.start(component.runtimeTuning.playlistPollInterval) { component.tell(fetchPlaylistSignal()) }
             }
             on(RecordingEvent.StopRecording) to KEEP
