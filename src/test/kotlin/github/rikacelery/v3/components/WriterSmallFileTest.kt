@@ -8,6 +8,7 @@ import github.rikacelery.v3.data.StreamEnd
 import github.rikacelery.v3.data.StreamStart
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
+import github.rikacelery.v3.events.WriterFatal
 import github.rikacelery.v3.hooks.EventHook
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
@@ -70,6 +71,7 @@ class WriterSmallFileTest {
             advanceUntilIdle()
             val roomTwoFile = roomTwoReady.await().file
 
+            assertTrue(published.none { it is WriterFatal })
             assertTrue(published.filterIsInstance<FileReady>().none { it.roomId == 1L })
             assertEquals(setOf(roomTwoFile), tmpDir.listFiles()?.toSet() ?: emptySet())
         } finally {
