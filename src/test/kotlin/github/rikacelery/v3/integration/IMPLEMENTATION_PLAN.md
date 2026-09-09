@@ -95,12 +95,12 @@ assertEquals(listOf(AddRoom::class, ActivateRecordingCmd::class), commandTypes)
 
 **Files:** create MockPayloads, MockPlatformServer, and MockPlatformServerTest beside this plan.
 
-- [ ] Write failing payload tests for inverse XOR/Base64 decoding, 512-byte bodies, increasing IDs, and overlapping windows.
-- [ ] Implement fixed init/segment builders and an encoder accepted by production Decrypter/M3u8Parser.
-- [ ] Write failing server tests for platform JSON, master/media playlists, exact bytes, WS auth/subscriptions/pushes, and ephemeral loopback binding.
-- [ ] Implement per-room state, manual/automatic status and segment advancement, WS disconnect/reject/restore, request history, and next-request 404/500/delay/interruption faults.
-- [ ] Cancel/join generators before stopping Ktor. Run server tests twice.
-- [ ] Commit as `test: add deterministic platform mock server`.
+- [x] Write failing payload tests for inverse XOR/Base64 decoding, 512-byte bodies, increasing IDs, and overlapping windows.
+- [x] Implement fixed init/segment builders and an encoder accepted by production Decrypter/M3u8Parser.
+- [x] Write failing server tests for platform JSON, master/media playlists, exact bytes, WS auth/subscriptions/pushes, and ephemeral loopback binding.
+- [x] Implement per-room state, manual/automatic status and segment advancement, WS disconnect/reject/restore, request history, and next-request 404/500/delay/interruption faults.
+- [x] Cancel/join generators before stopping Ktor. Run server tests twice.
+- [x] Commit as `test: add deterministic platform mock server`.
 
 ```kotlin
 assertEquals(token, Decrypter.decode(encryptToken(token, key).reversed(), key))

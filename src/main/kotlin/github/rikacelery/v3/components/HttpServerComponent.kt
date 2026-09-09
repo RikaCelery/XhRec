@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.CdnSelector
@@ -41,7 +42,7 @@ class HttpServerComponent(
     private val scope: CoroutineScope,
     private val mseStore: MseStore = MseStore(),
     private val apiToken: String = "",
-    private val restartDelay: Duration = 500.milliseconds
+    private val runtimeTuning: RuntimeTuning = RuntimeTuning()
 ) {
     private val logger = LoggerFactory.getLogger("v3.HttpServer")
     private val stopping = AtomicBoolean(false)
@@ -211,7 +212,7 @@ class HttpServerComponent(
                         status = HttpStatusCode.BadRequest
                     )
                     requestBus.request<OkResponse>(DeactivateCmd(id))
-                    delay(restartDelay)
+                    delay(runtimeTuning.httpRestartDelay)
                     requestBus.request<OkResponse>(ActivateRecordingCmd(id))
                     call.respondText("Restarted")
                 }

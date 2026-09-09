@@ -3,6 +3,7 @@ package github.rikacelery.v3.components
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.ActivateRecordingCmd
 import github.rikacelery.v3.events.AddRoom
 import github.rikacelery.v3.events.CommandAck
@@ -77,7 +78,7 @@ class HttpRoutesTest {
 
     @Test
     fun `restart deactivates then reactivates using injected delay`() = testApplication {
-        val harness = RouteHarness(restartDelay = 1.milliseconds)
+        val harness = RouteHarness(RuntimeTuning(httpRestartDelay = 1.milliseconds))
         try {
             harness.eventBus.installHook(object : EventHook {
                 override suspend fun intercept(event: Any): Any? {
@@ -100,7 +101,7 @@ class HttpRoutesTest {
         }
     }
 
-    private class RouteHarness(restartDelay: Duration = 500.milliseconds) {
+    private class RouteHarness(runtimeTuning: RuntimeTuning = RuntimeTuning()) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val eventBus = EventBus()
         val requestBus = RequestBus(eventBus, scope)
@@ -121,7 +122,7 @@ class HttpRoutesTest {
             metricComponent = MetricComponent(eventBus, scope),
             postProcessorComponent = PostProcessorComponent(eventBus, scope),
             scope = scope,
-            restartDelay = restartDelay
+            runtimeTuning = runtimeTuning
         )
 
         fun close() {
