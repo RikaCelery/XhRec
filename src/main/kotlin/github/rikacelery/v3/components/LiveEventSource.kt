@@ -181,6 +181,7 @@ class LiveEventSource(
             while (scope.isActive) {
                 val host = wsFailover.currentHost() ?: HostsConfig.DEFAULT_WS_HOST
                 var opened = false
+                var frames = 0
                 try {
                     val token = ensureWsToken()
                     val client = httpClientProvider.proxied("event_$index", http1 = true)
@@ -190,7 +191,6 @@ class LiveEventSource(
                         send(authFrame(token))
                         resubscribeAllForPool(index)
                         eventBus.publish(WsReconnected)
-                        var frames = 0
                         for (frame in incoming) {
                             frames++
                             if (frame is Frame.Text) {
@@ -202,14 +202,35 @@ class LiveEventSource(
                                 }
                             }
                         }
-                        // closed by the server without delivering any frame — almost certainly an
-                        // auth failure (invalid/expired token) → refetch on the next attempt
-                        if (frames == 0) invalidateWsToken()
                     }
-                    wsFailover.markSuccess(host)
-                    backoff = runtimeTuning.webSocketReconnectInitial
+                    if (frames == 0) {
+                        // closed without a single frame — almost certainly an auth rejection
+                        // (invalid/expired token). Refetch the token and back off instead of
+                        // hot-looping against the platform.
+                        invalidateWsToken()
+                        wsFailover.markFailure(host)
+                        logger.warn(
+                            "WS pool {} closed by {} without any frame, retrying in {}ms",
+                            index, host, backoff.inWholeMilliseconds
+                        )
+                        delay(backoff)
+                        backoff = minOf(backoff * 2, runtimeTuning.webSocketReconnectMax)
+                    } else {
+                        wsFailover.markSuccess(host)
+                        backoff = runtimeTuning.webSocketReconnectInitial
+                    }
                 } catch (e: CancellationException) {
-                    throw e
+                    // A server-side close surfaces as CancellationException from send(); only a
+                    // genuine scope cancellation may end the reconnect loop, otherwise a rejected
+                    // or dropped connection would kill it forever.
+                    if (!scope.isActive) throw e
+                    invalidateWsToken()
+                    logger.warn(
+                        "WS pool {} closed while connecting to {}: {}, retrying in {}ms",
+                        index, host, e.message, backoff.inWholeMilliseconds
+                    )
+                    delay(backoff)
+                    backoff = minOf(backoff * 2, runtimeTuning.webSocketReconnectMax)
                 } catch (e: Exception) {
                     invalidateWsToken()
                     wsFailover.markFailure(host)
