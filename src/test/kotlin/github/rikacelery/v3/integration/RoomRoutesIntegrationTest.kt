@@ -3,6 +3,7 @@ package github.rikacelery.v3.integration
 import github.rikacelery.v3.components.SessionState
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
+import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.SegmentDownloaded
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -135,17 +136,17 @@ class RoomRoutesIntegrationTest {
         assertEquals(EndReason.NewInit, broken.reason)
 
         // the scheduler preconfigures again automatically after a break and keeps recording
-        fx.awaitEventCount<SegmentDownloaded>(3, 15.seconds) { it.roomId == 1001L }
+        fx.awaitEventCount<RecordingStarted>(2, 15.seconds) { it.roomId == 1001L }
+        val downloadsBeforeRestart = fx.events.filterIsInstance<SegmentDownloaded>().count { it.roomId == 1001L }
 
         // /restart stops the running session (closing its file) and arms the room again
         fx.get("/restart?id=1001").expectOk("Restarted")
         val afterRestart = fx.awaitEventCount<FileReady>(2, 15.seconds) { it.roomId == 1001L }
         assertEquals(EndReason.UserStop, afterRestart[1].reason)
 
-        // an armed room resumes when the stream status changes again
-        fx.mock.setRoomStatus(1001, "off")
-        fx.mock.setRoomStatus(1001, "public")
-        fx.awaitEventCount<SegmentDownloaded>(5, 15.seconds) { it.roomId == 1001L }
+        // the room is still public, so re-arming it records again without a status change
+        fx.awaitEventCount<RecordingStarted>(3, 20.seconds) { it.roomId == 1001L }
+        fx.awaitEventCount<SegmentDownloaded>(downloadsBeforeRestart + 1, 20.seconds) { it.roomId == 1001L }
 
         fx.get("/remove?id=1001").expectOk("Removed")
         val all = fx.awaitEventCount<FileReady>(3, 15.seconds) { it.roomId == 1001L }

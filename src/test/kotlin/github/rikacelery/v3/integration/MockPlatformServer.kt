@@ -83,6 +83,8 @@ class MockRoom(
     @Volatile var availableSegments: Int = 0
     @Volatile var modelToken: String = ""
     @Volatile var freeSpyAccess: Boolean = false
+    /** Platform-side deletion: broadcasts answers 404 "model already deleted". */
+    @Volatile var deleted: Boolean = false
     @Volatile var ticketRate: Int = 100
     @Volatile var privateRate: Int = 50
     val presets: MutableList<String> = CopyOnWriteArrayList(listOf("360p", "720p"))
@@ -207,6 +209,11 @@ class MockPlatformServer(
                 delay(period)
             }
         }.also { ownedJobs += it }
+    }
+
+    /** Marks the model deleted (or restored) on the platform. */
+    fun markDeleted(name: String, deleted: Boolean = true) {
+        (roomsByName[name] ?: error("no mock room named $name")).deleted = deleted
     }
 
     /** Bumps the generation so the next playlist advertises a new init segment. */
@@ -386,6 +393,13 @@ class MockPlatformServer(
                 if (room == null) {
                     call.respondJson(
                         buildJsonObject { put("description", "model not found") },
+                        HttpStatusCode.NotFound
+                    )
+                    return@get
+                }
+                if (room.deleted) {
+                    call.respondJson(
+                        buildJsonObject { put("description", "model already deleted") },
                         HttpStatusCode.NotFound
                     )
                     return@get
