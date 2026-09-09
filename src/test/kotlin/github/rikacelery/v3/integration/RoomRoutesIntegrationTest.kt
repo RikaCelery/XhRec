@@ -7,6 +7,7 @@ import github.rikacelery.v3.events.SegmentDownloaded
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -88,6 +89,26 @@ class RoomRoutesIntegrationTest {
         assertEquals(HttpStatusCode.BadRequest, fx.get("/sizelimit").status)
         assertEquals(HttpStatusCode.BadRequest, fx.get("/autopay?id=1001").status)
         assertEquals(HttpStatusCode.BadRequest, fx.get("/autopay?id=1001&v=true&kind=bogus").status)
+    }
+
+    @Test
+    fun `remove while preconfiguring cancels the arm`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "public")
+        // keep the room in Preconfiguring by stalling its master playlist
+        fx.mock.failNext(fx.mock.masterPath(1001), MockFault.Delay(3.seconds))
+
+        fx.get("/add?name=model").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.await(10.seconds, "master playlist request") {
+            fx.mock.requests().firstOrNull { it.path == fx.mock.masterPath(1001) }
+        }
+
+        fx.get("/remove?id=1001").expectOk("Removed")
+        fx.awaitRoomAbsent(1001)
+        delay(1500)
+        assertTrue(fx.sessions().isEmpty(), "a removed room must not start a session")
+        assertTrue(fx.events.filterIsInstance<SegmentDownloaded>().isEmpty(), "a removed room must not download")
     }
 
     @Test

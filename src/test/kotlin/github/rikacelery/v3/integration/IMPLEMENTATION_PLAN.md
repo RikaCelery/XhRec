@@ -171,11 +171,11 @@ assertTrue(mock.completionOrder(roomId).indexOf(2) < mock.completionOrder(roomId
 
 ### Task 9: Fresh complete verification
 
-- [ ] Map each original requirement to an executed test name; fill gaps through RED/GREEN.
-- [ ] Run `./gradlew clean test`.
-- [ ] Run `./gradlew test --tests 'github.rikacelery.v3.integration.*'` twice.
-- [ ] Run `git diff --check`.
-- [ ] Confirm request history is loopback-only and Gradle exits without server/client/coroutine leaks.
-- [ ] Commit final corrections as `test: complete mock integration coverage`.
+- [x] Map each original requirement to an executed test name; fill gaps through RED/GREEN.
+- [x] Run `./gradlew clean test`.
+- [x] Run `./gradlew test --tests 'github.rikacelery.v3.integration.*'` twice.
+- [x] Run `git diff --check`.
+- [x] Confirm request history is loopback-only and Gradle exits without server/client/coroutine leaks.
+- [x] Commit final corrections as `test: complete mock integration coverage`.
 
 Expected evidence: every command exits 0; exact bytes match; forced out-of-order downloads are written in order; two rooms remain isolated; both WS and polling drive recording; production defaults remain unchanged.
