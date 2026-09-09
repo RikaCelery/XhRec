@@ -1,14 +1,12 @@
 package github.rikacelery.v3.integration
 
 import github.rikacelery.v3.components.SessionState
-import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.SegmentDownloaded
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
-import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -18,7 +16,6 @@ import org.junit.jupiter.api.Test
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -266,35 +263,6 @@ class RoomRoutesIntegrationTest {
         assertTrue(room.autoPayTicket && room.autoPaySpy, "bare 'autopay' enables both kinds")
         fx.awaitSession(1001, SessionState.Recording, quality = "720p")
     }
-}
-
-private fun withFixture(
-    tuning: RuntimeTuning = XhrecIntegrationFixture.testTuning(),
-    block: suspend (XhrecIntegrationFixture) -> Unit
-) = testApplication {
-    XhrecIntegrationFixture(this, tuning = tuning).use { fx ->
-        fx.start()
-        fx.installRoutes()
-        block(fx)
-    }
-}
-
-/** Adds an inactive room, activates it, publishes public status and waits for recording. */
-private suspend fun XhrecIntegrationFixture.startRecording(
-    roomId: Long = 1001L,
-    name: String = "model",
-    status: String = "public",
-    segmentPeriod: Duration = 30.milliseconds
-) {
-    mock.addRoom(roomId, name, status = status)
-    get("/add?name=$name&active=false").expectOk("Room added: $name")
-    awaitRoom(name) { !it.bool("listening") }
-    get("/activate?id=$roomId").expectOk("Activated")
-    mock.startSegments(roomId, segmentPeriod)
-    awaitRoomSubscribed(roomId)
-    mock.setRoomStatus(roomId, status)
-    awaitSession(roomId, SessionState.Recording)
-    awaitEvent<SegmentDownloaded>(10.seconds) { it.roomId == roomId }
 }
 
 private fun JsonObject.bool(field: String): Boolean =

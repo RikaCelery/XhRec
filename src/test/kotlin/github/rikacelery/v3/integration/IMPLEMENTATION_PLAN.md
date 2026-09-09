@@ -146,12 +146,12 @@ fixture.awaitRoomAbsent(1001)
 
 **Files:** create StatusFlowIntegrationTest and DownloadIntegrityIntegrationTest.
 
-- [ ] Write RED: start segments, activate offline room, set public, await four segments, set off, await FileReady, compare bytes with mock expected bytes.
-- [ ] Force segment 2 to complete before 1; assert inverted completion history and ordered output.
-- [ ] Add table-driven RED/GREEN cases for offline/public/group/private/unknown room states and distributing/finished stream states, including paid-show guards.
-- [ ] Add automatic `off -> public -> groupShow -> p2p -> public -> off` rotation and two-room state/byte isolation.
-- [ ] Add exact-boundary tests for sliding-window dedupe, init change, break, restart, time/size limits, 404 no-retry, transient 500, and stall/retry.
-- [ ] Run both classes twice/full suite; commit as `test: verify status actions and recording bytes`.
+- [x] Write RED: start segments, activate offline room, set public, await four segments, set off, await FileReady, compare bytes with mock expected bytes.
+- [x] Force segment 2 to complete before 1; assert inverted completion history and ordered output.
+- [x] Add table-driven RED/GREEN cases for offline/public/group/private/unknown room states and distributing/finished stream states, including paid-show guards.
+- [x] Add automatic `off -> public -> groupShow -> p2p -> public -> off` rotation and two-room state/byte isolation.
+- [x] Add exact-boundary tests for sliding-window dedupe, init change, break, restart, time/size limits, 404 no-retry, transient 500, and stall/retry.
+- [x] Run both classes twice/full suite; commit as `test: verify status actions and recording bytes`.
 
 ```kotlin
 assertContentEquals(mock.expectedBytes(roomId, generation, throughIndex), ready.file.readBytes())

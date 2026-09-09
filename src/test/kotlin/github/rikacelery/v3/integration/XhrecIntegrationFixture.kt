@@ -30,6 +30,7 @@ import github.rikacelery.v3.events.CommandEnvelope
 import github.rikacelery.v3.events.GetArmedRoomIds
 import github.rikacelery.v3.events.GetRooms
 import github.rikacelery.v3.events.GetSessions
+import github.rikacelery.v3.events.SegmentDownloaded
 import github.rikacelery.v3.events.RoomAdded
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
@@ -44,6 +45,7 @@ import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.server.testing.ApplicationTestBuilder
+import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -391,7 +393,9 @@ class XhrecIntegrationFixture(
         fun testTuning(
             roomPollInterval: Duration = 200.milliseconds,
             playlistPollInterval: Duration = 40.milliseconds,
-            downloaderDeadline: Duration = 5.seconds
+            downloaderDeadline: Duration = 5.seconds,
+            downloaderRaceDelay: Duration = 150.milliseconds,
+            downloaderStallTimeout: Duration = 1.seconds
         ) = RuntimeTuning(
             roomPollInterval = roomPollInterval,
             roomRefreshDebounce = 20.milliseconds,
@@ -401,10 +405,10 @@ class XhrecIntegrationFixture(
             playlistPollInterval = playlistPollInterval,
             playlistFetchTimeout = 3.seconds,
             httpRestartDelay = 10.milliseconds,
-            downloaderRaceDelay = 150.milliseconds,
+            downloaderRaceDelay = downloaderRaceDelay,
             downloaderAttemptTimeout = 2.seconds,
             downloaderDeadline = downloaderDeadline,
-            downloaderStallTimeout = 1.seconds,
+            downloaderStallTimeout = downloaderStallTimeout,
             downloaderRetryBackoff = 20.milliseconds
         )
     }
@@ -443,3 +447,35 @@ class TestHttpClientProvider : HttpClientProvider, AutoCloseable {
         strict.close()
     }
 }
+
+internal fun withFixture(
+    tuning: RuntimeTuning = XhrecIntegrationFixture.testTuning(),
+    block: suspend (XhrecIntegrationFixture) -> Unit
+) = testApplication {
+    XhrecIntegrationFixture(this, tuning = tuning).use { fx ->
+        fx.start()
+        fx.installRoutes()
+        block(fx)
+    }
+}
+
+/** Adds an inactive room, activates it, publishes public status and waits for recording. */
+internal suspend fun XhrecIntegrationFixture.startRecording(
+    roomId: Long = 1001L,
+    name: String = "model",
+    status: String = "public",
+    segmentPeriod: Duration = 30.milliseconds
+) {
+    mock.addRoom(roomId, name, status = status)
+    get("/add?name=$name&active=false").expectOk("Room added: $name")
+    awaitRoom(name) { !it.boolField("listening") }
+    get("/activate?id=$roomId").expectOk("Activated")
+    mock.startSegments(roomId, segmentPeriod)
+    awaitRoomSubscribed(roomId)
+    mock.setRoomStatus(roomId, status)
+    awaitSession(roomId, SessionState.Recording)
+    awaitEvent<SegmentDownloaded>(10.seconds) { it.roomId == roomId }
+}
+
+internal fun JsonObject.boolField(field: String): Boolean =
+    this[field]?.jsonPrimitive?.content?.toBoolean() ?: false
