@@ -588,6 +588,7 @@ class SchedulerComponent(
     override suspend fun onStart(scope: CoroutineScope) {
         subscribe<RoomStatusChanged>(RoomStatusChanged::class)
         subscribe<StreamStatusChanged>(StreamStatusChanged::class)
+        subscribe<RoomRemoved>(RoomRemoved::class)
         subscribe<SessionExit>(SessionExit::class)
         subscribe<QualityChangeRequested>(QualityChangeRequested::class)
         subscribe<CommandEnvelope>(CommandEnvelope::class)
@@ -599,6 +600,7 @@ class SchedulerComponent(
     override suspend fun wrapEvent(event: Any): SchedulerMsg? = when (event) {
         is RoomStatusChanged -> SchedulerBus(event)
         is StreamStatusChanged -> SchedulerBus(event)
+        is RoomRemoved -> SchedulerBus(event)
         is SessionExit -> SchedulerBus(event)
         is QualityChangeRequested -> SchedulerBus(event)
         is CommandEnvelope -> SchedulerHandleCommand(event)
@@ -625,6 +627,14 @@ class SchedulerComponent(
             is WriterFatal -> {
                 logger.error("Writer fatal room {}: {}", event.roomId, event.error)
                 entries.remove(event.roomId)?.scope?.cancel()
+            }
+            // A room removed from the list while armed/recording must be disarmed and its
+            // recording stopped, otherwise the session keeps writing and the UI shows a
+            // ghost row (see issue #141). Mirrors the DeactivateCmd branch.
+            is RoomRemoved -> {
+                entries.remove(event.roomId)?.scope?.cancel()
+                sessionComponent.tell(StopRecording(event.roomId, EndReason.UserStop))
+                logger.info("Room {} removed: disarmed and recording stopped", event.roomId)
             }
             is AuthExpired -> logger.warn("Auth expired user {}", event.userId)
             is StopEvent -> {
