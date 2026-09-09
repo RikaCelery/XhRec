@@ -5,6 +5,7 @@ import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Hosts
+import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.data.RoomStatus
 import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.User
@@ -701,6 +702,19 @@ class SchedulerComponent(
                     }
                     logger.info("Room {} ({}) activated (armed)", name, cmd.roomId)
                     requestBus.request<OkResponse>(RefreshRoomCmd(cmd.roomId))
+                    // Arming a room that is already recordable must not wait for the next
+                    // status event: the refresh above only publishes RoomStatusChanged when
+                    // the status actually changes, so an already-public room would sit armed
+                    // until something else moved. Feed the current status into the FSM.
+                    val currentStatus = requestBus.request<List<Room>>(GetRooms)
+                        .firstOrNull { it.id == cmd.roomId }?.status.orEmpty()
+                    if (currentStatus.isNotEmpty() && entries[cmd.roomId]?.canRecord(currentStatus) == true) {
+                        driveFsm(
+                            cmd.roomId,
+                            SchedulerEvent.RoomStatusChanged,
+                            SchedulerDriveData(roomStatus = currentStatus)
+                        )
+                    }
                 } catch (_: Exception) {
                 }
                 OkResponse
