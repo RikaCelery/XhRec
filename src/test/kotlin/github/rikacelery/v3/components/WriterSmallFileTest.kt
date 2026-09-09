@@ -9,9 +9,8 @@ import github.rikacelery.v3.data.StreamStart
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.hooks.EventHook
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -29,7 +28,7 @@ class WriterSmallFileTest {
     fun `zero threshold retains short textual recording with exact bytes`() = runTest(UnconfinedTestDispatcher()) {
         val input = "short recording".toByteArray()
         val tmpDir = Files.createTempDirectory("writer-small-file-").toFile()
-        val (eventBus, published) = setupEventCapture()
+        val (eventBus, published, ready) = setupEventCapture(1)
         val dataChannel = DataChannel()
         val writer = WriterComponent(
             dataChannel = dataChannel,
@@ -43,10 +42,9 @@ class WriterSmallFileTest {
         try {
             sendRecording(dataChannel, input)
             advanceUntilIdle()
-            awaitWriter()
 
-            val ready = published.filterIsInstance<FileReady>().single()
-            assertContentEquals(input, ready.file.readBytes())
+            assertContentEquals(input, ready.await().file.readBytes())
+            assertEquals(1, published.filterIsInstance<FileReady>().single().roomId)
         } finally {
             writer.stop()
             tmpDir.deleteRecursively()
@@ -56,64 +54,62 @@ class WriterSmallFileTest {
     @Test
     fun `default threshold deletes 1023 byte recording without publishing`() = runTest(UnconfinedTestDispatcher()) {
         val tmpDir = Files.createTempDirectory("writer-small-file-").toFile()
-        val eventBus = EventBus()
-        val published = mutableListOf<Any>()
-        eventBus.installHook(object : EventHook {
-            override suspend fun intercept(event: Any): Any {
-                published += event
-                return event
-            }
-        })
+        val (eventBus, published, roomTwoReady) = setupEventCapture(2)
         val dataChannel = DataChannel()
         val writer = WriterComponent(
             dataChannel = dataChannel,
             tmpDir = tmpDir,
             eventBus = eventBus,
             parentScope = this,
-            minOutputBytes = 1024
         )
         writer.start()
 
         try {
             sendRecording(dataChannel, ByteArray(1023) { it.toByte() })
+            sendRecording(dataChannel, ByteArray(1024) { it.toByte() }, roomId = 2, roomName = "room-two")
             advanceUntilIdle()
-            awaitWriter()
+            roomTwoReady.await()
 
-            assertTrue(published.none { it is FileReady })
-            assertEquals(emptyList(), tmpDir.listFiles()?.toList() ?: emptyList())
+            assertTrue(published.filterIsInstance<FileReady>().none { it.roomId == 1L })
+            assertTrue(tmpDir.listFiles()?.none { it.name.startsWith("room-2026-01-01-080000") } ?: true)
         } finally {
             writer.stop()
             tmpDir.deleteRecursively()
         }
     }
 
-    private fun setupEventCapture(): Pair<EventBus, MutableList<Any>> {
+    private fun setupEventCapture(targetRoomId: Long): Triple<EventBus, MutableList<Any>, CompletableDeferred<FileReady>> {
         val eventBus = EventBus()
         val published = mutableListOf<Any>()
+        val targetReady = CompletableDeferred<FileReady>()
         eventBus.installHook(object : EventHook {
             override suspend fun intercept(event: Any): Any {
                 published += event
+                if (event is FileReady && event.roomId == targetRoomId) {
+                    targetReady.complete(event)
+                }
                 return event
             }
         })
-        return eventBus to published
+        return Triple(eventBus, published, targetReady)
     }
 
-    private suspend fun sendRecording(dataChannel: DataChannel, input: ByteArray) {
+    private suspend fun sendRecording(
+        dataChannel: DataChannel,
+        input: ByteArray,
+        roomId: Long = 1,
+        roomName: String = "room"
+    ) {
         val startTime = Instant.parse("2026-01-01T00:00:00Z")
-        dataChannel.send(StreamStart(1, "room", startTime, "highest"))
+        dataChannel.send(StreamStart(roomId, roomName, startTime, "highest"))
         dataChannel.send(
             StreamData(
-                roomId = 1,
+                roomId = roomId,
                 data = input,
                 segmentIndex = 0,
                 meta = DownloadMeta("test", 0, false, startTime)
             )
         )
-        dataChannel.send(StreamEnd(1, EndReason.StreamEnd))
-    }
-
-    private suspend fun awaitWriter() {
-        withContext(Dispatchers.IO) { Thread.sleep(100) }
+        dataChannel.send(StreamEnd(roomId, EndReason.StreamEnd))
     }
 }
