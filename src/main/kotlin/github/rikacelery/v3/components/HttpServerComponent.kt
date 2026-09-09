@@ -40,7 +40,8 @@ class HttpServerComponent(
     private val postProcessorComponent: PostProcessorComponent,
     private val scope: CoroutineScope,
     private val mseStore: MseStore = MseStore(),
-    private val apiToken: String = ""
+    private val apiToken: String = "",
+    private val restartDelay: Duration = 500.milliseconds
 ) {
     private val logger = LoggerFactory.getLogger("v3.HttpServer")
     private val stopping = AtomicBoolean(false)
@@ -79,6 +80,19 @@ class HttpServerComponent(
                 keyStorePath = keyStoreFile
             }
         }) {
+            installApplication(this, stopEngine = { engine.stop(1000, 5000) })
+        }
+        engine.start(wait = false)
+        logger.info("HTTP server started on port $port")
+        return engine
+    }
+
+    /**
+     * Installs the shared XhRec control routes. Production passes a real engine stop;
+     * tests pass a no-op so the route table can be driven through Ktor's test host.
+     */
+    fun installApplication(application: Application, stopEngine: suspend () -> Unit) {
+        application.apply {
             if (apiToken.isNotBlank()) {
                 intercept(ApplicationCallPipeline.Plugins) {
                     val path = call.request.uri.substringBefore('?')
@@ -179,7 +193,7 @@ class HttpServerComponent(
 
                         write("OK\n"); flush()
                     }
-                    engine.stop(1000, 5000)
+                    stopEngine()
                     eventBus.publish("ServerShutdown")
                 }
                 get("/remove") {
@@ -197,7 +211,7 @@ class HttpServerComponent(
                         status = HttpStatusCode.BadRequest
                     )
                     requestBus.request<OkResponse>(DeactivateCmd(id))
-                    delay(0.5.seconds)
+                    delay(restartDelay)
                     requestBus.request<OkResponse>(ActivateRecordingCmd(id))
                     call.respondText("Restarted")
                 }
@@ -618,9 +632,6 @@ class HttpServerComponent(
                 }
             }
         }
-        engine.start(wait = false)
-        logger.info("HTTP server started on port $port")
-        return engine
     }
 
 

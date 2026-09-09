@@ -79,11 +79,11 @@ val masterUrls: (Long, String, String?) -> List<String> = ::productionMasterUrls
 
 **Files:** modify `build.gradle.kts` and HttpServerComponent; create `HttpRoutesTest.kt`.
 
-- [ ] Add `ktor-server-websockets-jvm:3.5.2` and test dependency `ktor-server-test-host-jvm:3.5.2`.
-- [ ] Write failing testApplication test: install production routes, call active `/add`, prove AddRoom precedes ActivateRecordingCmd.
-- [ ] Run it; expect failure because routes are private inside `start()`.
-- [ ] Extract `installApplication(Application, stopEngine)`; production supplies real shutdown, tests no-op. Keep Netty/TLS/keystore in start. Inject restart delay.
-- [ ] Run focused/full tests; commit as `refactor: expose shared XhRec control routes`.
+- [x] Add `ktor-server-websockets-jvm:3.5.2` and test dependency `ktor-server-test-host-jvm:3.5.2`.
+- [x] Write failing testApplication test: install production routes, call active `/add`, prove AddRoom precedes ActivateRecordingCmd.
+- [x] Run it; expect failure because routes are private inside `start()`.
+- [x] Extract `installApplication(Application, stopEngine)`; production supplies real shutdown, tests no-op. Keep Netty/TLS/keystore in start. Inject restart delay.
+- [x] Run focused/full tests; commit as `refactor: expose shared XhRec control routes`.
 
 ```kotlin
 application { server.installApplication(this, stopEngine = {}) }

@@ -22,6 +22,7 @@ dependencies {
 
     implementation("io.ktor:ktor-server-core-jvm:3.5.2")
     implementation("io.ktor:ktor-server-netty-jvm:3.5.2")
+    implementation("io.ktor:ktor-server-websockets-jvm:3.5.2")
     implementation("io.ktor:ktor-network-tls-certificates-jvm:3.5.2")
     implementation("io.ktor:ktor-server-cors:3.5.2")
     implementation("io.ktor:ktor-server-content-negotiation-jvm:3.5.2")
@@ -40,6 +41,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("io.ktor:ktor-client-mock-jvm:3.5.2")
+    testImplementation("io.ktor:ktor-server-test-host-jvm:3.5.2")
     testImplementation(platform("org.junit:junit-bom:6.0.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
 }
