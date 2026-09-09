@@ -162,12 +162,12 @@ assertTrue(mock.completionOrder(roomId).indexOf(2) < mock.completionOrder(roomId
 
 **Files:** create WebSocketFallbackIntegrationTest.
 
-- [ ] Write RED: with polling long, push broadcastChanged(public) and require Recording before any poll.
-- [ ] Add RED/GREEN cases for nested modelStatusChanged, streamChanged, duplicate suppression, malformed then valid frames, subscription expansion/reduction, and removal unsubscribe.
-- [ ] Write RED fallback: reject/disconnect WS, change only HTTP status, require polling to record, assert no WS push delivered it.
-- [ ] Write RED recovery: restore WS, await reconnect/resubscribe, require one debounced catch-up, then prove pushes resume without duplicates.
-- [ ] Run the class three times/full suite; verify loopback-only traffic and bounded teardown.
-- [ ] Commit as `test: verify websocket delivery and polling fallback`.
+- [x] Write RED: with polling long, push broadcastChanged(public) and require Recording before any poll.
+- [x] Add RED/GREEN cases for nested modelStatusChanged, streamChanged, duplicate suppression, malformed then valid frames, subscription expansion/reduction, and removal unsubscribe.
+- [x] Write RED fallback: reject/disconnect WS, change only HTTP status, require polling to record, assert no WS push delivered it.
+- [x] Write RED recovery: restore WS, await reconnect/resubscribe, require one debounced catch-up, then prove pushes resume without duplicates.
+- [x] Run the class three times/full suite; verify loopback-only traffic and bounded teardown.
+- [x] Commit as `test: verify websocket delivery and polling fallback`.
 
 ### Task 9: Fresh complete verification
 

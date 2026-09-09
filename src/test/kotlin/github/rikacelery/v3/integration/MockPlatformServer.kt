@@ -273,16 +273,33 @@ class MockPlatformServer(
 
     // ── internals ──────────────────────────────────────────────────────────────
 
-    private suspend fun push(channel: String, data: JsonObject) {
-        val message = buildJsonObject {
-            put("push", buildJsonObject {
-                put("channel", channel)
-                put("pub", buildJsonObject { put("data", data) })
-            })
-        }.toString()
+    /** Sends a typed push frame to every session subscribed to [channel]. */
+    suspend fun push(channel: String, data: JsonObject) {
         recordedPushes += MockPush(channel, data)
+        deliver(
+            channel,
+            buildJsonObject {
+                put("push", buildJsonObject {
+                    put("channel", channel)
+                    put("pub", buildJsonObject { put("data", data) })
+                })
+            }.toString()
+        )
+    }
+
+    /** Sends raw text frames (one JSON object per line) to subscribers of [channel]. */
+    suspend fun pushRaw(channel: String, text: String) = deliver(channel, text)
+
+    private suspend fun deliver(channel: String, message: String) {
         sessions.filter { it.subscribed.contains(channel) }.forEach { it.send(message) }
     }
+
+    /** Blocks until no session is subscribed to [channel] any more. */
+    suspend fun awaitSubscriptionGone(channel: String, timeout: Duration = 5.seconds): Boolean =
+        withTimeoutOrNull(timeout) {
+            while (subscribedChannels().contains(channel)) delay(20.milliseconds)
+            true
+        } ?: false
 
     private fun ApplicationCall.record() {
         recordedRequests += MockRequest(
