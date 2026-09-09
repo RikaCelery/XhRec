@@ -29,11 +29,11 @@
 
 **Files:** modify `WriterComponent.kt`; create `WriterSmallFileTest.kt`.
 
-- [ ] Write failing tests that send StreamStart, short StreamData, and StreamEnd: threshold 0 retains exact bytes; threshold 1024 deletes 1023 bytes.
-- [ ] Run `./gradlew test --tests '*WriterSmallFileTest'`; expect compilation failure because the parameter is absent.
-- [ ] Add `private val minOutputBytes: Long = 1024` and use it instead of the literal in `closeActiveFile`.
-- [ ] Run focused and full tests; expect all to pass.
-- [ ] Commit as `test: make writer small-file policy configurable`.
+- [x] Write failing tests that send StreamStart, short StreamData, and StreamEnd: threshold 0 retains exact bytes; threshold 1024 deletes 1023 bytes.
+- [x] Run `./gradlew test --tests '*WriterSmallFileTest'`; expect compilation failure because the parameter is absent.
+- [x] Add `private val minOutputBytes: Long = 1024` and use it instead of the literal in `closeActiveFile`.
+- [x] Run focused and full tests; expect all to pass.
+- [x] Commit as `test: make writer small-file policy configurable`.
 
 ```kotlin
 val file = record("mock-segment".encodeToByteArray(), minOutputBytes = 0)
@@ -44,9 +44,9 @@ assertContentEquals("mock-segment".encodeToByteArray(), file.readBytes())
 
 **Files:** create `HttpClientProvider.kt` and `RuntimeTuning.kt`; modify ApiClient, ConfigComponent, Main, and callers/tests.
 
-- [ ] Write failing tests proving two ApiClient instances keep independent hosts and RuntimeTuning preserves current production values.
-- [ ] Run focused tests; expect missing constructor/types.
-- [ ] Add this boundary; the default implementation delegates to ClientManager:
+- [x] Write failing tests proving two ApiClient instances keep independent hosts and RuntimeTuning preserves current production values.
+- [x] Run focused tests; expect missing constructor/types.
+- [x] Add this boundary; the default implementation delegates to ClientManager:
 
 ```kotlin
 interface HttpClientProvider {
@@ -55,20 +55,20 @@ interface HttpClientProvider {
 }
 ```
 
-- [ ] Convert ApiClient to an instance accepting initial hosts, provider, and base-URL builder. Default remains HTTPS. Construct and share one production instance in Main/Config/Room/Scheduler/LiveEvent/Bootstrap.
-- [ ] Add timings: room poll 5m, debounce 1500ms, WS reconnect 1s..30s, preconfig 15s, playlist poll 3s/fetch 10s, restart 500ms, downloader race 8s/attempt 25s/deadline 120s/stall 5s/backoff 500ms.
-- [ ] Run focused tests, compilation, and full tests; expect all to pass.
-- [ ] Commit as `refactor: make network clients and timing injectable`.
+- [x] Convert ApiClient to an instance accepting initial hosts, provider, and base-URL builder. Default remains HTTPS. Construct and share one production instance in Main/Config/Room/Scheduler/LiveEvent/Bootstrap.
+- [x] Add timings: room poll 5m, debounce 1500ms, WS reconnect 1s..30s, preconfig 15s, playlist poll 3s/fetch 10s, restart 500ms, downloader race 8s/attempt 25s/deadline 120s/stall 5s/backoff 500ms.
+- [x] Run focused tests, compilation, and full tests; expect all to pass.
+- [x] Commit as `refactor: make network clients and timing injectable`.
 
 ### Task 3: Inject live-recording boundaries
 
 **Files:** modify Room, LiveEventSource, Scheduler, Session, and Downloader; create `RuntimeInjectionTest.kt`.
 
-- [ ] Write failing construction tests using a recording provider, short timings, loopback WS URL builder, and loopback master candidates.
-- [ ] Run focused tests; expect constructor/API failures.
-- [ ] Replace only existing literals: Room poll/debounce; WS client/URL/backoff; Scheduler client/master/preconfig; Session client/playlist; Downloader client/failure timings. Keep production defaults.
-- [ ] Assert exact loopback URLs are used and ClientManager is not reached.
-- [ ] Run focused/full tests; commit as `refactor: inject recording network and timing boundaries`.
+- [x] Write failing construction tests using a recording provider, short timings, loopback WS URL builder, and loopback master candidates.
+- [x] Run focused tests; expect constructor/API failures.
+- [x] Replace only existing literals: Room poll/debounce; WS client/URL/backoff; Scheduler client/master/preconfig; Session client/playlist; Downloader client/failure timings. Keep production defaults.
+- [x] Assert exact loopback URLs are used and ClientManager is not reached.
+- [x] Run focused/full tests; commit as `refactor: inject recording network and timing boundaries`.
 
 ```kotlin
 val wsUrl: (String) -> String = { "wss://$it/connection/websocket" }

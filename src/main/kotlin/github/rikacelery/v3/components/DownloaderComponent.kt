@@ -6,10 +6,12 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.OrderedEmitter
 import github.rikacelery.v3.data.DownloadMeta
 import github.rikacelery.v3.data.DownloadResult
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.hooks.DownloaderHook
 import github.rikacelery.v3.utils.CdnSelector
-import github.rikacelery.v3.utils.ClientManager
+import github.rikacelery.v3.utils.DefaultHttpClientProvider
+import github.rikacelery.v3.utils.HttpClientProvider
 import io.ktor.client.*
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.ResponseException
@@ -45,7 +47,9 @@ class DownloaderComponent(
     private val hooks: List<DownloaderHook> = emptyList(),
     eventBus: EventBus,
     parentScope: CoroutineScope,
-    private val initialConcurrency: Int = 16
+    private val initialConcurrency: Int = 16,
+    private val httpClientProvider: HttpClientProvider = DefaultHttpClientProvider,
+    private val runtimeTuning: RuntimeTuning = RuntimeTuning()
 ) : Actor<DownloaderMsg>("DownloaderComponent", eventBus, parentScope) {
 
     private val rooms = ConcurrentHashMap<Long, ActiveDownload>()
@@ -147,22 +151,7 @@ class DownloaderComponent(
         eventBus.publish(CutPointDone(cut.roomId, cut.generation, cut.reason))
     }
 
-    /** Start a parallel proxied attempt if the direct attempt hasn't succeeded within this time. */
-    private val raceThresholdMs: Long = 8_000
-    /** Hard cap for a single (host × direct/proxy) attempt. */
-    private val perAttemptTimeoutMs: Long = 25_000
-    /**
-     * Overall budget to obtain a segment before giving up ("尽力获取" window).
-     * A 404 (assignment expired) stops the loop immediately; transport errors / stalls /
-     * 5xx keep cycling through the remaining CDN hosts until the deadline.
-     */
-    private val segmentDeadlineMs: Long = 120_000
-    /** Stall watchdog: abort the attempt when no bytes arrive within this window. */
-    private val stallTimeoutMs: Long = 5_000
-    /** Base backoff between cross-host retries (jittered). */
-    private val retryBaseBackoffMs: Long = 500
-
-    /** Thrown when a download stalls (no bytes for [stallTimeoutMs]); treated as transport error. */
+    /** Thrown when a download stalls; treated as transport error. */
     private class StreamStallException(message: String) : Exception(message)
 
     // ── Probe scheduling ──
@@ -187,6 +176,7 @@ class DownloaderComponent(
      */
     private suspend fun downloadSegment(url: String, idx: Int): DownloadResult {
         val start = System.currentTimeMillis()
+        val segmentDeadlineMs = runtimeTuning.downloaderDeadline.inWholeMilliseconds
         val deadline = start + segmentDeadlineMs
         val tried = LinkedHashSet<String>()
         var lastFail: DownloadResult.Failed? = null
@@ -203,7 +193,7 @@ class DownloaderComponent(
 
             val resolvedUrl = if (CdnSelector.hosts.isNotEmpty()) CdnSelector.rewriteHost(url, host) else url
             val result = try {
-                attemptDownload(resolvedUrl, idx, minOf(perAttemptTimeoutMs, remaining))
+                attemptDownload(resolvedUrl, idx, minOf(runtimeTuning.downloaderAttemptTimeout.inWholeMilliseconds, remaining))
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -234,7 +224,12 @@ class DownloaderComponent(
                 else -> { /* CutPoint cannot happen here */ }
             }
 
-            val backoff = retryBaseBackoffMs + Random.nextLong(0, retryBaseBackoffMs)
+            val retryBaseBackoffMs = runtimeTuning.downloaderRetryBackoff.inWholeMilliseconds
+            val backoff = if (retryBaseBackoffMs > 0) {
+                retryBaseBackoffMs + Random.nextLong(0, retryBaseBackoffMs)
+            } else {
+                0
+            }
             if (System.currentTimeMillis() + backoff >= deadline) break
             delay(backoff)
         }
@@ -269,9 +264,10 @@ class DownloaderComponent(
         return withTimeoutOrNull(budgetMs.milliseconds) {
             coroutineScope {
                 val directDeferred = async {
-                    downloadWithClient(ClientManager.getClient("dl_${Random.nextInt(32)}"), resolvedUrl, idx, false)
+                    downloadWithClient(httpClientProvider.direct("dl_${Random.nextInt(32)}"), resolvedUrl, idx, false)
                 }
 
+                val raceThresholdMs = runtimeTuning.downloaderRaceDelay.inWholeMilliseconds
                 val directResult = withTimeoutOrNull(minOf(raceThresholdMs, budgetMs).milliseconds) { directDeferred.await() }
                 if (directResult is DownloadResult.Success) {
                     val dur = System.currentTimeMillis() - start
@@ -284,7 +280,7 @@ class DownloaderComponent(
 
                 logger.debug("Direct download slow/failed for idx={}, falling back to proxy race", idx)
                 val proxyDeferred = async {
-                    downloadWithClient(ClientManager.getProxiedClient("px_${Random.nextInt(5)}"), resolvedUrl, idx, true)
+                    downloadWithClient(httpClientProvider.proxied("px_${Random.nextInt(5)}"), resolvedUrl, idx, true)
                 }
 
                 val result = if (directDeferred.isCompleted) {
@@ -317,18 +313,18 @@ class DownloaderComponent(
     ): DownloadResult {
         return try {
             // Stall watchdog #1: no response headers within stallTimeoutMs → dead path, bail out.
-            val response = withTimeout(stallTimeoutMs.milliseconds) { client.get(url) }
+            val response = withTimeout(runtimeTuning.downloaderStallTimeout) { client.get(url) }
             val stream = response.bodyAsChannel()
             val bos = ByteArrayOutputStream()
             while (!stream.isClosedForRead) {
                 val buf = ByteArray(8192)
                 // Stall watchdog #2: no bytes within stallTimeoutMs → disconnect and retry elsewhere.
                 val read = try {
-                    withTimeout(stallTimeoutMs.milliseconds) { stream.readAvailable(buf) }
+                    withTimeout(runtimeTuning.downloaderStallTimeout) { stream.readAvailable(buf) }
                 } catch (e: TimeoutCancellationException) {
                     // rethrow if the race cancelled us; otherwise it's a genuine stall
                     currentCoroutineContext().ensureActive()
-                    throw StreamStallException("no data for ${stallTimeoutMs}ms")
+                    throw StreamStallException("no data for ${runtimeTuning.downloaderStallTimeout.inWholeMilliseconds}ms")
                 }
                 if (read <= 0) break
                 bos.write(buf, 0, read)
@@ -337,6 +333,7 @@ class DownloaderComponent(
         } catch (e: TimeoutCancellationException) {
             // our own stall watchdog on client.get(); external cancellation is rethrown via ensureActive
             currentCoroutineContext().ensureActive()
+            val stallTimeoutMs = runtimeTuning.downloaderStallTimeout.inWholeMilliseconds
             logger.warn("downloadWithClient stalled: idx=$idx, url=$url, proxied=$proxied (no response within ${stallTimeoutMs}ms)")
             DownloadResult.Failed(idx, url, "stall: no response within ${stallTimeoutMs}ms", transportError = true)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -370,7 +367,7 @@ class DownloaderComponent(
             try {
                 val rewritten = CdnSelector.rewriteHost(url, host)
                 val probeStart = System.currentTimeMillis()
-                val client = ClientManager.getClient("probe_" + Random.nextInt(32))
+                val client = httpClientProvider.direct("probe_" + Random.nextInt(32))
                 try {
                     withTimeoutOrNull(5_000) {
                         client.head(rewritten)

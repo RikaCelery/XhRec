@@ -6,6 +6,7 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.RoomStatus
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.User
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.fsm.KEEP
@@ -16,7 +17,8 @@ import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.m3u8.MasterPlaylist
 import github.rikacelery.v3.m3u8.VariantStream
 import github.rikacelery.v3.utils.CdnSelector
-import github.rikacelery.v3.utils.ClientManager
+import github.rikacelery.v3.utils.DefaultHttpClientProvider
+import github.rikacelery.v3.utils.HttpClientProvider
 import github.rikacelery.v3.utils.PathSingle
 import github.rikacelery.v3.utils.PathSingleOrNull
 import github.rikacelery.v3.utils.asInt
@@ -85,6 +87,18 @@ data class SchedulerHandleCommand(val env: CommandEnvelope) : SchedulerMsg
 
 private val schedulerLogger = LoggerFactory.getLogger("v3.SchedulerEntry")
 
+internal fun productionMasterUrls(roomId: Long, pkey: String, token: String?): List<String> =
+    (listOf(Hosts.current.hlsMasterHost) + Hosts.current.hlsHosts).distinct().map { host ->
+        buildUrl {
+            protocol = URLProtocol.HTTPS
+            this.host = host
+            encodedPath = "/hls/$roomId/master/${roomId}_auto.m3u8"
+            parameters["psch"] = "v2"
+            parameters["pkey"] = pkey
+            token?.takeIf { it.isNotEmpty() }?.let { parameters["aclAuth"] = it }
+        }.toString()
+    }
+
 class SchedulerEntry(
     val roomId: Long,
     var roomName: String,
@@ -151,9 +165,9 @@ class SchedulerEntry(
         launch { component.tell(SchedulerSignal(roomId, event, data)) }
     }
 
-    /** Start the fixed-delay preconfig loop: first attempt immediately, then 15s after each completion. */
+    /** Start the fixed-delay preconfig loop: first attempt immediately, then wait the configured interval. */
     internal fun startPreconfigLoop() {
-        preconfigLoop.start(15.seconds) { component.tell(preconfigSignal()) }
+        preconfigLoop.start(component.runtimeTuning.preconfigRetryInterval) { component.tell(preconfigSignal()) }
     }
 
     internal fun stopPreconfigLoop() {
@@ -302,11 +316,11 @@ class SchedulerEntry(
     }
 
     private suspend fun fetchMaster(token: String?): MasterPlaylist {
-        val client = ClientManager.getProxiedClient("master_$roomId")
-        val hosts = (listOf(Hosts.current.hlsMasterHost) + Hosts.current.hlsHosts).distinct()
+        val client = component.httpClientProvider.proxied("master_$roomId")
+        val urls = component.masterUrlCandidates(roomId, pkey, token)
         var lastErr: Throwable? = null
-        for (host in hosts) {
-            val url = buildMasterUrl(host, token)
+        for (url in urls) {
+            val host = Url(url).host
             try {
                 val response = withRetry(3) { client.get(url) }
                 return M3u8Parser.parseMaster(response.bodyAsText())
@@ -333,15 +347,6 @@ class SchedulerEntry(
         }
         return match.keyName
     }
-
-    private fun buildMasterUrl(host: String, token: String?): String = buildUrl {
-        protocol = URLProtocol.HTTPS
-        this.host = host
-        encodedPath = "/hls/$roomId/master/${roomId}_auto.m3u8"
-        parameters["psch"] = "v2"
-        parameters["pkey"] = pkey
-        token?.takeIf { it.isNotEmpty() }?.let { parameters["aclAuth"] = it }
-    }.toString()
 
     private fun selectVariant(master: MasterPlaylist, requested: String): VariantStream {
         val variant = if (requested == "highest") {
@@ -385,7 +390,7 @@ class SchedulerEntry(
     private suspend fun playlistUsable(url: String): Boolean {
         return try {
             withTimeout(5.seconds) {
-                val client = ClientManager.getProxiedClient("preconfig_$roomId")
+                val client = component.httpClientProvider.proxied("preconfig_$roomId")
                 val response = withRetry(2) { client.get(url) }
                 response.status.value in 200..299
             }
@@ -579,7 +584,10 @@ class SchedulerComponent(
     internal val apiClient: ApiClient,
     internal val streamAuthKey: String,
     eventBus: EventBus,
-    parentScope: CoroutineScope
+    parentScope: CoroutineScope,
+    internal val httpClientProvider: HttpClientProvider = DefaultHttpClientProvider,
+    internal val runtimeTuning: RuntimeTuning = RuntimeTuning(),
+    internal val masterUrlCandidates: (Long, String, String?) -> List<String> = ::productionMasterUrls
 ) : Actor<SchedulerMsg>("SchedulerComponent", eventBus, parentScope) {
 
     private val entries = ConcurrentHashMap<Long, SchedulerEntry>()

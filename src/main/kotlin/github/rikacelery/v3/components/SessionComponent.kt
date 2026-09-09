@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.StreamStart
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.fsm.KEEP
@@ -12,7 +13,8 @@ import github.rikacelery.v3.fsm.StateMachine
 import github.rikacelery.v3.fsm.buildFsm
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.m3u8.ParsedPlaylist
-import github.rikacelery.v3.utils.ClientManager
+import github.rikacelery.v3.utils.DefaultHttpClientProvider
+import github.rikacelery.v3.utils.HttpClientProvider
 import github.rikacelery.v3.utils.withRetry
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.*
@@ -24,7 +26,6 @@ import java.security.SecureRandom
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.seconds
 import java.time.Duration as JavaDuration
 
 // ============================================================
@@ -195,8 +196,8 @@ class SessionEntry(
 
     internal suspend fun fetchPlaylistSignal(): SessionMsg {
         return try {
-            withTimeout(10.seconds) {
-                val client = ClientManager.getProxiedClient("m3u8_$roomId")
+            withTimeout(component.runtimeTuning.playlistFetchTimeout) {
+                val client = component.httpClientProvider.proxied("m3u8_$roomId")
                 val response = withRetry(3) { client.get(playlistUrl) }
                 val text = response.bodyAsText()
                 val key = (component.requestBus.request<ConfigResponse>(GetDecryptKey(pkey)).value as? String)
@@ -251,7 +252,7 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 retryCount = 0
                 circleCache.clear()   // a new file must re-download the init; media segments are skipped via the lastSegmentId threshold
                 launch { component.dataChannel.send(StreamStart(roomId, roomName, startTime, quality)) }
-                playlistLoop.start(3.seconds) { component.tell(fetchPlaylistSignal()) }
+                playlistLoop.start(component.runtimeTuning.playlistPollInterval) { component.tell(fetchPlaylistSignal()) }
             }
             on(RecordingEvent.StopRecording) to KEEP
             on(RecordingEvent.SegmentDownloaded) to KEEP
@@ -336,7 +337,9 @@ class SessionComponent(
     internal val m3u8Parser: M3u8Parser,
     internal val requestBus: RequestBus,
     eventBus: EventBus,
-    parentScope: CoroutineScope
+    parentScope: CoroutineScope,
+    internal val httpClientProvider: HttpClientProvider = DefaultHttpClientProvider,
+    internal val runtimeTuning: RuntimeTuning = RuntimeTuning()
 ) : Actor<SessionMsg>("SessionComponent", eventBus, parentScope) {
 
     private val entries = ConcurrentHashMap<Long, SessionEntry>()

@@ -6,6 +6,7 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.exceptions.DeletedException
 import github.rikacelery.v3.exceptions.RenameException
@@ -18,7 +19,6 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 sealed interface RoomMsg
@@ -32,8 +32,7 @@ class RoomComponent(
     private val requestBus: RequestBus,
     eventBus: EventBus,
     parentScope: CoroutineScope,
-    /** Slow catch-up cadence; live status changes arrive via WebSocket */
-    private val refreshInterval: Duration = 5.minutes,
+    private val runtimeTuning: RuntimeTuning = RuntimeTuning(),
     private val roomStatusFetcher: suspend (String) -> String = { roomName ->
         apiClient.roomFetchBroadcastInfo(roomName).PathSingle("item.status").asString()
     }
@@ -44,9 +43,6 @@ class RoomComponent(
     private var saveDebounceJob: Job? = null
     private var refreshDebounceJob: Job? = null
     private val saveLock = Mutex()
-
-    /** Debounce window for WS-triggered status refresh, avoids an API storm when WS flaps. */
-    private val refreshDebounceMs = 1_500L
 
     @Volatile
     private var stopRefresh = false
@@ -66,7 +62,7 @@ class RoomComponent(
         scope.launch {
             tell(RefreshRooms)
             while (isActive && !stopRefresh) {
-                delay(refreshInterval); tell(RefreshRooms)
+                delay(runtimeTuning.roomPollInterval); tell(RefreshRooms)
             }
         }
     }
@@ -104,7 +100,7 @@ class RoomComponent(
                     logger.debug("WS state changed ({}), scheduling debounced refreshAll", event::class.simpleName)
                     refreshDebounceJob?.cancel()
                     refreshDebounceJob = scope.launch {
-                        delay(refreshDebounceMs)
+                        delay(runtimeTuning.roomRefreshDebounce)
                         tell(RefreshRooms)
                     }
                 }
