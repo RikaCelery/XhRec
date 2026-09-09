@@ -293,8 +293,11 @@ class LiveEventSource(
         }
     }
 
+    /** Channels needed only while recording; the status subset stays subscribed for tracked rooms. */
+    private val recordingOnlyChannels: List<String> = roomChannels - statusChannels.toSet()
+
     private suspend fun WebSocketSession.sendRoomFullUnsubscribes(roomId: Long) {
-        roomChannels.forEach { channel ->
+        recordingOnlyChannels.forEach { channel ->
             try {
                 send(Frame.Text(unsubscribeFrame("$channel@$roomId")))
             } catch (e: Exception) {
