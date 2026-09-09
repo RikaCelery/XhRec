@@ -1,5 +1,6 @@
 package github.rikacelery.v3.components
 
+import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.HostsConfig
@@ -37,7 +38,7 @@ class ConfigComponentTest {
             configPath = configPath.absolutePath
         )
         val bus = EventBus()
-        val comp = ConfigComponent(config, bus, this)
+        val comp = ConfigComponent(config, ApiClient(config.hosts.platformHosts), bus, this)
         // RequestBus must use backgroundScope so its subscriber coroutine
         // gets cancelled at test end, avoiding UncompletedCoroutinesError
         val rb = RequestBus(bus, backgroundScope)
@@ -110,7 +111,7 @@ class ConfigComponentTest {
             configPath = configPath.absolutePath
         )
         val bus = EventBus()
-        val comp1 = ConfigComponent(config, bus, this)
+        val comp1 = ConfigComponent(config, ApiClient(config.hosts.platformHosts), bus, this)
         comp1.start()
         val rb1 = RequestBus(bus, backgroundScope)
         rb1.request<ConfigResponse>(ToggleMask)
@@ -118,7 +119,7 @@ class ConfigComponentTest {
         // give async IO save time to complete
         delay(300)
 
-        val comp2 = ConfigComponent(config, bus, this)
+        val comp2 = ConfigComponent(config, ApiClient(config.hosts.platformHosts), bus, this)
         comp2.start()
         val rb2 = RequestBus(bus, backgroundScope)
         val mask = rb2.request<ConfigResponse>(GetMaskStatus)
@@ -140,7 +141,7 @@ class ConfigComponentTest {
             configPath = configPath.absolutePath
         )
         val bus = EventBus()
-        val comp = ConfigComponent(config, bus, this)
+        val comp = ConfigComponent(config, ApiClient(config.hosts.platformHosts), bus, this)
         comp.start()
 
         // give async IO save time to complete
@@ -165,7 +166,7 @@ class ConfigComponentTest {
             configPath = configPath.absolutePath
         )
         val bus = EventBus()
-        val comp = ConfigComponent(config, bus, this)
+        val comp = ConfigComponent(config, ApiClient(config.hosts.platformHosts), bus, this)
         comp.start()
         val rb = RequestBus(bus, backgroundScope)
 

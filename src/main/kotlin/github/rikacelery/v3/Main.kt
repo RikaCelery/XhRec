@@ -99,7 +99,7 @@ fun main(vararg args: String) {
 
         // Apply persisted runtime config before components start making API calls
         Hosts.current = persisted.hosts
-        ApiClient.applyHosts(persisted.hosts.platformHosts)
+        val apiClient = ApiClient(persisted.hosts.platformHosts)
         CdnSelector.updateHosts(persisted.hosts.hlsHosts)
         SensitiveStringRegistry.enabled = persisted.maskSensitiveLogs
 
@@ -121,13 +121,13 @@ fun main(vararg args: String) {
 
         // 2. Components
         val metricComponent = MetricComponent(eventBus, appScope)
-        val configComponent = ConfigComponent(config, eventBus, appScope)
+        val configComponent = ConfigComponent(config, apiClient, eventBus, appScope)
         val authComponent = AuthComponent(cli.getOptionValue("users", "users.txt"), eventBus, appScope)
         val roomComponent =
-            RoomComponent(ApiClient, config.listConfPath, requestBus, eventBus, appScope)
+            RoomComponent(apiClient, config.listConfPath, requestBus, eventBus, appScope)
         // WS auth JWT is fetched dynamically at startup from config/initial (guest session),
         // refreshed on auth failure or after its (unknown) validity window.
-        val liveEventSource = LiveEventSource({ ApiClient.fetchGuestWsToken() }, eventBus, appScope)
+        val liveEventSource = LiveEventSource({ apiClient.fetchGuestWsToken() }, eventBus, appScope)
 
         val downloaderComponent = DownloaderComponent(
             dataChannel, eventBus = eventBus, parentScope = appScope, initialConcurrency = 64
@@ -148,7 +148,7 @@ fun main(vararg args: String) {
         val schedulerComponent = SchedulerComponent(
             requestBus,
             sessionComponent,
-            ApiClient,
+            apiClient,
             config.streamAuthKey,
             eventBus,
             appScope
@@ -190,7 +190,7 @@ fun main(vararg args: String) {
 
         // 4. Bootstrap: load users, processors, rooms from config files
         val bootstrap =
-            Bootstrap(ApiClient, roomComponent, authComponent, postProcessorComponent, schedulerComponent)
+            Bootstrap(apiClient, roomComponent, authComponent, postProcessorComponent, schedulerComponent)
         bootstrap.initialize(args.toList())
 
         // 5. Start HTTP server

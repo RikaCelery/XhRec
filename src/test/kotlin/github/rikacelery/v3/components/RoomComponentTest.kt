@@ -52,7 +52,7 @@ class RoomComponentTest {
         })
 
         val component = RoomComponent(
-            apiClient = ApiClient,
+            apiClient = ApiClient(),
             listConfPath = Files.createTempFile("xhrec-room-test", ".conf").toString(),
             requestBus = requestBus,
             eventBus = eventBus,

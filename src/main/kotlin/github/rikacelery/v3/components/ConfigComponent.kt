@@ -21,6 +21,7 @@ data class HandleConfigQuery(val env: CommandEnvelope) : ConfigMsg
 
 class ConfigComponent(
     val config: SystemConfig,
+    private val apiClient: ApiClient,
     eventBus: EventBus,
     parentScope: CoroutineScope
 ) : Actor<ConfigMsg>("ConfigComponent", eventBus, parentScope) {
@@ -90,7 +91,7 @@ class ConfigComponent(
         val cfg = HostsConfig.sanitize(hostsConfig)
         hostsConfig = cfg
         Hosts.current = cfg
-        ApiClient.applyHosts(cfg.platformHosts)
+        apiClient.applyHosts(cfg.platformHosts)
         CdnSelector.updateHosts(cfg.hlsHosts)
         eventBus.publish(HostsChanged)
         logger.info("Hosts config applied: platform=${cfg.platformHosts}, ws=${cfg.webSocketHosts}, hls=${cfg.hlsHosts}, master=${cfg.hlsMasterHost}")
