@@ -68,10 +68,10 @@ class WriterSmallFileTest {
             sendRecording(dataChannel, ByteArray(1023) { it.toByte() })
             sendRecording(dataChannel, ByteArray(1024) { it.toByte() }, roomId = 2, roomName = "room-two")
             advanceUntilIdle()
-            roomTwoReady.await()
+            val roomTwoFile = roomTwoReady.await().file
 
             assertTrue(published.filterIsInstance<FileReady>().none { it.roomId == 1L })
-            assertTrue(tmpDir.listFiles()?.none { it.name.startsWith("room-2026-01-01-080000") } ?: true)
+            assertEquals(setOf(roomTwoFile), tmpDir.listFiles()?.toSet() ?: emptySet())
         } finally {
             writer.stop()
             tmpDir.deleteRecursively()
