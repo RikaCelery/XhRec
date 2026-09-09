@@ -146,8 +146,8 @@ class DownloaderComponent(
         val active = rooms[cut.roomId] ?: return
         val idx = active.idx.incrementAndGet().toLong()
         logger.info("CutPoint roomId={}, index={}, reason={}", cut.roomId, cut.index, cut.reason)
-        // once complete returns, StreamEnd is in the DataChannel FIFO; Session restart is safe only after that
-        active.emitter.complete(idx, DownloadResult.CutPoint(cut))
+        // once this returns, StreamEnd is in the DataChannel FIFO; Session restart is safe only after that
+        active.emitter.completeAndAwait(idx, DownloadResult.CutPoint(cut))
         eventBus.publish(CutPointDone(cut.roomId, cut.generation, cut.reason))
     }
 

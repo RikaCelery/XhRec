@@ -3,7 +3,9 @@ package github.rikacelery.v3.core
 import github.rikacelery.v3.data.*
 import github.rikacelery.v3.events.CutPoint
 import github.rikacelery.v3.events.EndReason
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import java.time.Instant
@@ -23,6 +25,31 @@ class OrderedEmitterTest {
 
     private fun cutPoint(room: Long, reason: EndReason = EndReason.UserStop) =
         DownloadResult.CutPoint(CutPoint(room, 0, "room$room", now, reason, "highest"))
+
+    @Test
+    fun `completeAndAwait waits until a buffered cut point is emitted`() = runTest(UnconfinedTestDispatcher()) {
+        val emitted = mutableListOf<DataChannelMsg>()
+        val emitter = OrderedEmitter(42) { emitted.add(it) }
+
+        // segment 0 is still in flight, so the cut point at index 1 must stay buffered
+        var cutEmitted = false
+        val waiter = backgroundScope.async {
+            emitter.completeAndAwait(1, cutPoint(42))
+            cutEmitted = true
+        }
+        runCurrent()
+        assertEquals(0, emitted.size)
+        assertEquals(false, cutEmitted, "cut point must not be signalled while segment 0 is missing")
+
+        emitter.complete(0, success(42, 0))
+        runCurrent()
+
+        assertTrue(waiter.isCompleted, "completeAndAwait must resume once the cut point is emitted")
+        assertTrue(cutEmitted)
+        assertEquals(2, emitted.size)
+        assertTrue(emitted[1] is StreamEnd)
+        assertEquals(EndReason.UserStop, (emitted[1] as StreamEnd).reason)
+    }
 
     @Test
     fun `in-order completion emits in-order`() = runTest(UnconfinedTestDispatcher()) {
