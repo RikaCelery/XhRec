@@ -1,10 +1,12 @@
 package github.rikacelery.v3.integration
 
 import github.rikacelery.v3.components.SessionState
+import github.rikacelery.v3.events.CutPointDone
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.SegmentDownloaded
+import github.rikacelery.v3.events.SessionExit
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
@@ -173,6 +175,9 @@ class RoomRoutesIntegrationTest {
 
         // "highest" resolves to the top variant of the mock ladder
         fx.awaitSession(1001, SessionState.Recording, quality = "720p")
+        // bytes before the cut: the writer discards an empty recording, so a restart before the
+        // first segment would publish no FileReady at all
+        fx.awaitEvent<SegmentDownloaded>(15.seconds) { it.roomId == 1001L }
 
         fx.get("/quality?id=1001&q=360p").expectOk("Quality set to 360p")
         fx.awaitRoom("model") { it.path("room.quality") == "360p" }
@@ -212,6 +217,30 @@ class RoomRoutesIntegrationTest {
     }
 
     @Test
+    fun `a session stopped before its first segment still exits`() = withFixture(
+        // a playlist poll interval longer than the test: the cut lands before the session has
+        // polled once, so the downloader has no state for the room yet
+        tuning = XhrecIntegrationFixture.testTuning(playlistPollInterval = 30.seconds)
+    ) { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "public")
+        fx.mock.startSegments(1001, 30.milliseconds)
+
+        fx.get("/add?name=model").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.awaitSession(1001, SessionState.Recording)
+
+        fx.get("/break?id=1001").expectOk("Break signaled")
+
+        // nothing was downloaded yet, so there is no file to publish — but the cut still has to
+        // complete: otherwise the session hangs in Closing and the room never records again
+        val cut = fx.awaitEvent<CutPointDone>(15.seconds) { it.roomId == 1001L }
+        assertEquals(EndReason.NewInit, cut.reason)
+        fx.awaitEvent<SessionExit>(15.seconds) { it.roomId == 1001L }
+        fx.awaitEventCount<RecordingStarted>(2, 15.seconds) { it.roomId == 1001L }
+    }
+
+    @Test
     fun `group show and private autopay both record`() = withFixture { fx ->
         fx.ready()
         fx.mock.addRoom(1001, "model", status = "groupShow")
@@ -225,6 +254,9 @@ class RoomRoutesIntegrationTest {
             fx.mock.requests().any { it.method == "POST" && it.path.contains("/groupShows/") },
             "group show must be purchased: ${fx.mock.requests().map { "${it.method} ${it.path}" }}"
         )
+        // bytes before the cut: switching the status before the first segment is downloaded
+        // would close an empty recording, which the writer discards without a FileReady
+        fx.awaitEvent<SegmentDownloaded>(15.seconds) { it.roomId == 1001L }
 
         // switch the room to a paid private show; the old recording is cut and a spy show is purchased
         fx.mock.room(1001).modelToken = ""

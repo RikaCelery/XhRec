@@ -7,8 +7,10 @@ import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
@@ -18,6 +20,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
@@ -66,6 +69,26 @@ class MockPlatformServerTest {
             val cam = client.get("${mock.baseUrl}/api/front/v2/models/7/cam").bodyAsText()
             assertEquals("", cam.jsonPath("cam.modelToken"))
             assertEquals("100", cam.jsonPath("user.user.ticketRate"))
+        }
+    }
+
+    @Test
+    fun `serves account favorites and the model username`() = withMock { mock ->
+        mock.addRoom(7, "model", status = "public")
+        mock.setFavorites(42, listOf(7, 8))
+        withClient { client ->
+            val cam = client.get("${mock.baseUrl}/api/front/v2/models/7/cam").bodyAsText()
+            assertEquals("model", cam.jsonPath("user.user.username"))
+
+            val favorites = client.get("${mock.baseUrl}/api/front/users/42/favorites") {
+                header(HttpHeaders.Cookie, "cookie-1")
+            }
+            assertEquals(HttpStatusCode.OK, favorites.status)
+            assertEquals(listOf(7L, 8L), favorites.bodyAsText().modelIds())
+
+            // the platform answers 403 for an unauthenticated favorites request
+            val anonymous = client.get("${mock.baseUrl}/api/front/users/42/favorites")
+            assertEquals(HttpStatusCode.Forbidden, anonymous.status)
         }
     }
 
@@ -149,11 +172,18 @@ class MockPlatformServerTest {
         val segments = mock.startSegments(7, 40.milliseconds)
         val rotation = mock.rotateStatuses(7, listOf("off", "public", "groupShow"), 40.milliseconds)
         try {
-            withTimeout(5.seconds) {
-                while (room.availableSegments < 3 || room.status == "off") delay(20.milliseconds)
+            // The status keeps rotating, so it is read once with the wait and asserted on that
+            // snapshot: re-reading it after the loop can catch the next "off" tick instead.
+            val status = withTimeout(5.seconds) {
+                var current: String
+                do {
+                    delay(20.milliseconds)
+                    current = room.status
+                } while (room.availableSegments < 3 || current == "off")
+                current
             }
             assertTrue(room.availableSegments >= 3, "available=${room.availableSegments}")
-            assertTrue(room.status != "off", "status=${room.status}")
+            assertTrue(status != "off", "status=$status")
             assertTrue(mock.pushes().any { it.channel.startsWith("broadcastChanged@7") })
         } finally {
             segments.cancelAndJoin()
@@ -280,3 +310,7 @@ private fun String.jsonPath(path: String): String {
     }
     return element.jsonPrimitive.content
 }
+
+private fun String.modelIds(): List<Long> =
+    kotlinx.serialization.json.Json.parseToJsonElement(this).jsonObject["modelIds"]!!
+        .jsonArray.map { it.jsonPrimitive.content.toLong() }

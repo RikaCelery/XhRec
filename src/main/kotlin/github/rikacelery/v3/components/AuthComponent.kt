@@ -56,6 +56,7 @@ class AuthComponent(
     private suspend fun handleQuery(env: CommandEnvelope) {
         val ack = when (env.command) {
             is GetValidPaymentAccount -> validPaymentAccount(env.command.price)
+            is GetUsers -> UsersResponse(users.values.sortedBy { it.userId })
             is DeductCoins -> {
                 val u = users[env.command.userId]
                 if (u != null) {

@@ -1,5 +1,6 @@
 package github.rikacelery.v3.api
 
+import github.rikacelery.v3.data.User
 import github.rikacelery.v3.exceptions.DeletedException
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.utils.HttpClientProvider
@@ -84,6 +85,96 @@ class ApiClientTest {
         assertFailsWith<DeletedException> {
             throwBroadcast404("""{"description":"model already deleted"}""")
         }
+    }
+
+    @Test
+    fun `user favorites request sends the cookie and returns the model ids`() = runTest {
+        var requestedUrl = ""
+        var cookie: String? = null
+        val mockClient = HttpClient(MockEngine { request ->
+            requestedUrl = request.url.toString()
+            cookie = request.headers[HttpHeaders.Cookie]
+            respond(
+                content = """{"modelIds":[11111111,22222222]}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            )
+        })
+        try {
+            val client = ApiClient(listOf("platform.test"), singleClientProvider(mockClient)) { "http://$it" }
+
+            val ids = client.userFetchFavoriteIds(User("cookie-abc", 42L, "tester", 1000L))
+
+            assertEquals(listOf(11111111L, 22222222L), ids)
+            assertEquals("http://platform.test/api/front/users/42/favorites", requestedUrl)
+            assertEquals("cookie-abc", cookie)
+        } finally {
+            mockClient.close()
+        }
+    }
+
+    @Test
+    fun `user favorites ignores entries that are not model ids`() = runTest {
+        val mockClient = HttpClient(MockEngine {
+            respond(
+                content = """{"modelIds":[42,"101",null,{"id":7}]}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            )
+        })
+        try {
+            val client = ApiClient(listOf("platform.test"), singleClientProvider(mockClient)) { "http://$it" }
+
+            assertEquals(listOf(42L, 101L), client.userFetchFavoriteIds(User("c", 1L, "u", 0L)))
+        } finally {
+            mockClient.close()
+        }
+    }
+
+    @Test
+    fun `model name is resolved from cam info`() = runTest {
+        var requestedUrl = ""
+        val mockClient = HttpClient(MockEngine { request ->
+            requestedUrl = request.url.toString()
+            respond(
+                content = """{"cam":{},"user":{"user":{"id":1001,"username":"model-one"}}}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            )
+        })
+        try {
+            val client = ApiClient(listOf("platform.test"), singleClientProvider(mockClient)) { "http://$it" }
+
+            assertEquals("model-one", client.roomNameFromId(1001L))
+            assertEquals("http://platform.test/api/front/v2/models/1001/cam", requestedUrl)
+        } finally {
+            mockClient.close()
+        }
+    }
+
+    @Test
+    fun `model name is null when cam info carries no username`() = runTest {
+        val mockClient = HttpClient(MockEngine {
+            respond(
+                content = """{"cam":{},"user":{"user":{"id":1001,"username":""}}}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            )
+        })
+        try {
+            val client = ApiClient(listOf("platform.test"), singleClientProvider(mockClient)) { "http://$it" }
+
+            assertNull(client.roomNameFromId(1001L))
+        } finally {
+            mockClient.close()
+        }
+    }
+
+    private fun singleClientProvider(client: HttpClient) = object : HttpClientProvider {
+        override fun direct(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient =
+            error("direct client not expected")
+
+        override fun proxied(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient = client
     }
 
     @Test

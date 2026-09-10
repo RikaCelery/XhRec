@@ -42,8 +42,14 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import io.ktor.http.formUrlEncode
+import io.ktor.http.Parameters
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CoroutineScope
@@ -285,6 +291,13 @@ class XhrecIntegrationFixture(
     }
 
     suspend fun get(path: String): HttpResponse = app.client.get(path)
+
+    /** Posts a form body through the production routes, the way the dashboard does. */
+    suspend fun postForm(path: String, params: Map<String, String>): HttpResponse =
+        app.client.post(path) {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(Parameters.build { params.forEach { (key, value) -> append(key, value) } }.formUrlEncode())
+        }
 
     suspend fun dashboard(): JsonObject =
         Json.parseToJsonElement(app.client.get("/dashboard").bodyAsText()).jsonObject

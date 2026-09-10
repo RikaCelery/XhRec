@@ -246,6 +246,10 @@
                         class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors dark-toggle-btn">
                         <i class="fa-solid" :class="darkMode ? 'fa-sun' : 'fa-moon'"></i>
                     </button>
+                    <button @click="openFavorites()" :title="$t('Import Favorites')"
+                        class="w-8 h-8 flex items-center justify-center rounded bg-rose-100 text-rose-700 hover:bg-rose-600 hover:text-white transition-colors">
+                        <i class="fa-solid fa-heart text-sm"></i>
+                    </button>
                     <div class="flex items-center gap-1 bg-slate-100 rounded px-2 h-8" :title="$t('Preview size')">
                         <i class="fa-solid fa-image text-slate-400 text-xs"></i>
                         <input type="range" min="40" max="240" v-model.number="previewHeight"
@@ -770,6 +774,101 @@
         </div>
     </div>
 
+    <!-- Favorites Import Dialog -->
+    <div v-if="favoritesDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        @click.self="favoritesDialog=false">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    <i class="fa-solid fa-heart text-rose-500 mr-2"></i>
+                    {{ $t('Import Favorites') }}
+                </h2>
+                <button @click="favoritesDialog=false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Step 1: pick the accounts -->
+            <template v-if="favoritesStep === 'accounts'">
+                <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                    {{ $t('Pick the accounts whose platform favorites should be read.') }}
+                </p>
+                <div v-if="favoritesLoading" class="py-6 text-center text-slate-400">
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                </div>
+                <div v-else-if="accounts.length === 0" class="py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                    {{ $t('No accounts loaded') }}
+                </div>
+                <template v-else>
+                    <label v-for="a in accounts" :key="a.userId"
+                        class="flex items-center gap-3 px-3 py-2 rounded bg-slate-50 dark:bg-slate-900 cursor-pointer mb-1">
+                        <input type="checkbox" :value="a.userId" v-model="selectedAccounts" class="accent-indigo-600">
+                        <span class="font-medium text-slate-700 dark:text-slate-200">{{ a.username }}</span>
+                        <span class="text-xs text-slate-400 font-mono">#{{ a.userId }}</span>
+                        <span class="ml-auto text-xs text-slate-400">{{ a.coins }} <i class="fa-solid fa-coins"></i></span>
+                    </label>
+                </template>
+            </template>
+
+            <!-- Step 2: pick the favorites to import -->
+            <template v-else>
+                <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                    {{ $t('Uncheck anything you do not want to record — imported rooms start disarmed.') }}
+                </p>
+                <div v-if="favoritesLoading" class="py-6 text-center text-slate-400">
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                </div>
+                <div v-else-if="favoriteCandidates.length === 0" class="py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                    {{ $t('No favorites found') }}
+                </div>
+                <template v-else>
+                    <label v-for="c in favoriteCandidates" :key="c.modelId"
+                        class="flex items-center gap-3 px-3 py-2 rounded mb-1"
+                        :class="c.existing ? 'bg-slate-100 dark:bg-slate-900 opacity-60 cursor-not-allowed' : 'bg-slate-50 dark:bg-slate-900 cursor-pointer'">
+                        <input type="checkbox" v-model="c.selected" :disabled="c.existing" class="accent-indigo-600">
+                        <span class="font-medium text-slate-700 dark:text-slate-200">{{ c.name }}</span>
+                        <span class="text-xs text-slate-400 font-mono">#{{ c.modelId }}</span>
+                        <span v-if="c.existing"
+                            class="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                            {{ $t('Already added') }}
+                        </span>
+                    </label>
+                </template>
+            </template>
+
+            <div class="mt-5 flex justify-between items-center">
+                <button v-if="favoritesStep === 'accounts'" @click="toggleAllAccounts()"
+                    class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">{{ $t('Select All') }}</button>
+                <div v-else class="flex gap-3 text-xs">
+                    <button @click="setAllFavorites(true)" class="text-indigo-600 dark:text-indigo-400 hover:underline">{{ $t('Select All') }}</button>
+                    <button @click="setAllFavorites(false)" class="text-indigo-600 dark:text-indigo-400 hover:underline">{{ $t('Select None') }}</button>
+                </div>
+                <div class="flex gap-2">
+                    <button @click="favoritesDialog=false"
+                        class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">
+                        {{ $t('Cancel') }}
+                    </button>
+                    <button v-if="favoritesStep === 'accounts'" @click="fetchFavoriteCandidates()"
+                        :disabled="favoritesLoading || selectedAccounts.length === 0"
+                        class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm flex items-center gap-1">
+                        <i class="fa-solid fa-cloud-arrow-down"></i>{{ $t('Fetch Favorites') }}
+                    </button>
+                    <template v-else>
+                        <button @click="favoritesStep = 'accounts'"
+                            class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">
+                            {{ $t('Back') }}
+                        </button>
+                        <button @click="importSelectedFavorites()"
+                            :disabled="favoritesLoading || selectedFavoriteCount === 0"
+                            class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm flex items-center gap-1">
+                            <i class="fa-solid fa-file-import"></i>{{ $t('Import Selected') }} ({{ selectedFavoriteCount }})
+                        </button>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
     </div>
 
 
@@ -812,6 +911,12 @@
                     hostsDialog: false,
                     scheduleDialog: false,
                     modelDetailDialog: false,
+                    favoritesDialog: false,
+                    favoritesStep: 'accounts', // accounts → models
+                    favoritesLoading: false,
+                    accounts: [],
+                    selectedAccounts: [],
+                    favoriteCandidates: [],
                     cdnStats: {},
                     mlStatus: null,
                     mlTraining: false,
@@ -889,6 +994,17 @@
                             'CDN Model': 'CDN 模型', 'Schedule Model': '开播模型', 'trees': '棵树',
                             'CDN samples': 'CDN 样本', 'Schedule samples': '开播样本',
                             'Training...': '训练中...',
+                            'Import Favorites': '导入收藏',
+                            'Pick the accounts whose platform favorites should be read.': '选择要读取收藏的账号。',
+                            'Fetch Favorites': '获取收藏',
+                            'Uncheck anything you do not want to record — imported rooms start disarmed.': '取消勾选不想录制的主播；导入的房间默认为未启用。',
+                            'No accounts loaded': '未加载账号',
+                            'No favorites found': '未找到收藏',
+                            'Already added': '已存在',
+                            'Select All': '全选',
+                            'Select None': '全不选',
+                            'Import Selected': '导入选中',
+                            'Back': '返回',
                         }
                     },
                 }
@@ -896,6 +1012,9 @@
             computed: {
                 totalSize() {
                     return Object.values(this.roomInfo).reduce((a, b) => a + (b.bytesWrite || 0), 0);
+                },
+                selectedFavoriteCount() {
+                    return this.favoriteCandidates.filter(c => c.selected && !c.existing).length;
                 },
                 roomDisplay() {
                     const list = Object.values(this.roomInfo);
@@ -1149,8 +1268,72 @@
                         this.showToast(await r1.text());
                     } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
-                async addRoom(active) {
-                    const name = this.addInput.split("/").slice(-1)[0].split("?")[0];
+                // ── Favorites import ──────────────────────────────────────
+                async openFavorites() {
+                    this.favoritesDialog = true;
+                    this.favoritesStep = 'accounts';
+                    this.selectedAccounts = [];
+                    this.favoriteCandidates = [];
+                    this.favoritesLoading = true;
+                    try {
+                        const r = await fetch(`${HOST}/users`);
+                        if (!r.ok) throw new Error(await r.text());
+                        this.accounts = await r.json();
+                    } catch (e) {
+                        this.accounts = [];
+                        this.showToast(this.$t('Network Error'), "error");
+                    } finally {
+                        this.favoritesLoading = false;
+                    }
+                },
+                toggleAllAccounts() {
+                    this.selectedAccounts = this.selectedAccounts.length === this.accounts.length
+                        ? [] : this.accounts.map(a => a.userId);
+                },
+                async fetchFavoriteCandidates() {
+                    if (this.selectedAccounts.length === 0) return;
+                    this.favoritesLoading = true;
+                    try {
+                        const r = await fetch(`${HOST}/favorites/candidates?users=${this.selectedAccounts.join(',')}`);
+                        if (!r.ok) {
+                            this.showToast(await r.text(), "error");
+                            return;
+                        }
+                        // already imported rooms are shown but cannot be picked again
+                        this.favoriteCandidates = (await r.json()).map(c => ({ ...c, selected: !c.existing }));
+                        this.favoritesStep = 'models';
+                    } catch (e) {
+                        this.showToast(this.$t('Network Error'), "error");
+                    } finally {
+                        this.favoritesLoading = false;
+                    }
+                },
+                setAllFavorites(selected) {
+                    this.favoriteCandidates = this.favoriteCandidates.map(c => ({ ...c, selected: selected && !c.existing }));
+                },
+                async importSelectedFavorites() {
+                    const ids = this.favoriteCandidates.filter(c => c.selected && !c.existing).map(c => c.modelId);
+                    if (ids.length === 0) return;
+                    this.favoritesLoading = true;
+                    try {
+                        const r = await fetch(`${HOST}/favorites/import`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                            body: new URLSearchParams({ ids: ids.join(',') })
+                        });
+                        const text = await r.text();
+                        this.showToast(text, r.ok ? "success" : "error");
+                        if (r.ok) {
+                            this.favoritesDialog = false;
+                            await this.fetchdata();
+                        }
+                    } catch (e) {
+                        this.showToast(this.$t('Network Error'), "error");
+                    } finally {
+                        this.favoritesLoading = false;
+                    }
+                },
+                async addRoom(active) {                    const name = this.addInput.split("/").slice(-1)[0].split("?")[0];
                     if (!name) {
                         this.showToast(this.$t("Please enter a room name or URL"), "error");
                         return;

@@ -173,6 +173,24 @@ class ApiClient(
         return Json.parseToJsonElement(response.bodyAsText()).jsonObject
     }
 
+    /**
+     * Model ids the account has favorited: `api/front/users/{userId}/favorites` answers
+     * `{"modelIds":[...]}` and requires the account cookie (without one the platform
+     * answers 403).
+     */
+    suspend fun userFetchFavoriteIds(user: User): List<Long> {
+        val response = withHostFallback { host ->
+            withRetry(3) {
+                ensure2xx(host, apiClient.get(apiUrl(host, "api/front/users/" + user.userId + "/favorites")) {
+                    header("Cookie", user.cookie)
+                })
+            }
+        }
+        val modelIds = Json.parseToJsonElement(response.bodyAsText()).jsonObject["modelIds"] as? JsonArray
+            ?: return emptyList()
+        return modelIds.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.toLongOrNull() }
+    }
+
     suspend fun roomFetchCamInfo(roomId: Long, cookie: String): JsonObject {
         val response = withHostFallback { host ->
             withRetry(3) {
@@ -183,6 +201,15 @@ class ApiClient(
         }
         return Json.parseToJsonElement(response.bodyAsText()).jsonObject
     }
+
+    /**
+     * Resolves a room's slug from its model id. Favorites carry ids only, while rooms,
+     * list.conf and the broadcasts API are keyed by slug — broadcasts by numeric id
+     * answers 404 ("Entity Model not found"), so the slug comes from the cam endpoint.
+     */
+    suspend fun roomNameFromId(roomId: Long): String? =
+        roomFetchCamInfo(roomId, "").PathSingleOrNull("user.user.username")
+            ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 
     suspend fun roomFetchModelToken(roomId: Long, user: User): String? {
         val info = roomFetchCamInfo(roomId, user.cookie)
