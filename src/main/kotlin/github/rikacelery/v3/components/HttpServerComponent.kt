@@ -271,23 +271,6 @@ class HttpServerComponent(
                     persistConfig()
                     call.respondText("Filter ${kind.wireName} set to $v")
                 }
-                // legacy alias kept for existing scripts: autopay ticket/private are two of the filters
-                get("/autopay") {
-                    val id = call.request.queryParameters["id"]?.toLongOrNull() ?: return@get call.respondText(
-                        "Missing id",
-                        status = HttpStatusCode.BadRequest
-                    )
-                    val v = call.request.queryParameters["v"]?.toBooleanStrictOrNull()
-                        ?: return@get call.respondText("Missing v (true/false)", status = HttpStatusCode.BadRequest)
-                    val kind = when (call.request.queryParameters["kind"]) {
-                        "private" -> RecordingFilterKind.PAID_SPY
-                        "ticket", null -> RecordingFilterKind.TICKET
-                        else -> return@get call.respondText("Invalid kind (expected 'ticket' or 'private')", status = HttpStatusCode.BadRequest)
-                    }
-                    requestBus.request<OkResponse>(SetRoomFilter(id, kind, v))
-                    persistConfig()
-                    call.respondText("Autopay ($kind) set to $v")
-                }
                 get("/limit") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull() ?: return@get call.respondText(
                         "Missing id",

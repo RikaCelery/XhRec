@@ -32,7 +32,10 @@ java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.jso
 
 ### list.conf
 
-One room per line. Lines starting with `#` or `;` are inactive (not automatically recorded).
+One room per line. A line starting with `#` is a known room that is **inactive** (not
+automatically recorded); the marker may be followed by a space (`# https://...`) or not
+(`#https://...`), and the rest of the line is read normally. A line starting with `;` is
+ignored entirely, room and all.
 
 ```ini
 #https://stripchat.com/modelA q:720p limit:120
@@ -158,7 +161,6 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 | `/deactivate` | `id`                   | Disable auto-recording         |
 | `/quality`    | `id`, `q`              | Set quality                    |
 | `/filter`     | `id`, `kind` (`public`\|`freespy`\|`ticket`\|`paidspy`), `v` | Toggle one recording filter |
-| `/autopay`    | `id`, `v` (true/false), `kind` (`ticket`\|`private`) | Alias of `/filter` |
 | `/limit`      | `id`, `v` (seconds)    | Set time limit (0 = unlimited) |
 | `/sizelimit`  | `id`, `v`              | Set size limit (0 = unlimited) |
 

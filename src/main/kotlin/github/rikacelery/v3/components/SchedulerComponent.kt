@@ -712,6 +712,9 @@ class SchedulerComponent(
                 // the FSM decide whether the new settings mean start, stop or carry on
                 entries[event.roomId]?.let { entry ->
                     entry.settings = event.settings.copy(
+                        // quality travels as QualityChangeRequested: it restarts a running session
+                        // by comparing the requested value with the one held here
+                        quality = entry.settings.quality,
                         pkey = event.settings.pkey.ifBlank { streamAuthKey }
                     )
                     entry.freeSpyExhausted = false

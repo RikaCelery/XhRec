@@ -215,7 +215,11 @@ class Bootstrap(
     }
 
     private fun parseListConfLine(line: String): ListConfLine? {
-        val parts = line.trim().split(" ")
+        val trimmed = line.trim()
+        // A commented line keeps the room in the file but disarmed. Both spellings are in use —
+        // the writer emits "#https://..." and the docs show "# https://..." — so the marker and
+        // any spaces after it are stripped before the line is read as a room.
+        val parts = trimmed.trimStart('#', ';').trim().split(" ").filter { it.isNotEmpty() }
         if (parts.isEmpty()) return null
         val url = parts[0]
         var quality = "highest"
@@ -244,7 +248,6 @@ class Bootstrap(
                 parts[i] == "nofreespy" -> recordFreeSpy = false
             }
         }
-        val trimmed = line.trim()
         return ListConfLine(
             url, quality, timeLimit, sizeLimit, recordPublic, recordFreeSpy,
             autoPayTicket, autoPaySpy, pkey,

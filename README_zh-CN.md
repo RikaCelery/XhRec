@@ -32,7 +32,9 @@ java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.jso
 
 ### list.conf
 
-每行一个房间。以 `#` 或 `;` 开头的行视为未激活（不会自动录制）。
+每行一个房间。以 `#` 开头的行是**未激活**的房间（不会自动录制），`#` 后面可以带空格
+（`# https://...`）也可以不带（`#https://...`），其余字段照常解析。以 `;` 开头的行则被
+整行忽略，房间不会被加载。
 
 ```ini
 #https://stripchat.com/modelA q:720p limit:120
@@ -153,7 +155,6 @@ cookie_string_here
 | `/deactivate` | `id`                     | 禁用自动录制               |
 | `/quality`    | `id`, `q`                | 设置画质                  |
 | `/filter`     | `id`, `kind` (`public`\|`freespy`\|`ticket`\|`paidspy`), `v` | 切换某个录制开关 |
-| `/autopay`    | `id`, `v` (true/false), `kind` (`ticket`\|`private`) | `/filter` 的兼容别名 |
 | `/limit`      | `id`, `v` （秒）          | 设置时长限制（0 = 不限）     |
 | `/sizelimit`  | `id`, `v`                | 设置大小限制（0 = 不限）     |
 

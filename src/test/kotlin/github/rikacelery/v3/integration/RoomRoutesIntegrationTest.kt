@@ -91,8 +91,8 @@ class RoomRoutesIntegrationTest {
         assertEquals(HttpStatusCode.BadRequest, fx.get("/quality").status)
         assertEquals(HttpStatusCode.BadRequest, fx.get("/limit").status)
         assertEquals(HttpStatusCode.BadRequest, fx.get("/sizelimit").status)
-        assertEquals(HttpStatusCode.BadRequest, fx.get("/autopay?id=1001").status)
-        assertEquals(HttpStatusCode.BadRequest, fx.get("/autopay?id=1001&v=true&kind=bogus").status)
+        assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?id=1001&kind=public").status)
+        assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?id=1001&kind=bogus&v=true").status)
     }
 
     @Test
@@ -199,6 +199,31 @@ class RoomRoutesIntegrationTest {
 
         val ready = fx.awaitEvent<FileReady>(20.seconds) { it.roomId == 1001L }
         assertEquals(EndReason.TimeLimit, ready.reason)
+    }
+
+    @Test
+    fun `a time limit changed while recording applies to the restarted session`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "public")
+        fx.mock.startSegments(1001, 30.milliseconds)
+
+        fx.get("/add?name=model&limit=1").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.awaitSession(1001, SessionState.Recording)
+        fx.awaitEvent<SegmentDownloaded>(15.seconds) { it.roomId == 1001L }
+
+        // lift the limit while the first session runs: the limit-driven restart must pick it up
+        fx.get("/limit?id=1001&v=0").expectOk("Time limit set to 0s")
+
+        fx.awaitEventCount<FileReady>(1, 20.seconds) { it.roomId == 1001L && it.reason == EndReason.TimeLimit }
+        delay(2_500)
+
+        assertEquals(
+            1,
+            fx.events.filterIsInstance<FileReady>()
+                .count { it.roomId == 1001L && it.reason == EndReason.TimeLimit },
+            "the restarted session must use the new limit instead of the stale one"
+        )
     }
 
     @Test
@@ -336,6 +361,19 @@ class RoomRoutesIntegrationTest {
         assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?id=1001&kind=public").status)
         assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?id=1001&kind=public&v=maybe").status)
         assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?kind=public&v=true").status)
+    }
+
+    @Test
+    fun `list conf accepts a commented room with a space after the marker`() = withFixture { fx ->
+        fx.mock.addRoom(1001, "model", status = "off")
+        File(fx.listConfPath).writeText("# https://mock/model q:720p nopublic\n")
+
+        fx.bootstrap()
+
+        val room = fx.rooms().single { it.id == 1001L }
+        assertEquals("720p", room.quality)
+        assertFalse(room.recordPublic, "filters on a commented line are parsed too")
+        assertTrue(fx.sessions().isEmpty(), "a commented room must not be armed")
     }
 
     @Test

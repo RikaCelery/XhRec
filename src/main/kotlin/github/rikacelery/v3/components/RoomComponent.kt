@@ -163,29 +163,23 @@ class RoomComponent(
             }
 
             is SetRoomTimeLimit -> {
-                rooms[cmd.roomId]?.let { rooms[it.id] = it.copy(timeLimit = cmd.limit) }
-                eventBus.publish(RoomTimeLimitChanged(cmd.roomId, cmd.limit))
+                publishSettingsChange(cmd.roomId) { it.copy(timeLimit = cmd.limit) }
                 OkResponse
             }
 
             is SetRoomSizeLimit -> {
-                rooms[cmd.roomId]?.let { rooms[it.id] = it.copy(sizeLimitBytes = cmd.limitBytes) }
-                eventBus.publish(RoomSizeLimitChanged(cmd.roomId, cmd.limitBytes))
+                publishSettingsChange(cmd.roomId) { it.copy(sizeLimitBytes = cmd.limitBytes) }
                 OkResponse
             }
 
             is SetRoomFilter -> {
-                rooms[cmd.roomId]?.let { room ->
-                    val updated = when (cmd.kind) {
+                publishSettingsChange(cmd.roomId) { room ->
+                    when (cmd.kind) {
                         RecordingFilterKind.PUBLIC -> room.copy(recordPublic = cmd.value)
                         RecordingFilterKind.FREE_SPY -> room.copy(recordFreeSpy = cmd.value)
                         RecordingFilterKind.TICKET -> room.copy(autoPayTicket = cmd.value)
                         RecordingFilterKind.PAID_SPY -> room.copy(autoPaySpy = cmd.value)
                     }
-                    rooms[room.id] = updated
-                    // an armed room refreshes its own copy only through a preconfig attempt, and a
-                    // room that is no longer recordable never makes one: push the change instead
-                    eventBus.publish(RoomSettingsChanged(updated.id, updated.settings(), updated.status))
                 }
                 OkResponse
             }
@@ -247,6 +241,22 @@ class RoomComponent(
             else -> return
         }
         eventBus.publish(CommandAck(env.id, ack))
+    }
+
+    /**
+     * Applies [change] to a room and pushes the resulting settings to the scheduler.
+     *
+     * An armed room refreshes its own copy only through a preconfig attempt, and a room that is
+     * no longer recordable never makes one, so a change made in the dashboard would otherwise
+     * sit unused until something else moved the room. Quality is deliberately not published
+     * here: it travels as [QualityChangeRequested], which restarts a running session.
+     */
+    private suspend fun publishSettingsChange(roomId: Long, change: (Room) -> Room) {
+        rooms[roomId]?.let { room ->
+            val updated = change(room)
+            rooms[roomId] = updated
+            eventBus.publish(RoomSettingsChanged(updated.id, updated.settings(), updated.status))
+        }
     }
 
     private suspend fun refreshRoomStatus(room: Room) {
