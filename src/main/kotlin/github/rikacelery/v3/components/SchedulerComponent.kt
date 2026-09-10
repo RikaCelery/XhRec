@@ -274,7 +274,7 @@ class SchedulerEntry(
     }
 
     private suspend fun fetchToken(config: RoomConfigResponse): String? {
-        val info = component.apiClient.roomFetchBroadcastInfo(roomName)
+        val info = component.apiClient.roomFetchBroadcastInfo(roomId)
         val status = info.PathSingle("item.status").asString()
         roomStatus = status
         return when {
