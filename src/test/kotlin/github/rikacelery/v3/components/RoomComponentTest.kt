@@ -46,7 +46,7 @@ class RoomComponentTest {
         val mockServer = HttpClient(MockEngine { request ->
             assertEquals("https://mock.platform/broadcasts/model", request.url.toString())
             respond(
-                content = """{"item":{"status":"p2p"}}""",
+                content = """{"item":{"status":"private"}}""",
                 status = HttpStatusCode.OK,
                 headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
             )
@@ -85,7 +85,7 @@ class RoomComponentTest {
 
         assertEquals(
             listOf(
-                RoomStatusChanged(1, "public", "p2p"),
+                RoomStatusChanged(1, "public", "private"),
                 CommandAck(1, OkResponse)
             ),
             observed
