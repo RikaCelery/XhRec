@@ -101,6 +101,23 @@ class HttpRoutesTest {
         }
     }
 
+    @Test
+    fun `the dashboard page ships the room settings dialog`() = testApplication {
+        val harness = RouteHarness()
+        try {
+            application { harness.server.installApplication(this, stopEngine = {}) }
+
+            val response = client.get("/")
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val html = response.bodyAsText()
+            assertTrue(html.contains("Room Settings"), "the dashboard must carry the room settings dialog")
+            assertTrue(html.contains("/filter?id="), "the dialog must call the recording filter route")
+        } finally {
+            harness.close()
+        }
+    }
+
     private class RouteHarness(runtimeTuning: RuntimeTuning = RuntimeTuning()) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val eventBus = EventBus()

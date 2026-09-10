@@ -1238,6 +1238,17 @@
                 sortToggle(by) {
                     this.sort[by] = this.sort[by] === 1 ? 2 : (this.sort[by] === 2 ? undefined : 1);
                 },
+                // Token the size field round-trips through /sizelimit (e.g. "1Gi", "1536Mi",
+                // raw bytes for values no unit divides evenly) — unlike formatBytes, which is
+                // for display and produces "1.50 GB" that the parser rejects.
+                sizeLimitToken(bytes) {
+                    if (!bytes || bytes <= 0) return '';
+                    const units = [['Ti', 1099511627776], ['Gi', 1073741824], ['Mi', 1048576], ['Ki', 1024]];
+                    for (const [unit, factor] of units) {
+                        if (bytes % factor === 0) return (bytes / factor) + unit;
+                    }
+                    return String(bytes);
+                },
                 formatBytes(bytes) {
                     if (!bytes) return '0 B';
                     const units = ["B", "KB", "MB", "GB", "TB"];
@@ -1291,7 +1302,7 @@
                 openRoomSettings(room) {
                     this.settingsRoom = room;
                     this.settingsTime = room.timeLimit > 0 ? Math.round(room.timeLimit / 1000) : 0;
-                    this.settingsSize = room.sizeLimitBytes > 0 ? this.formatBytes(room.sizeLimitBytes) : '';
+                    this.settingsSize = this.sizeLimitToken(room.sizeLimitBytes);
                 },
                 closeRoomSettings() {
                     this.settingsRoom = null;
