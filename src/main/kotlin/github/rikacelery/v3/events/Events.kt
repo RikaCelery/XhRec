@@ -148,6 +148,20 @@ data class RoomSizeLimitChanged(val roomId: Long, val limitBytes: Long) {
     override fun toString() = "RoomSizeLimitChanged(roomId=$roomId, limitBytes=$limitBytes)"
 }
 
+/**
+ * Published whenever a room's recording settings change, carrying the new settings and the
+ * room's current status. The scheduler mirrors both, so a switch flipped in the UI takes
+ * effect on a room that is already armed or recording — an armed room never refreshes its
+ * configuration on its own while it is not recordable (issue #130).
+ */
+data class RoomSettingsChanged(
+    val roomId: Long,
+    val settings: github.rikacelery.v3.data.RoomSettings,
+    val status: String
+) {
+    override fun toString() = "RoomSettingsChanged(roomId=$roomId, status=$status, settings=$settings)"
+}
+
 // ── Misc ──
 
 enum class EndReason { SizeLimit, TimeLimit, StreamEnd, UserStop, NewInit, StatusChanged }

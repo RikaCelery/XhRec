@@ -4,9 +4,10 @@ import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
-import github.rikacelery.v3.data.RuntimeTuning
-import github.rikacelery.v3.data.StreamData
 import github.rikacelery.v3.data.Hosts
+import github.rikacelery.v3.data.StreamData
+import github.rikacelery.v3.data.RoomSettings
+import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.CommandAck
 import github.rikacelery.v3.events.CommandEnvelope
 import github.rikacelery.v3.events.ConfigResponse
@@ -84,7 +85,7 @@ class RuntimeInjectionTest {
         )
 
         try {
-            component.internalAdd(7, "model", "highest", Duration.INFINITE, 0, false, false)
+            component.internalAdd(7, "model", RoomSettings())
             component.start()
             runCurrent()
             assertEquals("http://127.0.0.1:18080/api/front/v1/broadcasts/model", requestEvents.receive())
@@ -222,7 +223,7 @@ class RuntimeInjectionTest {
                 }
             }
         )
-        val entry = SchedulerEntry(7, "model", scheduler).apply { pkey = "room-key" }
+        val entry = SchedulerEntry(7, "model", scheduler).apply { settings = RoomSettings(pkey = "room-key") }
         val oldCdnHosts = CdnSelector.hosts
         CdnSelector.updateHosts(emptyList())
 
@@ -372,7 +373,7 @@ class RuntimeInjectionTest {
             override suspend fun intercept(event: Any): Any? {
                 if (event is CommandEnvelope) {
                     val answer = when (event.command) {
-                        is GetRoomConfig -> RoomConfigResponse("highest", Duration.INFINITE, 0, pkey = "room-key")
+                        is GetRoomConfig -> RoomConfigResponse(RoomSettings(pkey = "room-key"))
                         is MatchDecryptKeys -> DecryptKeyMatch("key-id", "decrypt-key")
                         is GetDecryptKey -> ConfigResponse("decrypt-key")
                         else -> null

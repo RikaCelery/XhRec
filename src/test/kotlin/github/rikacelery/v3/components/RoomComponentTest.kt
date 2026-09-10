@@ -4,6 +4,7 @@ import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.FavoriteCandidate
+import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.User
 import github.rikacelery.v3.events.CommandAck
@@ -74,7 +75,7 @@ class RoomComponentTest {
         )
         component.start()
         advanceUntilIdle()
-        component.internalAdd(1, "model", "highest", Duration.INFINITE, 0, false, false)
+        component.internalAdd(1, "model", RoomSettings())
         eventBus.publish(RoomStatusChanged(1, "", "public"))
         advanceUntilIdle()
         observed.clear()
@@ -119,7 +120,7 @@ class RoomComponentTest {
         )
         component.start()
         advanceUntilIdle()
-        component.internalAdd(1001, "model-a", "720p", Duration.INFINITE, 0, false, false)
+        component.internalAdd(1001, "model-a", RoomSettings(quality = "720p"))
 
         val candidates = component.favoriteCandidates(listOf(User("cookie-1", 42L, "tester", 100L)))
         advanceUntilIdle()
@@ -173,7 +174,7 @@ class RoomComponentTest {
         )
         component.start()
         advanceUntilIdle()
-        component.internalAdd(1001, "model-one", "720p", Duration.INFINITE, 0, false, false)
+        component.internalAdd(1001, "model-one", RoomSettings(quality = "720p"))
         observed.clear()
 
         // the user picked 1002 and 1003; 1001 is already a room and must stay untouched

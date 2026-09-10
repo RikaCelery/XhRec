@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.ml.PredictionEngine
@@ -141,12 +142,14 @@ class HttpServerComponent(
                         val resp = requestBus.request<RoomNameResponse>(
                             AddRoom(
                                 name,
-                                quality,
-                                pkey,
-                                if (limit > 0) limit.seconds else Duration.INFINITE,
-                                sizeBytes,
-                                autopayTicket,
-                                autoPaySpy
+                                RoomSettings(
+                                    quality = quality,
+                                    timeLimit = if (limit > 0) limit.seconds else Duration.INFINITE,
+                                    sizeLimitBytes = sizeBytes,
+                                    autoPayTicket = autopayTicket,
+                                    autoPaySpy = autoPaySpy,
+                                    pkey = pkey
+                                )
                             ), timeoutMs = 30_000
                         )
                         if (active) {
@@ -252,6 +255,23 @@ class HttpServerComponent(
                     persistConfig()
                     call.respondText("Quality set to $q")
                 }
+                get("/filter") {
+                    val id = call.request.queryParameters["id"]?.toLongOrNull() ?: return@get call.respondText(
+                        "Missing id",
+                        status = HttpStatusCode.BadRequest
+                    )
+                    val kind = filterKind(call.request.queryParameters["kind"])
+                        ?: return@get call.respondText(
+                            "Invalid kind (expected 'public', 'freespy', 'ticket' or 'paidspy')",
+                            status = HttpStatusCode.BadRequest
+                        )
+                    val v = call.request.queryParameters["v"]?.toBooleanStrictOrNull()
+                        ?: return@get call.respondText("Missing v (true/false)", status = HttpStatusCode.BadRequest)
+                    requestBus.request<OkResponse>(SetRoomFilter(id, kind, v))
+                    persistConfig()
+                    call.respondText("Filter ${kind.name.lowercase()} set to $v")
+                }
+                // legacy alias kept for existing scripts: autopay ticket/private are two of the filters
                 get("/autopay") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull() ?: return@get call.respondText(
                         "Missing id",
@@ -260,11 +280,11 @@ class HttpServerComponent(
                     val v = call.request.queryParameters["v"]?.toBooleanStrictOrNull()
                         ?: return@get call.respondText("Missing v (true/false)", status = HttpStatusCode.BadRequest)
                     val kind = when (call.request.queryParameters["kind"]) {
-                        "private" -> AutoPayKind.PRIVATE
-                        "ticket", null -> AutoPayKind.GROUP_SHOW
+                        "private" -> RecordingFilterKind.PAID_SPY
+                        "ticket", null -> RecordingFilterKind.TICKET
                         else -> return@get call.respondText("Invalid kind (expected 'ticket' or 'private')", status = HttpStatusCode.BadRequest)
                     }
-                    requestBus.request<OkResponse>(SetRoomAutoPay(id, kind, v))
+                    requestBus.request<OkResponse>(SetRoomFilter(id, kind, v))
                     persistConfig()
                     call.respondText("Autopay ($kind) set to $v")
                 }
@@ -725,6 +745,15 @@ class HttpServerComponent(
     companion object {
         /** Platform timeout for a favorites command: one request per account plus name lookups. */
         private const val FAVORITES_TIMEOUT_MS = 120_000L
+
+        /** Query-string spelling of a recording filter, shared by `/filter` and `/autopay`. */
+        private fun filterKind(value: String?): RecordingFilterKind? = when (value) {
+            "public" -> RecordingFilterKind.PUBLIC
+            "freespy" -> RecordingFilterKind.FREE_SPY
+            "ticket" -> RecordingFilterKind.TICKET
+            "paidspy" -> RecordingFilterKind.PAID_SPY
+            else -> null
+        }
 
         private fun hasRecentActivity(data: Map<String, Any>): Boolean {
             val running = data["running"] as? Map<*, *>

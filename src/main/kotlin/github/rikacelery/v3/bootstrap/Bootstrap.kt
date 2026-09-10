@@ -2,6 +2,7 @@ package github.rikacelery.v3.bootstrap
 
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.components.*
+import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.postprocessors.*
@@ -154,7 +155,17 @@ class Bootstrap(
         val autoPayTicket: Boolean = false, val autoPaySpy: Boolean = false,
         val pkey: String = "",
         val armed: Boolean
-    )
+    ) {
+        /** The parsed line as the settings the room components work with. */
+        fun toSettings(): RoomSettings = RoomSettings(
+            quality = quality,
+            timeLimit = if (timeLimit > 0) timeLimit.seconds else Duration.INFINITE,
+            sizeLimitBytes = sizeLimit,
+            autoPayTicket = autoPayTicket,
+            autoPaySpy = autoPaySpy,
+            pkey = pkey
+        )
+    }
 
     private suspend fun loadRooms(cli: CliConfig) {
         val file = File(cli.listConfPath)
@@ -193,10 +204,10 @@ class Bootstrap(
 
     private suspend fun addRoomFromParsed(id: Long, name: String, parsed: ListConfLine) {
         SensitiveStringRegistry.mask(name)
-        val timeLimit = if (parsed.timeLimit > 0) parsed.timeLimit.seconds else Duration.INFINITE
-        roomComponent.internalAdd(id, name, parsed.quality, timeLimit, parsed.sizeLimit, parsed.autoPayTicket, parsed.autoPaySpy, parsed.pkey)
+        val settings = parsed.toSettings()
+        roomComponent.internalAdd(id, name, settings)
         if (parsed.armed) {
-            schedulerComponent.internalAdd(id, name, parsed.quality, parsed.pkey, parsed.armed, parsed.autoPayTicket, parsed.autoPaySpy)
+            schedulerComponent.internalAdd(id, name, settings, parsed.armed)
         }
     }
 

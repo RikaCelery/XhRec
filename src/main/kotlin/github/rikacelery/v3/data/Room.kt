@@ -17,12 +17,30 @@ data class Room(
     @Serializable(with = DurationMillisSerializer::class)
     val timeLimit: Duration = Duration.INFINITE,
     val sizeLimitBytes: Long,
+    val recordPublic: Boolean = true,
+    val recordFreeSpy: Boolean = true,
     val autoPayTicket: Boolean = false,
     val autoPaySpy: Boolean = false,
     val lastSeen: String?,
     val status: String = "",
     val pkey: String = ""
-)
+) {
+    /** This room's recording settings as one value. */
+    fun settings(): RoomSettings =
+        RoomSettings(quality, timeLimit, sizeLimitBytes, recordPublic, recordFreeSpy, autoPayTicket, autoPaySpy, pkey)
+
+    /** This room with the recording parts of [settings] replaced, identity and status untouched. */
+    fun withSettings(settings: RoomSettings): Room = copy(
+        quality = settings.quality,
+        timeLimit = settings.timeLimit,
+        sizeLimitBytes = settings.sizeLimitBytes,
+        recordPublic = settings.recordPublic,
+        recordFreeSpy = settings.recordFreeSpy,
+        autoPayTicket = settings.autoPayTicket,
+        autoPaySpy = settings.autoPaySpy,
+        pkey = settings.pkey
+    )
+}
 
 object DurationMillisSerializer : KSerializer<Duration> {
     override val descriptor = PrimitiveSerialDescriptor("DurationMillis", PrimitiveKind.LONG)

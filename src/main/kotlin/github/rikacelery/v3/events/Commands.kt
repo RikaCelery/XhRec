@@ -28,17 +28,17 @@ data class SetRoomTimeLimit(val roomId: Long, val limit: Duration) : Request {
 data class SetRoomSizeLimit(val roomId: Long, val limitBytes: Long) : Request {
     override fun toString() = "SetRoomSizeLimit(roomId=$roomId, limitBytes=$limitBytes)"
 }
-enum class AutoPayKind { GROUP_SHOW, PRIVATE }
+/** The per-room recording switches a user can flip (issue #130). */
+enum class RecordingFilterKind { PUBLIC, FREE_SPY, TICKET, PAID_SPY }
 
-data class SetRoomAutoPay(val roomId: Long, val kind: AutoPayKind, val autoPay: Boolean) : Request {
-    override fun toString() = "SetRoomAutoPay(roomId=$roomId, kind=$kind, autoPay=$autoPay)"
+data class SetRoomFilter(val roomId: Long, val kind: RecordingFilterKind, val value: Boolean) : Request {
+    override fun toString() = "SetRoomFilter(roomId=$roomId, kind=$kind, value=$value)"
 }
 data class AddRoom(
-    val name: String, val quality: String, val pkey: String = "",
-    val timeLimit: Duration = Duration.INFINITE, val sizeLimitBytes: Long = 0,
-    val autoPayTicket: Boolean = false, val autoPaySpy: Boolean = false
+    val name: String,
+    val settings: github.rikacelery.v3.data.RoomSettings = github.rikacelery.v3.data.RoomSettings()
 ) : Request {
-    override fun toString() = "AddRoom(name=$name, quality=$quality)"
+    override fun toString() = "AddRoom(name=$name, quality=${settings.quality})"
 }
 data class RemoveRoom(val roomId: Long) : Request {
     override fun toString() = "RemoveRoom(roomId=$roomId)"
@@ -150,14 +150,9 @@ data class RoomNameResponse(val name: String) : Response {
     override fun toString() = "RoomNameResponse(name=$name)"
 }
 data class RoomConfigResponse(
-    val quality: String,
-    val timeLimit: Duration,
-    val sizeLimitBytes: Long,
-    val autoPayTicket: Boolean = false,
-    val autoPaySpy: Boolean = false,
-    val pkey: String = ""
+    val settings: github.rikacelery.v3.data.RoomSettings
 ) : Response {
-    override fun toString() = "RoomConfigResponse(quality=$quality, timeLimit=$timeLimit, sizeLimitBytes=$sizeLimitBytes)"
+    override fun toString() = "RoomConfigResponse(quality=${settings.quality}, timeLimit=${settings.timeLimit}, sizeLimitBytes=${settings.sizeLimitBytes})"
 }
 data class ConfigResponse(val value: Any?) : Response {
     override fun toString() = "ConfigResponse(value=$value)"

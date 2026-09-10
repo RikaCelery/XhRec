@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import github.rikacelery.v3.data.RoomSettings
 
 /**
  * Regression for issue #141: removing a room while it is armed/recording must
@@ -34,7 +35,7 @@ class SchedulerRoomRemovalTest {
         advanceUntilIdle()
 
         try {
-            scheduler.internalAdd(42, "model", "highest", "", isArmed = true, autoPayTicket = false, autoPaySpy = false)
+            scheduler.internalAdd(42, "model", RoomSettings(), isArmed = true)
             advanceUntilIdle()
             assertEquals(listOf(42L), requestBus.request<List<Long>>(GetArmedRoomIds))
 

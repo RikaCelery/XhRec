@@ -7,6 +7,7 @@ import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.FavoriteCandidate
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.User
 import github.rikacelery.v3.events.*
@@ -151,14 +152,7 @@ class RoomComponent(
             is GetRoomConfig -> {
                 val r = rooms[cmd.roomId]
                     ?: throw NoSuchElementException("room ${cmd.roomId} not found")
-                RoomConfigResponse(
-                    r.quality,
-                    r.timeLimit,
-                    r.sizeLimitBytes,
-                    r.autoPayTicket,
-                    r.autoPaySpy,
-                    r.pkey
-                )
+                RoomConfigResponse(r.settings())
             }
 
             is SetRoomQuality -> {
@@ -180,12 +174,18 @@ class RoomComponent(
                 OkResponse
             }
 
-            is SetRoomAutoPay -> {
-                rooms[cmd.roomId]?.let {
-                    rooms[it.id] = when (cmd.kind) {
-                        AutoPayKind.GROUP_SHOW -> it.copy(autoPayTicket = cmd.autoPay)
-                        AutoPayKind.PRIVATE -> it.copy(autoPaySpy = cmd.autoPay)
+            is SetRoomFilter -> {
+                rooms[cmd.roomId]?.let { room ->
+                    val updated = when (cmd.kind) {
+                        RecordingFilterKind.PUBLIC -> room.copy(recordPublic = cmd.value)
+                        RecordingFilterKind.FREE_SPY -> room.copy(recordFreeSpy = cmd.value)
+                        RecordingFilterKind.TICKET -> room.copy(autoPayTicket = cmd.value)
+                        RecordingFilterKind.PAID_SPY -> room.copy(autoPaySpy = cmd.value)
                     }
+                    rooms[room.id] = updated
+                    // an armed room refreshes its own copy only through a preconfig attempt, and a
+                    // room that is no longer recordable never makes one: push the change instead
+                    eventBus.publish(RoomSettingsChanged(updated.id, updated.settings(), updated.status))
                 }
                 OkResponse
             }
@@ -199,19 +199,9 @@ class RoomComponent(
                         logger.warn("Duplicate room: id={}, name={}", id, name)
                         ErrorResponse("Exist $name")
                     } else {
-                        rooms[id] = Room(
-                            id,
-                            name,
-                            cmd.quality,
-                            cmd.timeLimit,
-                            cmd.sizeLimitBytes,
-                            cmd.autoPayTicket,
-                            cmd.autoPaySpy,
-                            null,
-                            pkey = cmd.pkey
-                        )
+                        rooms[id] = newRoom(id, name, cmd.settings)
                         SensitiveStringRegistry.mask(name)
-                        logger.info("Room added: id={}, name={}, quality={}", id, name, cmd.quality)
+                        logger.info("Room added: id={}, name={}, quality={}", id, name, cmd.settings.quality)
                         eventBus.publish(RoomAdded(id, name))
                         RoomNameResponse(name)
                     }
@@ -303,17 +293,27 @@ class RoomComponent(
         }
     }
 
+    /** A room carrying every field of [settings], with no status seen yet. */
+    private fun newRoom(id: Long, name: String, settings: RoomSettings): Room = Room(
+        id = id,
+        name = name,
+        quality = settings.quality,
+        timeLimit = settings.timeLimit,
+        sizeLimitBytes = settings.sizeLimitBytes,
+        recordPublic = settings.recordPublic,
+        recordFreeSpy = settings.recordFreeSpy,
+        autoPayTicket = settings.autoPayTicket,
+        autoPaySpy = settings.autoPaySpy,
+        lastSeen = null,
+        pkey = settings.pkey
+    )
+
     suspend fun internalAdd(
         id: Long,
         name: String,
-        quality: String,
-        timeLimit: Duration,
-        sizeLimitBytes: Long,
-        autoPayTicket: Boolean,
-        autoPaySpy: Boolean,
-        pkey: String = ""
+        settings: RoomSettings,
     ) {
-        rooms[id] = Room(id, name, quality, timeLimit, sizeLimitBytes, autoPayTicket, autoPaySpy, null, pkey = pkey)
+        rooms[id] = newRoom(id, name, settings)
         // let LiveEventSource subscribe the room's status channels
         eventBus.publish(RoomAdded(id, name))
     }
@@ -346,7 +346,7 @@ class RoomComponent(
         val known = rooms.keys
         val added = resolveRoomNames(modelIds.distinct().filterNot { it in known }).map { (id, name) ->
             SensitiveStringRegistry.mask(name)
-            internalAdd(id, name, FAVORITES_DEFAULT_QUALITY, Duration.INFINITE, 0, false, false)
+            internalAdd(id, name, RoomSettings(quality = FAVORITES_DEFAULT_QUALITY))
             logger.info("Favorite imported as room: id={}, name={}", id, name)
             name
         }
