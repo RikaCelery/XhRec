@@ -1,0 +1,3 @@
+# Kotlin compiler warnings this repository currently tolerates.
+# Regenerate with .github/scripts/check_compile_warnings.py --update-baseline
+# Entries: 0
