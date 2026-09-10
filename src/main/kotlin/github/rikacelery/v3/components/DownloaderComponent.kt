@@ -162,7 +162,16 @@ class DownloaderComponent(
     }
 
     private suspend fun handleCutPoint(cut: CutPoint) {
-        val active = rooms[cut.roomId] ?: return
+        // A cut can arrive before the session downloaded anything (a stop right after the
+        // recording started, a room that went offline immediately). Dropping it would leave the
+        // file open, the session stuck in Closing and the scheduler in Stopping forever, so the
+        // room state is created on demand — exactly like the first download does.
+        val active = rooms.getOrPut(cut.roomId) {
+            ActiveDownload(
+                emitter = OrderedEmitter(cut.roomId) { dataChannel.send(it) },
+                semaphore = Semaphore(initialConcurrency)
+            )
+        }
         val idx = active.idx.incrementAndGet().toLong()
         logger.info("CutPoint roomId={}, index={}, reason={}", cut.roomId, cut.index, cut.reason)
         // once this returns, StreamEnd is in the DataChannel FIFO; Session restart is safe only after that

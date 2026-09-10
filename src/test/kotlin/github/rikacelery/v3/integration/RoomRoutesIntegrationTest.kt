@@ -1,10 +1,12 @@
 package github.rikacelery.v3.integration
 
 import github.rikacelery.v3.components.SessionState
+import github.rikacelery.v3.events.CutPointDone
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.SegmentDownloaded
+import github.rikacelery.v3.events.SessionExit
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
@@ -209,6 +211,30 @@ class RoomRoutesIntegrationTest {
         val ready = fx.awaitEvent<FileReady>(20.seconds) { it.roomId == 1001L }
         assertEquals(EndReason.SizeLimit, ready.reason)
         assertTrue(ready.file.length() >= 1024, "file must have crossed the size limit: ${ready.file.length()}")
+    }
+
+    @Test
+    fun `a session stopped before its first segment still exits`() = withFixture(
+        // a playlist poll interval longer than the test: the cut lands before the session has
+        // polled once, so the downloader has no state for the room yet
+        tuning = XhrecIntegrationFixture.testTuning(playlistPollInterval = 30.seconds)
+    ) { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "public")
+        fx.mock.startSegments(1001, 30.milliseconds)
+
+        fx.get("/add?name=model").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.awaitSession(1001, SessionState.Recording)
+
+        fx.get("/break?id=1001").expectOk("Break signaled")
+
+        // nothing was downloaded yet, so there is no file to publish — but the cut still has to
+        // complete: otherwise the session hangs in Closing and the room never records again
+        val cut = fx.awaitEvent<CutPointDone>(15.seconds) { it.roomId == 1001L }
+        assertEquals(EndReason.NewInit, cut.reason)
+        fx.awaitEvent<SessionExit>(15.seconds) { it.roomId == 1001L }
+        fx.awaitEventCount<RecordingStarted>(2, 15.seconds) { it.roomId == 1001L }
     }
 
     @Test
