@@ -15,6 +15,7 @@ import github.rikacelery.v3.components.SchedulerComponent
 import github.rikacelery.v3.components.SessionComponent
 import github.rikacelery.v3.components.SessionState
 import github.rikacelery.v3.components.WriterComponent
+import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
@@ -139,7 +140,15 @@ class XhrecIntegrationFixture(
         listOf(url)
     }
 
-    fun start() {
+    /**
+     * Starts every component and waits until they are attached to the bus.
+     *
+     * `Actor.start()` only launches the message loop; the bus subscriptions attach a moment later,
+     * and the bus does not replay, so a command published before that attach is dropped in silence
+     * — the route then waits for its ack until it times out. Tests issue `/add` immediately after
+     * startup, so the wait belongs here rather than in each test.
+     */
+    suspend fun start() {
         eventBus.installHook(object : EventHook {
             override suspend fun intercept(event: Any): Any? {
                 events += event
@@ -243,6 +252,23 @@ class XhrecIntegrationFixture(
         writerComponent.start()
         sessionComponent.start()
         schedulerComponent.start()
+
+        val components: List<Pair<String, Actor<*>>> = listOf(
+            "config" to configComponent,
+            "auth" to authComponent,
+            "metric" to metricComponent,
+            "postProcessor" to postProcessorComponent,
+            "room" to roomComponent,
+            "liveEventSource" to liveEventSource,
+            "downloader" to downloaderComponent,
+            "writer" to writerComponent,
+            "session" to sessionComponent,
+            "scheduler" to schedulerComponent
+        )
+        components.forEach { (label, component) ->
+            check(component.awaitSubscribed()) { "$label did not subscribe to the event bus" }
+        }
+        check(requestBus.awaitSubscribed()) { "request bus did not subscribe to command acks" }
     }
 
     /** Marks the room list ready and loads one payable account for group/private flows. */

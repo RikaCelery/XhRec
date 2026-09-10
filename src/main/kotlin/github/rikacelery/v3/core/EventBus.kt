@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import kotlin.reflect.KClass
@@ -95,13 +96,25 @@ class EventBus {
         }
     }
 
+    /**
+     * Collects [eventType] on [scope] and feeds every value to [handler].
+     *
+     * The collector attaches to the shared flow asynchronously, and the flow does not replay, so
+     * anything published before the attach is missed by this subscriber. [onAttached] fires once
+     * the subscription is live, which lets a caller wait for it (see `Actor.awaitSubscribed`).
+     */
     fun <E : Any> subscribe(
         scope: CoroutineScope,
         eventType: KClass<E>,
+        onAttached: (() -> Unit)? = null,
         handler: suspend (E) -> Unit
     ) {
         scope.launch {
-            events.filterIsInstance(eventType).collect { handler(it) }
+            // onSubscription fires once the subscription is registered on the shared flow, which is
+            // the moment from which this collector can no longer miss an emission.
+            events.onSubscription { onAttached?.invoke() }
+                .filterIsInstance(eventType)
+                .collect { handler(it) }
         }
     }
 }

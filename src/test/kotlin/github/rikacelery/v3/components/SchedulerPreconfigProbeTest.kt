@@ -120,10 +120,18 @@ class SchedulerPreconfigProbeTest {
                     "the preconfig loop must survive a probe that outlives its watchdog (probes=${probes.get()}, " +
                             "state=${entry.fsm.currentState})"
                 )
+
+                // the retried probe reaches the room through the actor mailbox, so wait for the
+                // transition instead of assuming it already happened when the request was made
+                val recorded = withTimeoutOrNull(5.seconds) {
+                    while (entry.fsm.currentState != SchedulerState.Recording) delay(20.milliseconds)
+                    true
+                }
                 assertEquals(
-                    SchedulerState.Recording,
-                    entry.fsm.currentState,
-                    "the retried probe succeeds, so the room must go on to record"
+                    true,
+                    recorded,
+                    "the retried probe succeeds, so the room must go on to record " +
+                            "(probes=${probes.get()}, state=${entry.fsm.currentState})"
                 )
             } finally {
                 scheduler.stop()

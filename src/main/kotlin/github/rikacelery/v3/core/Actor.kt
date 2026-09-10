@@ -3,7 +3,11 @@ package github.rikacelery.v3.core
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import org.slf4j.LoggerFactory
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.reflect.KClass
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 abstract class Actor<T : Any>(
     val name: String,
@@ -26,12 +30,40 @@ abstract class Actor<T : Any>(
 
     private var started = false
 
+    // —— Subscription readiness ——
+    // `start()` only launches the loop: the bus subscriptions registered in `onStart` attach to the
+    // shared flow a moment later, and the bus drops events for subscribers that have not attached
+    // yet. Callers that publish right after starting a component (the test fixture does, the UI
+    // routes do once the server is up) can await this instead of racing with it.
+    private val subscriptionsRegistered = AtomicInteger(0)
+    private val subscriptionsAttached = AtomicInteger(0)
+    private val startCompleted = AtomicBoolean(false)
+    private val subscriptionsReady = CompletableDeferred<Unit>()
+
+    private fun signalSubscriptionsReady() {
+        if (startCompleted.get() && subscriptionsAttached.get() >= subscriptionsRegistered.get()) {
+            subscriptionsReady.complete(Unit)
+        }
+    }
+
+    /**
+     * Suspends until [onStart] has returned and every subscription it registered has attached to
+     * the bus, so an event published after this returns cannot be missed. Returns false when the
+     * subscriptions are still not attached after [timeout].
+     */
+    suspend fun awaitSubscribed(timeout: Duration = 10.seconds): Boolean {
+        signalSubscriptionsReady()
+        return withTimeoutOrNull(timeout) { subscriptionsReady.await() } != null
+    }
+
     fun start() {
         check(!started) { "$name already started" }
         started = true
 
         scope.launch {
             onStart(scope)
+            startCompleted.set(true)
+            signalSubscriptionsReady()
             for (msg in mailbox) {
                 try {
                     val start = System.nanoTime()
@@ -63,7 +95,15 @@ abstract class Actor<T : Any>(
     }
 
     protected suspend fun <E : Any> subscribe(kClass: KClass<E>) {
-        eventBus.subscribe(scope, kClass) { event ->
+        subscriptionsRegistered.incrementAndGet()
+        eventBus.subscribe(
+            scope = scope,
+            eventType = kClass,
+            onAttached = {
+                subscriptionsAttached.incrementAndGet()
+                signalSubscriptionsReady()
+            }
+        ) { event ->
             wrapEvent(event)?.let { mailbox.send(it) }
         }
     }
