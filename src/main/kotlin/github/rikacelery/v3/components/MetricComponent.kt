@@ -48,17 +48,9 @@ class MetricComponent(
     private val recording = ConcurrentHashMap.newKeySet<Long>()
 
     override suspend fun onStart(scope: CoroutineScope) {
-        subscribe<SegmentDownloaded>(SegmentDownloaded::class)
-        subscribe<DownloadError>(DownloadError::class)
-        subscribe<DownloadStarted>(DownloadStarted::class)
-        subscribe<SegmentGapDetected>(SegmentGapDetected::class)
-        subscribe<FileReady>(FileReady::class)
-        subscribe<FileProcessed>(FileProcessed::class)
-        subscribe<PlaylistRefreshed>(PlaylistRefreshed::class)
-        subscribe<RecordingStarted>(RecordingStarted::class)
-        subscribe<RecordingStopped>(RecordingStopped::class)
-        subscribe<RoomStatusChanged>(RoomStatusChanged::class)
-        subscribe<CommandEnvelope>(CommandEnvelope::class)
+        // One collector preserves ordering across event types, including immediate
+        // failures and file rotations. wrapEvent filters out unrelated events.
+        subscribe(Any::class)
     }
 
     override suspend fun wrapEvent(event: Any): MetricMsg? = when (event) {

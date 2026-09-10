@@ -322,9 +322,13 @@ class SchedulerEntry(
         var lastErr: Throwable? = null
         for (url in urls) {
             val host = Url(url).host
+            val start = System.nanoTime()
             try {
                 val response = withRetry(3) { client.get(url) }
-                return M3u8Parser.parseMaster(response.bodyAsText())
+                val master = M3u8Parser.parseMaster(response.bodyAsText())
+                val durationMs = ((System.nanoTime() - start) / 1_000_000).coerceAtLeast(1)
+                CdnSelector.record(host, durationMs)
+                return master
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ClientRequestException) {
