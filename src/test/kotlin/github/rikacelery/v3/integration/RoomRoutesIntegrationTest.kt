@@ -19,6 +19,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -310,6 +311,43 @@ class RoomRoutesIntegrationTest {
 
         fx.get("/deactivate?id=1001").expectOk("Deactivated")
         fx.awaitListConf(15.seconds) { it.contains("model") && it.trimStart().startsWith("#") }
+    }
+
+    @Test
+    fun `the dashboard exposes the room filters`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "off")
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+        fx.get("/filter?id=1001&kind=public&v=false").expectOk("Filter public set to false")
+
+        val displayed = fx.awaitRoom("model") { it.path("room.recordPublic") == "false" }
+        val room = displayed["room"]!!.jsonObject
+        assertFalse(room.boolField("recordPublic"), "the dashboard must show the public filter")
+        assertTrue(room.boolField("recordFreeSpy"), "untouched filters keep their defaults")
+    }
+
+    @Test
+    fun `the filter route rejects unknown kinds and missing values`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "off")
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+
+        assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?id=1001&kind=bogus&v=true").status)
+        assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?id=1001&kind=public").status)
+        assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?id=1001&kind=public&v=maybe").status)
+        assertEquals(HttpStatusCode.BadRequest, fx.get("/filter?kind=public&v=true").status)
+    }
+
+    @Test
+    fun `bootstrap reloads the room filters from list conf`() = withFixture { fx ->
+        fx.mock.addRoom(1001, "model", status = "off")
+        File(fx.listConfPath).writeText("#https://mock/model q:highest nopublic nofreespy\n")
+
+        fx.bootstrap()
+
+        val room = fx.rooms().single { it.id == 1001L }
+        assertFalse(room.recordPublic, "nopublic must turn public recording off")
+        assertFalse(room.recordFreeSpy, "nofreespy must turn free spy recording off")
     }
 
     @Test

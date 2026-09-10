@@ -28,8 +28,20 @@ data class SetRoomTimeLimit(val roomId: Long, val limit: Duration) : Request {
 data class SetRoomSizeLimit(val roomId: Long, val limitBytes: Long) : Request {
     override fun toString() = "SetRoomSizeLimit(roomId=$roomId, limitBytes=$limitBytes)"
 }
-/** The per-room recording switches a user can flip (issue #130). */
-enum class RecordingFilterKind { PUBLIC, FREE_SPY, TICKET, PAID_SPY }
+/**
+ * The per-room recording switches a user can flip (issue #130). [wireName] is the spelling
+ * used by the HTTP API and the dashboard.
+ */
+enum class RecordingFilterKind(val wireName: String) {
+    PUBLIC("public"),
+    FREE_SPY("freespy"),
+    TICKET("ticket"),
+    PAID_SPY("paidspy");
+
+    companion object {
+        fun fromWire(value: String?): RecordingFilterKind? = entries.firstOrNull { it.wireName == value }
+    }
+}
 
 data class SetRoomFilter(val roomId: Long, val kind: RecordingFilterKind, val value: Boolean) : Request {
     override fun toString() = "SetRoomFilter(roomId=$roomId, kind=$kind, value=$value)"

@@ -260,7 +260,7 @@ class HttpServerComponent(
                         "Missing id",
                         status = HttpStatusCode.BadRequest
                     )
-                    val kind = filterKind(call.request.queryParameters["kind"])
+                    val kind = RecordingFilterKind.fromWire(call.request.queryParameters["kind"])
                         ?: return@get call.respondText(
                             "Invalid kind (expected 'public', 'freespy', 'ticket' or 'paidspy')",
                             status = HttpStatusCode.BadRequest
@@ -269,7 +269,7 @@ class HttpServerComponent(
                         ?: return@get call.respondText("Missing v (true/false)", status = HttpStatusCode.BadRequest)
                     requestBus.request<OkResponse>(SetRoomFilter(id, kind, v))
                     persistConfig()
-                    call.respondText("Filter ${kind.name.lowercase()} set to $v")
+                    call.respondText("Filter ${kind.wireName} set to $v")
                 }
                 // legacy alias kept for existing scripts: autopay ticket/private are two of the filters
                 get("/autopay") {
@@ -388,7 +388,9 @@ class HttpServerComponent(
                                         put("name", r.name); put("id", r.id); put("quality", r.quality)
                                         put("status", r.status)
                                         put("timeLimit", if (r.timeLimit == Duration.INFINITE) 0L else r.timeLimit.inWholeMilliseconds)
-                                        put("sizeLimitBytes", r.sizeLimitBytes); put("autoPayTicket", r.autoPayTicket); put("autoPaySpy", r.autoPaySpy)
+                                        put("sizeLimitBytes", r.sizeLimitBytes)
+                                        put("recordPublic", r.recordPublic); put("recordFreeSpy", r.recordFreeSpy)
+                                        put("autoPayTicket", r.autoPayTicket); put("autoPaySpy", r.autoPaySpy)
                                     })
                                 })
                             }
@@ -745,15 +747,6 @@ class HttpServerComponent(
     companion object {
         /** Platform timeout for a favorites command: one request per account plus name lookups. */
         private const val FAVORITES_TIMEOUT_MS = 120_000L
-
-        /** Query-string spelling of a recording filter, shared by `/filter` and `/autopay`. */
-        private fun filterKind(value: String?): RecordingFilterKind? = when (value) {
-            "public" -> RecordingFilterKind.PUBLIC
-            "freespy" -> RecordingFilterKind.FREE_SPY
-            "ticket" -> RecordingFilterKind.TICKET
-            "paidspy" -> RecordingFilterKind.PAID_SPY
-            else -> null
-        }
 
         private fun hasRecentActivity(data: Map<String, Any>): Boolean {
             val running = data["running"] as? Map<*, *>

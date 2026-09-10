@@ -410,6 +410,9 @@ class RoomComponent(
                     if (room.timeLimit != Duration.INFINITE) sb.append(" limit:${room.timeLimit.inWholeSeconds}")
                     if (room.sizeLimitBytes > 0) sb.append(" size:${formatSize(room.sizeLimitBytes)}")
                     if (room.pkey.isNotBlank()) sb.append(" pkey:${room.pkey}")
+                    // filters are opt-out tokens: a line without them keeps the defaults
+                    if (!room.recordPublic) sb.append(" nopublic")
+                    if (!room.recordFreeSpy) sb.append(" nofreespy")
                     when {
                         room.autoPayTicket && room.autoPaySpy -> sb.append(" autopay")
                         room.autoPayTicket -> sb.append(" autopay:ticket")

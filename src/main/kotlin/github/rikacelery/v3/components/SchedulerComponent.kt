@@ -56,6 +56,14 @@ enum class SchedulerEvent {
     BeginPreconfig, RestartRecording, BackToArmed, StopAndWait,
 }
 
+/**
+ * Why a token could not be obtained. Decisions read this instead of parsing
+ * [SchedulerDriveData.failReason], which stays a human-readable log message.
+ */
+enum class TokenFailure {
+    AutopayDisabled, NoAccount, PriceUnavailable, InsufficientBalance, NoToken, NoFreeSpy, BadStatus
+}
+
 data class SchedulerDriveData(
     val roomStatus: String? = null,
     val streamStatus: String? = null,
@@ -67,6 +75,7 @@ data class SchedulerDriveData(
     val token: String? = null,
     val pkey: String? = null,
     val failReason: String? = null,
+    val tokenFailure: TokenFailure? = null,
     val stopReason: EndReason? = null,
 )
 
@@ -108,6 +117,14 @@ class SchedulerEntry(
     // —— Armed configuration ——
     var settings: RoomSettings = RoomSettings()
 
+    /**
+     * Set when a private show could not use a free spy privilege and paid spy is off. The
+     * privilege is a property of the account, not of the show, so one probe per private
+     * episode is enough — without this the preconfig loop would ask the platform every
+     * [RuntimeTuning.preconfigRetryInterval] while the show lasts.
+     */
+    var freeSpyExhausted: Boolean = false
+
     // —— Status ——
     var roomStatus: String = ""
     var streamStatus: String = ""
@@ -122,6 +139,7 @@ class SchedulerEntry(
     // —— Resume state ——
     var lastIndex: Long? = null
     var lastFailReason: String? = null
+    private var tokenFailure: TokenFailure? = null
 
     val scope = CoroutineScope(
         component.ioScope.coroutineContext + SupervisorJob(component.ioScope.coroutineContext[Job])
@@ -146,7 +164,9 @@ class SchedulerEntry(
     internal fun canRecord(status: String): Boolean = when {
         RoomStatus.isPublic(status) -> settings.recordPublic
         RoomStatus.isGroupShow(status) -> settings.autoPayTicket
-        RoomStatus.isPrivate(status) -> settings.autoPaySpy
+        // a free spy privilege is worth recording on its own; paying still needs autoPaySpy
+        RoomStatus.isPrivate(status) -> settings.autoPaySpy ||
+            (settings.recordFreeSpy && !freeSpyExhausted)
         else -> false
     }
 
@@ -197,9 +217,14 @@ class SchedulerEntry(
         return try {
             val config = component.requestBus.request<RoomConfigResponse>(GetRoomConfig(roomId))
             settings = config.settings.copy(pkey = config.settings.pkey.ifBlank { component.streamAuthKey })
+            tokenFailure = null
 
             val token = fetchToken(config)
-                ?: return SchedulerSignal(roomId, SchedulerEvent.PreconfigFailed, SchedulerDriveData(failReason = lastFailReason ?: "no token"))
+                ?: return SchedulerSignal(
+                    roomId,
+                    SchedulerEvent.PreconfigFailed,
+                    SchedulerDriveData(failReason = lastFailReason ?: "no token", tokenFailure = tokenFailure)
+                )
             val master = fetchMaster(token)
             val keyName = matchPkey(master)
             val variant = selectVariant(master, settings.quality)
@@ -228,6 +253,7 @@ class SchedulerEntry(
             RoomStatus.isPrivate(status) -> fetchPrivateToken(config)
             else -> {
                 lastFailReason = "status $status"
+                tokenFailure = TokenFailure.BadStatus
                 null
             }
         }
@@ -236,6 +262,7 @@ class SchedulerEntry(
     private suspend fun fetchGroupToken(config: RoomConfigResponse): String? {
         if (!config.settings.autoPayTicket) {
             lastFailReason = "autopay disabled"
+            tokenFailure = TokenFailure.AutopayDisabled
             return null
         }
         val camInfo = component.apiClient.roomFetchCamInfo(roomId, "")
@@ -244,6 +271,7 @@ class SchedulerEntry(
         val u = users.firstOrNull()
         if (u == null) {
             lastFailReason = "no account"
+            tokenFailure = TokenFailure.NoAccount
             return null
         }
         var token = component.apiClient.roomFetchModelToken(roomId, u)
@@ -255,6 +283,7 @@ class SchedulerEntry(
         }
         if (token == null) {
             lastFailReason = "no token"
+            tokenFailure = TokenFailure.NoToken
             return null
         }
         return token
@@ -266,10 +295,14 @@ class SchedulerEntry(
         if (freeUser != null) {
             val cam = component.apiClient.roomFetchCamInfo(roomId, freeUser.cookie)
             val token = cam.PathSingle("cam.modelToken").asString().ifBlank { null }
-            if (token == null) lastFailReason = "no token"
+            if (token == null) {
+                lastFailReason = "no token"
+                tokenFailure = TokenFailure.NoToken
+            }
             return token
         }
         lastFailReason = "no free spy access"
+        tokenFailure = TokenFailure.NoFreeSpy
         if (!config.settings.autoPaySpy) {
             lastFailReason = "autopay disabled"
             return null
@@ -277,16 +310,19 @@ class SchedulerEntry(
         val paidUser = users.firstOrNull()
         if (paidUser == null) {
             lastFailReason = "no account"
+            tokenFailure = TokenFailure.NoAccount
             return null
         }
         val paidCam = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
         val price = paidCam.PathSingleOrNull("user.user.privateRate")?.asInt()
         if (price == null) {
             lastFailReason = "price unavailable"
+            tokenFailure = TokenFailure.PriceUnavailable
             return null
         }
         if (paidUser.coins < price) {
             lastFailReason = "insufficient balance"
+            tokenFailure = TokenFailure.InsufficientBalance
             return null
         }
         var token = paidCam.PathSingle("cam.modelToken").asString().ifBlank { null }
@@ -301,6 +337,7 @@ class SchedulerEntry(
         }
         if (token == null) {
             lastFailReason = "no token"
+            tokenFailure = TokenFailure.NoToken
             return null
         }
         return token
@@ -456,7 +493,17 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 }
             }
             on(SchedulerEvent.PreconfigFailed) to KEEP action { d ->
-                // stay in Preconfiguring; the 15s ticker retries automatically
+                // no free spy privilege and paid spy is off: this room is not recordable while the
+                // private show lasts, so stop asking the platform every retry interval
+                if (d?.tokenFailure == TokenFailure.NoFreeSpy && !settings.autoPaySpy) {
+                    freeSpyExhausted = true
+                    schedulerLogger.info(
+                        "Room {}: no free spy access, waiting for the next private show", roomId
+                    )
+                    self(SchedulerEvent.BackToArmed)
+                    return@action
+                }
+                // stay in Preconfiguring; the ticker retries automatically
                 if (lastFailReason != d?.failReason) {
                     schedulerLogger.warn("Preconfig failed room={}: {}", roomId, d?.failReason)
                     lastFailReason = d?.failReason
@@ -651,7 +698,12 @@ class SchedulerComponent(
 
     private suspend fun onBus(event: Any) {
         when (event) {
-            is RoomStatusChanged -> driveFsm(event.roomId, SchedulerEvent.RoomStatusChanged, SchedulerDriveData(roomStatus = event.newStatus))
+            is RoomStatusChanged -> {
+                // the free spy privilege is probed once per private show, so anything that ends
+                // the show (offline, public, group show) re-arms the probe for the next one
+                if (!RoomStatus.isPrivate(event.newStatus)) entries[event.roomId]?.freeSpyExhausted = false
+                driveFsm(event.roomId, SchedulerEvent.RoomStatusChanged, SchedulerDriveData(roomStatus = event.newStatus))
+            }
             is StreamStatusChanged -> driveFsm(event.roomId, SchedulerEvent.StreamStatusChanged, SchedulerDriveData(streamStatus = event.newStatus))
             is SessionExit -> driveFsm(event.roomId, SchedulerEvent.SessionExit, SchedulerDriveData(lastIndex = event.lastIndex, exitReason = event.reason))
             is QualityChangeRequested -> driveFsm(event.roomId, SchedulerEvent.ChangeQuality, SchedulerDriveData(newQuality = event.newQuality))
@@ -662,6 +714,7 @@ class SchedulerComponent(
                     entry.settings = event.settings.copy(
                         pkey = event.settings.pkey.ifBlank { streamAuthKey }
                     )
+                    entry.freeSpyExhausted = false
                     driveFsm(
                         event.roomId,
                         SchedulerEvent.SettingsChanged,

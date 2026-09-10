@@ -87,4 +87,114 @@ class RecordingFilterIntegrationTest {
             "no new preconfig may run after public recording was turned off"
         )
     }
+
+    @Test
+    fun `a private show is recorded for free when the account has free spy access`() = withFixture { fx ->
+        fx.ready()
+        val room = fx.mock.addRoom(1001, "model", status = "off")
+        room.freeSpyAccess = true
+        room.modelToken = "spy-token"
+
+        // paid spy stays off: only the free privilege may start this recording
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.mock.startSegments(1001, 30.milliseconds)
+        fx.awaitRoomSubscribed(1001)
+        fx.mock.setRoomStatus(1001, "p2p")
+
+        fx.awaitSession(1001, SessionState.Recording)
+        fx.awaitEvent<SegmentDownloaded>(10.seconds) { it.roomId == 1001L }
+        assertTrue(
+            fx.mock.requests().none { it.method == "PUT" && it.path.contains("/spy") },
+            "a free spy show must not be purchased: ${fx.mock.requests().map { "${it.method} ${it.path}" }}"
+        )
+    }
+
+    @Test
+    fun `a room without free spy access is probed once per private show`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "off")   // freeSpyAccess defaults to false
+
+        // paid spy stays off, so the free privilege is the only possible way in
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.mock.startSegments(1001, 30.milliseconds)
+        fx.awaitRoomSubscribed(1001)
+        val before = fx.mock.requests().size
+        fx.mock.setRoomStatus(1001, "p2p")
+
+        // the preconfig loop retries every 100ms in tests: an unthrottled probe would ask
+        // the platform about the privilege ~20 times in this window
+        delay(2000)
+        val probes = fx.mock.requests().drop(before)
+            .count { it.path.contains("/api/front/v2/models/1001/cam") }
+
+        assertTrue(probes <= 3, "the free spy privilege must be probed once per private show, saw $probes probes")
+        assertTrue(
+            fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
+            "a private show without free spy access must not be recorded"
+        )
+    }
+
+    @Test
+    fun `the room filters are persisted to list conf`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "off")
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+
+        fx.get("/filter?id=1001&kind=public&v=false").expectOk("Filter public set to false")
+        fx.get("/filter?id=1001&kind=freespy&v=false").expectOk("Filter freespy set to false")
+
+        val line = fx.awaitListConf(15.seconds) { it.contains("nopublic") }
+        assertTrue(line.contains("nofreespy"), "both filters must be written: $line")
+        assertTrue(line.contains("q:highest"), "the rest of the line stays untouched: $line")
+    }
+
+    @Test
+    fun `a private show is not recorded when free spy recording is disabled`() = withFixture { fx ->
+        fx.ready()
+        val room = fx.mock.addRoom(1001, "model", status = "off")
+        room.freeSpyAccess = true
+        room.modelToken = "spy-token"
+
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+        fx.get("/filter?id=1001&kind=freespy&v=false").expectOk("Filter freespy set to false")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.mock.startSegments(1001, 30.milliseconds)
+        fx.awaitRoomSubscribed(1001)
+        fx.mock.setRoomStatus(1001, "p2p")
+
+        delay(1500)
+        assertTrue(
+            fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
+            "free spy recording is off, so the private show must not be recorded"
+        )
+        assertTrue(fx.events.filterIsInstance<SegmentDownloaded>().isEmpty())
+    }
+
+    @Test
+    fun `a later private show probes for the free spy privilege again`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "off")
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.mock.startSegments(1001, 30.milliseconds)
+        fx.awaitRoomSubscribed(1001)
+
+        fx.mock.setRoomStatus(1001, "p2p")
+        delay(750)
+        val firstShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }
+        assertTrue(firstShow > 0, "the privilege must be probed when the private show starts")
+
+        fx.mock.setRoomStatus(1001, "off")
+        delay(250)
+        fx.mock.setRoomStatus(1001, "p2p")
+        delay(750)
+
+        val secondShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }
+        assertTrue(
+            secondShow > firstShow,
+            "the next private show must probe again instead of staying exhausted forever"
+        )
+    }
 }

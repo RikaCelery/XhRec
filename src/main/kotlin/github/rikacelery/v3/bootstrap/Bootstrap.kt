@@ -152,6 +152,7 @@ class Bootstrap(
     data class ListConfLine(
         val url: String, val quality: String = "highest",
         val timeLimit: Long = 0, val sizeLimit: Long = 0,
+        val recordPublic: Boolean = true, val recordFreeSpy: Boolean = true,
         val autoPayTicket: Boolean = false, val autoPaySpy: Boolean = false,
         val pkey: String = "",
         val armed: Boolean
@@ -161,6 +162,8 @@ class Bootstrap(
             quality = quality,
             timeLimit = if (timeLimit > 0) timeLimit.seconds else Duration.INFINITE,
             sizeLimitBytes = sizeLimit,
+            recordPublic = recordPublic,
+            recordFreeSpy = recordFreeSpy,
             autoPayTicket = autoPayTicket,
             autoPaySpy = autoPaySpy,
             pkey = pkey
@@ -220,6 +223,8 @@ class Bootstrap(
         var sizeLimit = 0L
         var autoPayTicket = false
         var autoPaySpy = false
+        var recordPublic = true
+        var recordFreeSpy = true
         var pkey = ""
         for (i in 1 until parts.size) {
             when {
@@ -234,10 +239,17 @@ class Bootstrap(
                 }
                 parts[i] == "autopay:ticket" -> autoPayTicket = true
                 parts[i] == "autopay:private" -> autoPaySpy = true
+                // recording filters are opt-out tokens: their absence keeps the defaults
+                parts[i] == "nopublic" -> recordPublic = false
+                parts[i] == "nofreespy" -> recordFreeSpy = false
             }
         }
         val trimmed = line.trim()
-        return ListConfLine(url, quality, timeLimit, sizeLimit, autoPayTicket, autoPaySpy, pkey, armed = !trimmed.startsWith("#") && !trimmed.startsWith(";"))
+        return ListConfLine(
+            url, quality, timeLimit, sizeLimit, recordPublic, recordFreeSpy,
+            autoPayTicket, autoPaySpy, pkey,
+            armed = !trimmed.startsWith("#") && !trimmed.startsWith(";")
+        )
     }
 
     private fun parseSize(s: String): Long {
