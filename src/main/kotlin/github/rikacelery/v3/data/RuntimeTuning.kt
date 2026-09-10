@@ -11,6 +11,8 @@ data class RuntimeTuning(
     val webSocketReconnectInitial: Duration = 1.seconds,
     val webSocketReconnectMax: Duration = 30.seconds,
     val preconfigRetryInterval: Duration = 15.seconds,
+    /** Watchdog for the "is the selected variant playlist fetchable?" probe of a preconfig attempt. */
+    val preconfigProbeTimeout: Duration = 5.seconds,
     val playlistPollInterval: Duration = 3.seconds,
     val playlistFetchTimeout: Duration = 10.seconds,
     val httpRestartDelay: Duration = 500.milliseconds,

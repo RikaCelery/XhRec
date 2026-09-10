@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -127,4 +128,55 @@ class ActorTest {
         assertEquals(listOf("a1", "a2"), a.handled)
         assertEquals(listOf("b1", "b2"), b.handled)
     }
+
+    /**
+     * `start()` only launches the loop; the bus subscriptions registered in `onStart` attach a
+     * moment later, and the bus does not replay, so an event published in that window is dropped
+     * without a trace — a command published right after startup never gets its ack and the route
+     * waits for it until it times out. `awaitSubscribed()` is the barrier that closes that window.
+     */
+    @Test
+    fun `awaitSubscribed closes the window in which published events are dropped`() =
+        runTest(UnconfinedTestDispatcher()) {
+            val bus = EventBus()
+            val actor = SubscribingActor("subscribing", bus, this)
+            actor.start()
+
+            assertTrue(actor.awaitSubscribed(), "the actor must report its subscriptions as attached")
+
+            bus.publish("first")
+            bus.publish("second")
+            actor.stop()
+
+            assertEquals(listOf("first", "second"), actor.seen)
+        }
+
+    @Test
+    fun `awaitSubscribed reports ready for an actor that subscribes to nothing`() =
+        runTest(UnconfinedTestDispatcher()) {
+            val actor = TestActor("silent", EventBus(), this)
+            actor.start()
+            assertTrue(actor.awaitSubscribed())
+            actor.stop()
+        }
+}
+
+/** Subscribes to [String] events from `onStart`, so readiness covers a real subscription. */
+class SubscribingActor(
+    name: String,
+    eventBus: EventBus,
+    parentScope: CoroutineScope
+) : Actor<String>(name, eventBus, parentScope) {
+
+    val seen = CopyOnWriteArrayList<String>()
+
+    override suspend fun onStart(scope: CoroutineScope) {
+        subscribe(String::class)
+    }
+
+    override suspend fun handle(msg: String) {
+        seen += msg
+    }
+
+    override suspend fun wrapEvent(event: Any): String? = event as? String
 }
