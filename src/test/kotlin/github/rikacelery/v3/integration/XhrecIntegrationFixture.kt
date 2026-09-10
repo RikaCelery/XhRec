@@ -67,6 +67,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -437,13 +438,24 @@ private fun JsonObject.jsonPath(path: String): String? {
 
 /**
  * Test network boundary: loopback clients with the production-relevant plugins
- * (JSON bodies + WebSockets) but no proxy, no retry plugin and no CDN rewriting.
+ * (JSON bodies + WebSockets + timeouts) but no proxy, no retry plugin and no CDN rewriting.
+ *
+ * The timeouts mirror `ClientManager`: without them a stalled connection blocks the caller
+ * forever, so the ApiClient retry/failover logic never runs and a route such as `/add` can only
+ * time out. OkHttp keeps WebSocket sessions on a separate connection with no read timeout.
  */
 class TestHttpClientProvider : HttpClientProvider, AutoCloseable {
     private fun client(expectSuccess: Boolean): HttpClient = HttpClient(OkHttp) {
         this.expectSuccess = expectSuccess
         install(ContentNegotiation) { json() }
         install(WebSockets)
+        engine {
+            config {
+                connectTimeout(5, TimeUnit.SECONDS)
+                readTimeout(15, TimeUnit.SECONDS)
+                writeTimeout(15, TimeUnit.SECONDS)
+            }
+        }
     }
 
     private val lenient = client(expectSuccess = false)
