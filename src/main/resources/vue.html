@@ -364,8 +364,9 @@
                             </td>
                             <td class="px-2 py-1.5 text-center text-xs text-slate-500">
                                 {{room.roomStatus}}
-                                <span v-if="room.hint" class="block mt-0.5 text-[10px] text-amber-600 leading-tight"
-                                    :title="room.hint.detail || ''">
+                                <span v-if="room.hint"
+                                    class="block mx-auto mt-0.5 max-w-[11rem] truncate text-[10px] text-amber-700 leading-tight"
+                                    :title="hintText(room.hint)">
                                     <i class="fa-solid fa-circle-question mr-0.5"></i>{{hintText(room.hint)}}
                                 </span>
                             </td>
