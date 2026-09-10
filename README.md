@@ -32,12 +32,16 @@ java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.jso
 
 ### list.conf
 
-One room per line. Lines starting with `#` or `;` are inactive (not automatically recorded).
+One room per line. A line starting with `#` is a known room that is **inactive** (not
+automatically recorded); the marker may be followed by a space (`# https://...`) or not
+(`#https://...`), and the rest of the line is read normally. A line starting with `;` is
+ignored entirely, room and all.
 
 ```ini
-# https://stripchat.com/modelA q:720p limit:120
+#https://stripchat.com/modelA q:720p limit:120
 ; https://stripchat.com/modelB q:240p
 https://stripchat.com/modelC q:highest
+https://stripchat.com/modelD q:highest nopublic nofreespy autopay:private
 ```
 
 | Field          | Description                                                                                                                                 |
@@ -45,8 +49,17 @@ https://stripchat.com/modelC q:highest
 | `q:<quality>`  | Preferred quality: `240p`, `480p`, `720p`, `720p60`, `1080p`, `1080p60`, or `highest` (default). `raw` is deprecated, use `highest` instead |
 | `limit:<sec>`  | Recording time limit in seconds                                                                                                             |
 | `size:<bytes>` | Recording size limit (supports suffixes: `K`, `M`, `G`, e.g. `500M`)                                                                        |
-| `autopay`      | Enable auto-payment for private shows                                                                                                       |
 | `pkey:<key>`   | Custom psch key                                                                                                                             |
+| `nopublic`     | Do not record public (free) shows                                                                                                          |
+| `nofreespy`    | Do not record private shows that a free-spy privilege would cover                                                                          |
+| `autopay`      | Buy tickets and spy shows automatically (same as `autopay:ticket autopay:private`)                                                         |
+| `autopay:ticket`  | Buy a ticket to record group shows                                                                                                       |
+| `autopay:private` | Spend tokens to record private shows                                                                                                     |
+
+Recording filters default to: public shows on, free-spy shows on, ticket purchase off,
+spy purchase off. `nopublic` and `nofreespy` are therefore opt-out tokens — leaving
+them out keeps the defaults — while the `autopay` tokens are opt-in. All four switches
+are editable per room in the dashboard (the sliders button on the room row).
 
 If the requested quality is unavailable, the closest match is selected automatically.
 
@@ -135,7 +148,7 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 
 | Endpoint   | Params                                                          | Description                           |
 |------------|-----------------------------------------------------------------|---------------------------------------|
-| `/add`     | `name`, `quality`, `active`, `limit`, `autopay`, `pkey`, `size` | Add a room                            |
+| `/add`     | `name`, `quality`, `active`, `limit`, `autopayTicket`, `autoPaySpy`, `pkey`, `size` | Add a room        |
 | `/remove`  | `id`                                                            | Remove a room                         |
 | `/restart` | `id`                                                            | Stop then restart recording           |
 | `/break`   | `id`                                                            | Temporary stop (resumes on next poll) |
@@ -147,7 +160,7 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 | `/activate`   | `id`                   | Enable auto-recording          |
 | `/deactivate` | `id`                   | Disable auto-recording         |
 | `/quality`    | `id`, `q`              | Set quality                    |
-| `/autopay`    | `id`, `v` (true/false) | Toggle auto-payment            |
+| `/filter`     | `id`, `kind` (`public`\|`freespy`\|`ticket`\|`paidspy`), `v` | Toggle one recording filter |
 | `/limit`      | `id`, `v` (seconds)    | Set time limit (0 = unlimited) |
 | `/sizelimit`  | `id`, `v`              | Set size limit (0 = unlimited) |
 
@@ -157,7 +170,7 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 |--------------|---------------------------------------------------------|
 | `/status`    | Active room status (segments, bytes, running downloads) |
 | `/list`      | All rooms with status, session state, quality           |
-| `/dashboard` | Consolidated payload: rooms, statuses, listv2, metrics  |
+| `/dashboard` | Consolidated payload: rooms, statuses, listv2, metrics, and a per-room `hint` explaining why an armed room is not recording (`public_filter_off`, `ticket_purchase_off`, `private_filter_off`, `no_free_spy`, `preconfig_failed` plus an optional raw `detail`) |
 | `/metrics`   | Prometheus metrics endpoint                             |
 
 | `/mask/toggle` | Toggle log masking on/off |

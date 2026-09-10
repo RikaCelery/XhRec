@@ -2,7 +2,6 @@ package github.rikacelery.v3.events
 
 import kotlinx.serialization.json.JsonObject
 import java.io.File
-import kotlin.time.Duration
 
 data class Segment(val url: String, val index: Int) {
     override fun toString() = "Segment(#$index $url)"
@@ -141,11 +140,18 @@ data class QualityChangeHint(val roomId: Long) {
 data class QualityChangeRequested(val roomId: Long, val newQuality: String) {
     override fun toString() = "QualityChangeRequested(roomId=$roomId, quality=$newQuality)"
 }
-data class RoomTimeLimitChanged(val roomId: Long, val limit: Duration) {
-    override fun toString() = "RoomTimeLimitChanged(roomId=$roomId, limit=$limit)"
-}
-data class RoomSizeLimitChanged(val roomId: Long, val limitBytes: Long) {
-    override fun toString() = "RoomSizeLimitChanged(roomId=$roomId, limitBytes=$limitBytes)"
+/**
+ * Published whenever a room's recording settings change, carrying the new settings and the
+ * room's current status. The scheduler mirrors both, so a switch flipped in the UI takes
+ * effect on a room that is already armed or recording — an armed room never refreshes its
+ * configuration on its own while it is not recordable (issue #130).
+ */
+data class RoomSettingsChanged(
+    val roomId: Long,
+    val settings: github.rikacelery.v3.data.RoomSettings,
+    val status: String
+) {
+    override fun toString() = "RoomSettingsChanged(roomId=$roomId, status=$status, settings=$settings)"
 }
 
 // ── Misc ──

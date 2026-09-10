@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.ml.PredictionEngine
@@ -141,12 +142,14 @@ class HttpServerComponent(
                         val resp = requestBus.request<RoomNameResponse>(
                             AddRoom(
                                 name,
-                                quality,
-                                pkey,
-                                if (limit > 0) limit.seconds else Duration.INFINITE,
-                                sizeBytes,
-                                autopayTicket,
-                                autoPaySpy
+                                RoomSettings(
+                                    quality = quality,
+                                    timeLimit = if (limit > 0) limit.seconds else Duration.INFINITE,
+                                    sizeLimitBytes = sizeBytes,
+                                    autoPayTicket = autopayTicket,
+                                    autoPaySpy = autoPaySpy,
+                                    pkey = pkey
+                                )
                             ), timeoutMs = 30_000
                         )
                         if (active) {
@@ -252,21 +255,21 @@ class HttpServerComponent(
                     persistConfig()
                     call.respondText("Quality set to $q")
                 }
-                get("/autopay") {
+                get("/filter") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull() ?: return@get call.respondText(
                         "Missing id",
                         status = HttpStatusCode.BadRequest
                     )
+                    val kind = RecordingFilterKind.fromWire(call.request.queryParameters["kind"])
+                        ?: return@get call.respondText(
+                            "Invalid kind (expected 'public', 'freespy', 'ticket' or 'paidspy')",
+                            status = HttpStatusCode.BadRequest
+                        )
                     val v = call.request.queryParameters["v"]?.toBooleanStrictOrNull()
                         ?: return@get call.respondText("Missing v (true/false)", status = HttpStatusCode.BadRequest)
-                    val kind = when (call.request.queryParameters["kind"]) {
-                        "private" -> AutoPayKind.PRIVATE
-                        "ticket", null -> AutoPayKind.GROUP_SHOW
-                        else -> return@get call.respondText("Invalid kind (expected 'ticket' or 'private')", status = HttpStatusCode.BadRequest)
-                    }
-                    requestBus.request<OkResponse>(SetRoomAutoPay(id, kind, v))
+                    requestBus.request<OkResponse>(SetRoomFilter(id, kind, v))
                     persistConfig()
-                    call.respondText("Autopay ($kind) set to $v")
+                    call.respondText("Filter ${kind.wireName} set to $v")
                 }
                 get("/limit") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull() ?: return@get call.respondText(
@@ -332,6 +335,7 @@ class HttpServerComponent(
                 }
                 get("/dashboard") {
                     val rooms = requestBus.request<List<Room>>(GetRooms)
+                    val hints = requestBus.request<RecordingHintsResponse>(GetRecordingHints).hints
                     val statuses = requestBus.request<Map<Long, Map<String, Any>>>(GetRoomDetailedStatus)
                     val sessions = requestBus.request<List<RoomSession>>(GetSessions)
                     val armedIds = requestBus.request<List<Long>>(GetArmedRoomIds).toSet()
@@ -368,7 +372,15 @@ class HttpServerComponent(
                                         put("name", r.name); put("id", r.id); put("quality", r.quality)
                                         put("status", r.status)
                                         put("timeLimit", if (r.timeLimit == Duration.INFINITE) 0L else r.timeLimit.inWholeMilliseconds)
-                                        put("sizeLimitBytes", r.sizeLimitBytes); put("autoPayTicket", r.autoPayTicket); put("autoPaySpy", r.autoPaySpy)
+                                        put("sizeLimitBytes", r.sizeLimitBytes)
+                                        put("recordPublic", r.recordPublic); put("recordFreeSpy", r.recordFreeSpy)
+                                        put("autoPayTicket", r.autoPayTicket); put("autoPaySpy", r.autoPaySpy)
+                                        hints[r.id]?.let { hint ->
+                                            put("hint", buildJsonObject {
+                                                put("code", hint.code.wireName)
+                                                hint.detail?.let { put("detail", it) }
+                                            })
+                                        }
                                     })
                                 })
                             }

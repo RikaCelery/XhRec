@@ -28,17 +28,29 @@ data class SetRoomTimeLimit(val roomId: Long, val limit: Duration) : Request {
 data class SetRoomSizeLimit(val roomId: Long, val limitBytes: Long) : Request {
     override fun toString() = "SetRoomSizeLimit(roomId=$roomId, limitBytes=$limitBytes)"
 }
-enum class AutoPayKind { GROUP_SHOW, PRIVATE }
+/**
+ * The per-room recording switches a user can flip (issue #130). [wireName] is the spelling
+ * used by the HTTP API and the dashboard.
+ */
+enum class RecordingFilterKind(val wireName: String) {
+    PUBLIC("public"),
+    FREE_SPY("freespy"),
+    TICKET("ticket"),
+    PAID_SPY("paidspy");
 
-data class SetRoomAutoPay(val roomId: Long, val kind: AutoPayKind, val autoPay: Boolean) : Request {
-    override fun toString() = "SetRoomAutoPay(roomId=$roomId, kind=$kind, autoPay=$autoPay)"
+    companion object {
+        fun fromWire(value: String?): RecordingFilterKind? = entries.firstOrNull { it.wireName == value }
+    }
+}
+
+data class SetRoomFilter(val roomId: Long, val kind: RecordingFilterKind, val value: Boolean) : Request {
+    override fun toString() = "SetRoomFilter(roomId=$roomId, kind=$kind, value=$value)"
 }
 data class AddRoom(
-    val name: String, val quality: String, val pkey: String = "",
-    val timeLimit: Duration = Duration.INFINITE, val sizeLimitBytes: Long = 0,
-    val autoPayTicket: Boolean = false, val autoPaySpy: Boolean = false
+    val name: String,
+    val settings: github.rikacelery.v3.data.RoomSettings = github.rikacelery.v3.data.RoomSettings()
 ) : Request {
-    override fun toString() = "AddRoom(name=$name, quality=$quality)"
+    override fun toString() = "AddRoom(name=$name, quality=${settings.quality})"
 }
 data class RemoveRoom(val roomId: Long) : Request {
     override fun toString() = "RemoveRoom(roomId=$roomId)"
@@ -131,6 +143,10 @@ object GetArmedRoomIds : Request {
 object GetRoomDetailedStatus : Request {
     override fun toString() = "GetRoomDetailedStatus"
 }
+/** Why each armed room is not recording right now; rooms with nothing to explain are absent. */
+object GetRecordingHints : Request {
+    override fun toString() = "GetRecordingHints"
+}
 data class GetValidPaymentAccount(val price: Long) : Request {
     override fun toString() = "GetValidPaymentAccount(price=$price)"
 }
@@ -150,14 +166,12 @@ data class RoomNameResponse(val name: String) : Response {
     override fun toString() = "RoomNameResponse(name=$name)"
 }
 data class RoomConfigResponse(
-    val quality: String,
-    val timeLimit: Duration,
-    val sizeLimitBytes: Long,
-    val autoPayTicket: Boolean = false,
-    val autoPaySpy: Boolean = false,
-    val pkey: String = ""
+    val settings: github.rikacelery.v3.data.RoomSettings
 ) : Response {
-    override fun toString() = "RoomConfigResponse(quality=$quality, timeLimit=$timeLimit, sizeLimitBytes=$sizeLimitBytes)"
+    override fun toString() = "RoomConfigResponse(quality=${settings.quality}, timeLimit=${settings.timeLimit}, sizeLimitBytes=${settings.sizeLimitBytes})"
+}
+data class RecordingHintsResponse(val hints: Map<Long, github.rikacelery.v3.data.RoomHint>) : Response {
+    override fun toString() = "RecordingHintsResponse(count=${hints.size})"
 }
 data class ConfigResponse(val value: Any?) : Response {
     override fun toString() = "ConfigResponse(value=$value)"

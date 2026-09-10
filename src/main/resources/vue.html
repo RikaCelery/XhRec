@@ -322,9 +322,9 @@
                                     :class="!sort['Status'] ? 'fa-sort text-slate-300' : (sort['Status'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-center text-xs"
-                                @click="sortToggle('AutoPay')">
-                                {{ $t('Auto Pay') }} <i class="fa-solid ml-0.5 text-[9px]"
-                                    :class="!sort['AutoPay'] ? 'fa-sort text-slate-300' : (sort['AutoPay'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
+                                @click="sortToggle('Filters')">
+                                {{ $t('Filters') }} <i class="fa-solid ml-0.5 text-[9px]"
+                                    :class="!sort['Filters'] ? 'fa-sort text-slate-300' : (sort['Filters'] === 1 ? 'fa-sort-down text-indigo-500' : 'fa-sort-up text-indigo-500')"></i>
                             </th>
                             <th class="px-2 py-2.5 text-center text-xs">{{ $t('Segments') }}</th>
                             <th class="px-2 py-2.5 cursor-pointer hover:bg-slate-100 transition-colors select-none text-right text-xs"
@@ -364,6 +364,11 @@
                             </td>
                             <td class="px-2 py-1.5 text-center text-xs text-slate-500">
                                 {{room.roomStatus}}
+                                <span v-if="room.hint"
+                                    class="block mx-auto mt-0.5 max-w-[11rem] truncate text-[10px] text-amber-700 leading-tight"
+                                    :title="hintText(room.hint)">
+                                    <i class="fa-solid fa-circle-question mr-0.5"></i>{{hintText(room.hint)}}
+                                </span>
                             </td>
                             <td class="px-2 py-1.5 text-center">
                                 <div class="thumb-container">
@@ -407,27 +412,13 @@
                                 </div>
                             </td>
                             <td class="px-2 py-1.5">
-                                <div class="flex flex-col gap-1.5 items-end text-xs">
-                                    <div class="flex items-center gap-1">
-                                        <span class="text-slate-500 font-mono text-right min-w-[3rem]">{{room.timeLimit > 0 ? (room.timeLimit / 1000) : '∞'}}s</span>
-                                        <input v-model.number="editLimits[room.id]" type="number" min="0"
-                                            class="w-14 px-1.5 py-0.5 text-xs border border-slate-200 rounded bg-white focus:outline-none focus:border-indigo-500"
-                                            :placeholder="$t('sec')">
-                                        <button @click="setLimit(room.id)" :title="$t('Set Time')"
-                                            class="text-emerald-600 hover:text-emerald-800 p-0.5 leading-none">
-                                            <i class="fa-solid fa-check text-[11px]"></i>
-                                        </button>
-                                    </div>
-                                    <div class="flex items-center gap-1">
-                                        <span class="text-slate-500 font-mono text-right min-w-[3rem]">{{room.sizeLimitBytes > 0 ? formatBytes(room.sizeLimitBytes) : '∞'}}</span>
-                                        <input v-model="editSizeLimits[room.id]" type="text"
-                                            class="w-14 px-1.5 py-0.5 text-xs border border-slate-200 rounded bg-white focus:outline-none focus:border-indigo-500"
-                                            :placeholder="$t('e.g. 1G')">
-                                        <button @click="setSizeLimit(room.id)" :title="$t('Set Size')"
-                                            class="text-emerald-600 hover:text-emerald-800 p-0.5 leading-none">
-                                            <i class="fa-solid fa-check text-[11px]"></i>
-                                        </button>
-                                    </div>
+                                <div class="flex flex-col gap-0.5 items-end text-xs font-mono text-slate-500">
+                                    <span :title="$t('Time limit')">
+                                        <i class="fa-regular fa-clock mr-1 text-[10px]"></i>{{room.timeLimit > 0 ? (room.timeLimit / 1000) : '∞'}}s
+                                    </span>
+                                    <span :title="$t('Size limit')">
+                                        <i class="fa-solid fa-database mr-1 text-[10px]"></i>{{room.sizeLimitBytes > 0 ? formatBytes(room.sizeLimitBytes) : '∞'}}
+                                    </span>
                                 </div>
                             </td>
                             <td class="px-2 py-1.5 text-center">
@@ -453,29 +444,11 @@
                                 </span>
                             </td>
                             <td class="px-1 py-1">
-                                <div class="flex flex-col gap-1.5 items-center">
-                                    <div class="flex flex-col items-center gap-0.5">
-                                        <label class="relative inline-flex items-center cursor-pointer"
-                                            :title="$t('Auto-pay for ticket/group shows')">
-                                            <input type="checkbox" v-model="room.autoPayTicket"
-                                                @change="setAutoPay($event.target.checked, room.id, 'ticket')" class="sr-only peer">
-                                            <div
-                                                class="w-7 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-indigo-600">
-                                            </div>
-                                        </label>
-                                        <span class="text-[9px] text-slate-500 leading-none">{{ $t('Ticket') }}</span>
-                                    </div>
-                                    <div class="flex flex-col items-center gap-0.5">
-                                        <label class="relative inline-flex items-center cursor-pointer"
-                                            :title="$t('Auto-pay for private shows')">
-                                            <input type="checkbox" v-model="room.autoPaySpy"
-                                                @change="setAutoPay($event.target.checked, room.id, 'private')" class="sr-only peer">
-                                            <div
-                                                class="w-7 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-indigo-600">
-                                            </div>
-                                        </label>
-                                        <span class="text-[9px] text-slate-500 leading-none">{{ $t('Private') }}</span>
-                                    </div>
+                                <div class="flex items-center justify-center gap-1" :title="$t('Click to change the recording filters')">
+                                    <span v-for="f in roomFilters(room)" :key="f.key"
+                                        class="px-1.5 py-0.5 rounded border text-[10px] font-mono cursor-pointer transition-colors"
+                                        :class="f.on ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100' : 'bg-slate-50 text-slate-300 border-slate-200 hover:text-slate-400'"
+                                        :title="f.label" @click="openRoomSettings(room)">{{f.key}}</span>
                                 </div>
                             </td>
                             <td class="px-2 py-1.5">
@@ -508,6 +481,10 @@
                             <td class="px-2 py-1.5">
                                 <div
                                     class="flex items-center justify-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                                    <button @click="openRoomSettings(room)" :title="$t('Room Settings')"
+                                        class="w-6 h-6 rounded bg-slate-100 text-slate-500 hover:bg-slate-600 hover:text-white transition-colors flex items-center justify-center">
+                                        <i class="fa-solid fa-sliders text-[10px]"></i>
+                                    </button>
                                     <button @click="action('activate',room.id)" :title="$t('Activate')"
                                         class="w-6 h-6 rounded bg-slate-100 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors flex items-center justify-center">
                                         <i class="fa-solid fa-play text-[10px]"></i>
@@ -774,6 +751,65 @@
         </div>
     </div>
 
+    <!-- Room Settings Dialog -->
+    <div v-if="settingsRoom" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        @click.self="closeRoomSettings()">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-[90vw] max-w-lg max-h-[85vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    <i class="fa-solid fa-sliders text-indigo-500 mr-2"></i>
+                    {{ $t('Room Settings') }} - <span class="font-mono">{{settingsRoom.name}}</span>
+                </h2>
+                <button @click="closeRoomSettings()"
+                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">{{ $t('Recording filters') }}</div>
+            <div class="flex flex-col gap-2 mb-5">
+                <label v-for="f in filterRows" :key="f.key"
+                    class="flex items-start justify-between gap-3 p-2 rounded border border-slate-200 dark:border-slate-700 cursor-pointer">
+                    <span class="text-xs">
+                        <span class="block text-slate-700 dark:text-slate-200">{{f.label}}</span>
+                        <span class="block text-slate-400">{{f.hint}}</span>
+                    </span>
+                    <span class="relative inline-flex items-center shrink-0 mt-0.5">
+                        <input type="checkbox" class="sr-only peer" :checked="settingsRoom[f.field]"
+                            @change="setRoomFilter(f.key, $event.target.checked)">
+                        <span
+                            class="w-8 h-5 bg-slate-200 rounded-full peer-checked:bg-indigo-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-3"></span>
+                    </span>
+                </label>
+            </div>
+
+            <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">{{ $t('Limits') }}</div>
+            <div class="grid grid-cols-2 gap-3 mb-5">
+                <label class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ $t('Time limit') }}
+                    <input v-model.number="settingsTime" type="number" min="0"
+                        class="mt-1 w-full px-2 py-1 text-xs border border-slate-200 rounded bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200"
+                        :placeholder="$t('seconds, 0 = unlimited')">
+                </label>
+                <label class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ $t('Size limit') }}
+                    <input v-model="settingsSize" type="text"
+                        class="mt-1 w-full px-2 py-1 text-xs border border-slate-200 rounded bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200"
+                        :placeholder="$t('e.g. 1G, 0 = unlimited')">
+                </label>
+            </div>
+
+            <div class="flex justify-end gap-2">
+                <button @click="saveRoomLimits()"
+                    class="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm">
+                    <i class="fa-solid fa-floppy-disk mr-1"></i>{{ $t('Save limits') }}
+                </button>
+                <button @click="closeRoomSettings()"
+                    class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">{{ $t('Close') }}</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Favorites Import Dialog -->
     <div v-if="favoritesDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
         @click.self="favoritesDialog=false">
@@ -900,8 +936,9 @@
                     addQuality: "highest",
                     sort: { "Room": 1, "Status": 1 },
                     roomInfo: {},
-                    editLimits: {}, // Cache for limits inputs to prevent overlap with polling
-                    editSizeLimits: {}, // Cache for size limits inputs to prevent overlap with polling
+                    settingsRoom: null, // room whose settings dialog is open
+                    settingsTime: 0,    // time limit shown in that dialog (seconds, 0 = unlimited)
+                    settingsSize: '',   // size limit shown in that dialog (e.g. "1G", empty = unlimited)
                     allUrls: [],
                     snapshotcache: {},
                     activeVideos: {},
@@ -989,6 +1026,24 @@
                             'Private': '私密',
                             'Auto-pay for ticket/group shows': '自动付费：票务/群秀',
                             'Auto-pay for private shows': '自动付费：私密秀',
+                            'Filters': '录制开关', 'Room Settings': '直播间设置',
+                            'Recording filters': '录制开关', 'Limits': '限制',
+                            'Public shows': '公开秀', 'Free spy': '免费偷窥',
+                            'Paid ticket': '付费票务', 'Paid private': '付费私密',
+                            'Record the public (free) shows': '录制公开（免费）秀',
+                            'Record private shows you can watch for free': '有免费偷窥额度时录制私密秀',
+                            'Buy a ticket to record group shows': '购买门票以录制群秀',
+                            'Spend tokens to record private shows': '花费代币录制私密秀',
+                            'Time limit': '时长限制', 'Size limit': '大小限制',
+                            'seconds, 0 = unlimited': '秒，0 表示不限',
+                            'e.g. 1G, 0 = unlimited': '例如 1G，0 表示不限',
+                            'Save limits': '保存限制',
+                            'Click to change the recording filters': '点击修改录制开关',
+                            'Public recording off': '已关闭公开录制',
+                            'Ticket purchase off': '已关闭门票购买',
+                            'Private recording off': '已关闭私密录制',
+                            'No free spy access': '无免费偷窥额度',
+                            'Not recordable': '暂时无法录制',
                             'ML Prediction': '机器学习预测', 'ML Model Status': '模型状态',
                             'Train Now': '立即训练', 'Trained': '已训练', 'Not Ready': '未就绪',
                             'CDN Model': 'CDN 模型', 'Schedule Model': '开播模型', 'trees': '棵树',
@@ -1015,6 +1070,14 @@
                 },
                 selectedFavoriteCount() {
                     return this.favoriteCandidates.filter(c => c.selected && !c.existing).length;
+                },
+                filterRows() {
+                    return [
+                        { key: 'public', field: 'recordPublic', label: this.$t('Public shows'), hint: this.$t('Record the public (free) shows') },
+                        { key: 'freespy', field: 'recordFreeSpy', label: this.$t('Free spy'), hint: this.$t('Record private shows you can watch for free') },
+                        { key: 'ticket', field: 'autoPayTicket', label: this.$t('Paid ticket'), hint: this.$t('Buy a ticket to record group shows') },
+                        { key: 'paidspy', field: 'autoPaySpy', label: this.$t('Paid private'), hint: this.$t('Spend tokens to record private shows') },
+                    ];
                 },
                 roomDisplay() {
                     const list = Object.values(this.roomInfo);
@@ -1043,8 +1106,10 @@
                             const res = parseQ(a.quality) - parseQ(b.quality);
                             if (!isNaN(res) && res !== 0) return this.sort["Quality"] === 1 ? res : -res;
                         }
-                        if (this.sort["AutoPay"] && a.autoPay !== b.autoPay) {
-                            return this.sort["AutoPay"] === 1 ? (a.autoPay ? -1 : 1) : (a.autoPay ? 1 : -1);
+                        if (this.sort["Filters"]) {
+                            const aOn = this.enabledFilterCount(a);
+                            const bOn = this.enabledFilterCount(b);
+                            if (aOn !== bOn) return this.sort["Filters"] === 1 ? bOn - aOn : aOn - bOn;
                         }
                         if (this.sort["ID"] && a.id !== b.id) {
                             return this.sort["ID"] === 1 ? b.id - a.id : a.id - b.id;
@@ -1183,6 +1248,17 @@
                 sortToggle(by) {
                     this.sort[by] = this.sort[by] === 1 ? 2 : (this.sort[by] === 2 ? undefined : 1);
                 },
+                // Token the size field round-trips through /sizelimit (e.g. "1Gi", "1536Mi",
+                // raw bytes for values no unit divides evenly) — unlike formatBytes, which is
+                // for display and produces "1.50 GB" that the parser rejects.
+                sizeLimitToken(bytes) {
+                    if (!bytes || bytes <= 0) return '';
+                    const units = [['Ti', 1099511627776], ['Gi', 1073741824], ['Mi', 1048576], ['Ki', 1024]];
+                    for (const [unit, factor] of units) {
+                        if (bytes % factor === 0) return (bytes / factor) + unit;
+                    }
+                    return String(bytes);
+                },
                 formatBytes(bytes) {
                     if (!bytes) return '0 B';
                     const units = ["B", "KB", "MB", "GB", "TB"];
@@ -1232,34 +1308,55 @@
                         this.showToast(await r1.text());
                     } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
-                async setAutoPay(value, roomId, kind) {
+                // ── Room settings dialog ───────────────────────────────────
+                openRoomSettings(room) {
+                    this.settingsRoom = room;
+                    this.settingsTime = room.timeLimit > 0 ? Math.round(room.timeLimit / 1000) : 0;
+                    this.settingsSize = this.sizeLimitToken(room.sizeLimitBytes);
+                },
+                closeRoomSettings() {
+                    this.settingsRoom = null;
+                },
+                // Why a room is not recording, as returned by /dashboard. The detail is the raw
+                // platform-level reason (for example "no account") and stays untranslated.
+                hintText(hint) {
+                    const keys = {
+                        public_filter_off: 'Public recording off',
+                        ticket_purchase_off: 'Ticket purchase off',
+                        private_filter_off: 'Private recording off',
+                        no_free_spy: 'No free spy access',
+                        preconfig_failed: 'Not recordable',
+                    };
+                    const label = keys[hint.code] ? this.$t(keys[hint.code]) : hint.code;
+                    return hint.detail ? `${label} (${hint.detail})` : label;
+                },
+                roomFilters(room) {
+                    return [
+                        { key: 'P', on: !!room.recordPublic, label: this.$t('Public shows') },
+                        { key: 'F', on: !!room.recordFreeSpy, label: this.$t('Free spy') },
+                        { key: 'T', on: !!room.autoPayTicket, label: this.$t('Paid ticket') },
+                        { key: 'S', on: !!room.autoPaySpy, label: this.$t('Paid private') },
+                    ];
+                },
+                enabledFilterCount(room) {
+                    return this.roomFilters(room).filter(f => f.on).length;
+                },
+                async setRoomFilter(kind, value) {
+                    if (!this.settingsRoom) return;
                     try {
-                        const r1 = await fetch(`${HOST}/autopay?id=${roomId}&v=${value}&kind=${kind}`);
-                        this.showToast(await r1.text());
+                        const r = await fetch(`${HOST}/filter?id=${this.settingsRoom.id}&kind=${kind}&v=${value}`);
+                        this.showToast(await r.text());
                     } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
-                async setLimit(roomId) {
-                    const newLimit = this.editLimits[roomId];
-                    if (newLimit === undefined || newLimit === null || newLimit < 0) {
-                        this.showToast(this.$t('Invalid limit value'), "error");
-                        return;
-                    }
+                async saveRoomLimits() {
+                    if (!this.settingsRoom) return;
+                    const seconds = this.settingsTime > 0 ? Math.floor(this.settingsTime) : 0;
+                    const size = (this.settingsSize || '').trim() || '0';
                     try {
-                        const r1 = await fetch(`${HOST}/limit?id=${roomId}&v=${newLimit}`);
+                        const r1 = await fetch(`${HOST}/limit?id=${this.settingsRoom.id}&v=${seconds}`);
                         this.showToast(await r1.text());
-                        this.editLimits[roomId] = null;
-                    } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
-                },
-                async setSizeLimit(roomId) {
-                    const newLimit = this.editSizeLimits[roomId];
-                    if (!newLimit) {
-                        this.showToast(this.$t('Invalid size value'), "error");
-                        return;
-                    }
-                    try {
-                        const r1 = await fetch(`${HOST}/sizelimit?id=${roomId}&v=${newLimit}`);
-                        this.showToast(await r1.text());
-                        this.editSizeLimits[roomId] = null;
+                        const r2 = await fetch(`${HOST}/sizelimit?id=${this.settingsRoom.id}&v=${encodeURIComponent(size)}`);
+                        this.showToast(await r2.text());
                     } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
                 },
                 async action(actionType, roomId) {
