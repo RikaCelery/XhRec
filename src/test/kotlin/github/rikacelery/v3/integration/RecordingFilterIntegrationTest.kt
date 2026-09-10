@@ -101,7 +101,7 @@ class RecordingFilterIntegrationTest {
         fx.get("/activate?id=1001").expectOk("Activated")
         fx.mock.startSegments(1001, 30.milliseconds)
         fx.awaitRoomSubscribed(1001)
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
 
         fx.awaitSession(1001, SessionState.Recording)
         fx.awaitEvent<SegmentDownloaded>(10.seconds) { it.roomId == 1001L }
@@ -122,7 +122,7 @@ class RecordingFilterIntegrationTest {
         fx.mock.startSegments(1001, 30.milliseconds)
         fx.awaitRoomSubscribed(1001)
         val before = fx.mock.requests().size
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
 
         // the preconfig loop retries every 100ms in tests: an unthrottled probe would ask
         // the platform about the privilege ~20 times in this window
@@ -162,7 +162,7 @@ class RecordingFilterIntegrationTest {
         fx.get("/add?name=model&active=false").expectOk("Room added: model")
         fx.get("/activate?id=1001").expectOk("Activated")
         fx.awaitRoomSubscribed(1001)
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
 
         val room = fx.awaitRoom("model") { it.path("room.hint.code") == "no_free_spy" }
         assertEquals("no_free_spy", room.path("room.hint.code"))
@@ -175,7 +175,7 @@ class RecordingFilterIntegrationTest {
         fx.get("/add?name=model&active=false&autoPaySpy=true").expectOk("Room added: model")
         fx.get("/activate?id=1001").expectOk("Activated")
         fx.awaitRoomSubscribed(1001)
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
 
         val room = fx.awaitRoom("model") { it.path("room.hint.code") == "preconfig_failed" }
         assertEquals("preconfig_failed", room.path("room.hint.code"))
@@ -217,7 +217,7 @@ class RecordingFilterIntegrationTest {
         fx.get("/activate?id=1001").expectOk("Activated")
         fx.mock.startSegments(1001, 30.milliseconds)
         fx.awaitRoomSubscribed(1001)
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
 
         delay(1500)
         assertTrue(
@@ -236,14 +236,14 @@ class RecordingFilterIntegrationTest {
         fx.mock.startSegments(1001, 30.milliseconds)
         fx.awaitRoomSubscribed(1001)
 
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
         delay(750)
         val firstShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }
         assertTrue(firstShow > 0, "the privilege must be probed when the private show starts")
 
         fx.mock.setRoomStatus(1001, "off")
         delay(250)
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
         delay(750)
 
         val secondShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }

@@ -56,9 +56,9 @@ class MockPlatformServerTest {
             assertEquals("public", broadcast.jsonPath("item.status"))
             assertEquals(7L, broadcast.jsonPath("item.modelId").toLong())
 
-            mock.setRoomStatus(room.id, "p2p")
+            mock.setRoomStatus(room.id, "private")
             assertEquals(
-                "p2p",
+                "private",
                 client.get("${mock.baseUrl}/api/front/v1/broadcasts/model").bodyAsText().jsonPath("item.status")
             )
 

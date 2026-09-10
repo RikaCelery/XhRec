@@ -286,7 +286,7 @@ class RoomRoutesIntegrationTest {
 
         // switch the room to a paid private show; the old recording is cut and a spy show is purchased
         fx.mock.room(1001).modelToken = ""
-        fx.mock.setRoomStatus(1001, "p2p")
+        fx.mock.setRoomStatus(1001, "private")
 
         fx.awaitEvent<FileReady>(15.seconds) { it.roomId == 1001L }
         // the stopped session still reports Recording while it closes, so waiting for the state
