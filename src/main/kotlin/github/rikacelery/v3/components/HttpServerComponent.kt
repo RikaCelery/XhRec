@@ -448,6 +448,57 @@ class HttpServerComponent(
                         call.respondText("Error: ${e.message}", status = HttpStatusCode.InternalServerError)
                     }
                 }
+                // ── Favorites import ───────────────────────────────────────────────
+                get("/users") {
+                    val users = requestBus.request<UsersResponse>(GetUsers).users
+                    // the account cookie stays in the process: only safe fields reach the browser
+                    call.respond(buildJsonArray {
+                        users.forEach { u ->
+                            add(buildJsonObject {
+                                put("userId", u.userId)
+                                put("username", u.username)
+                                put("coins", u.coins)
+                            })
+                        }
+                    })
+                }
+                get("/favorites/candidates") {
+                    val userIds = call.request.queryParameters["users"]
+                        ?.split(',')?.mapNotNull { it.trim().toLongOrNull() }?.distinct()
+                        ?: emptyList()
+                    if (userIds.isEmpty()) {
+                        return@get call.respondText("Missing users", status = HttpStatusCode.BadRequest)
+                    }
+                    val candidates = requestBus.request<FavoriteCandidatesResponse>(
+                        GetFavoriteCandidates(userIds), timeoutMs = FAVORITES_TIMEOUT_MS
+                    ).candidates
+                    call.respond(buildJsonArray {
+                        candidates.forEach { c ->
+                            add(buildJsonObject {
+                                put("modelId", c.modelId)
+                                put("name", c.name)
+                                put("existing", c.existing)
+                            })
+                        }
+                    })
+                }
+                post("/favorites/import") {
+                    val ids = call.receiveParameters()["ids"]
+                        ?.split(',')?.mapNotNull { it.trim().toLongOrNull() }?.distinct()
+                        ?: emptyList()
+                    if (ids.isEmpty()) {
+                        return@post call.respondText("Missing ids", status = HttpStatusCode.BadRequest)
+                    }
+                    val added = requestBus.request<FavoritesImportResponse>(
+                        ImportFavorites(ids), timeoutMs = FAVORITES_TIMEOUT_MS
+                    ).added
+                    persistConfig()
+                    call.respondText(
+                        if (added.isEmpty()) "No favorites imported"
+                        else "Imported ${added.size} room(s): ${added.joinToString(", ")}"
+                    )
+                }
+
                 get("/mse/live") {
                     val id = call.request.queryParameters["id"]?.toLongOrNull()
                         ?: return@get call.respondText("Missing id", status = HttpStatusCode.BadRequest)
@@ -672,6 +723,9 @@ class HttpServerComponent(
     }
 
     companion object {
+        /** Platform timeout for a favorites command: one request per account plus name lookups. */
+        private const val FAVORITES_TIMEOUT_MS = 120_000L
+
         private fun hasRecentActivity(data: Map<String, Any>): Boolean {
             val running = data["running"] as? Map<*, *>
             val success = (data["success"] as? Number)?.toInt() ?: 0

@@ -44,6 +44,23 @@ data class RemoveRoom(val roomId: Long) : Request {
     override fun toString() = "RemoveRoom(roomId=$roomId)"
 }
 
+// ── Favorites import commands ──
+
+/** Accounts known to the recorder — the WebUI picks which ones to import favorites from. */
+object GetUsers : Request {
+    override fun toString() = "GetUsers"
+}
+
+/** Platform favorites of the given accounts, resolved to room names and flagged when known. */
+data class GetFavoriteCandidates(val userIds: List<Long>) : Request {
+    override fun toString() = "GetFavoriteCandidates(users=${userIds.size})"
+}
+
+/** Imports the picked favorite models as disarmed rooms. */
+data class ImportFavorites(val modelIds: List<Long>) : Request {
+    override fun toString() = "ImportFavorites(models=${modelIds.size})"
+}
+
 // ── Config commands ──
 
 data class GetDecryptKey(val keyName: String) : Request {
@@ -144,6 +161,15 @@ data class RoomConfigResponse(
 }
 data class ConfigResponse(val value: Any?) : Response {
     override fun toString() = "ConfigResponse(value=$value)"
+}
+data class UsersResponse(val users: List<github.rikacelery.v3.data.User>) : Response {
+    override fun toString() = "UsersResponse(count=${users.size})"
+}
+data class FavoriteCandidatesResponse(val candidates: List<github.rikacelery.v3.data.FavoriteCandidate>) : Response {
+    override fun toString() = "FavoriteCandidatesResponse(count=${candidates.size})"
+}
+data class FavoritesImportResponse(val added: List<String>) : Response {
+    override fun toString() = "FavoritesImportResponse(added=${added.size})"
 }
 data class HostsConfigResponse(val hosts: github.rikacelery.v3.data.HostsConfig) : Response {
     override fun toString() = "HostsConfigResponse(platformHosts=${hosts.platformHosts})"

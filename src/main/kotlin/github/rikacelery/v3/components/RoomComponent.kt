@@ -4,9 +4,11 @@ import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.FavoriteCandidate
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.data.RuntimeTuning
+import github.rikacelery.v3.data.User
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.exceptions.DeletedException
 import github.rikacelery.v3.exceptions.RenameException
@@ -231,6 +233,15 @@ class RoomComponent(
             }
 
             is GetRooms -> rooms.values.map { it.copy() }
+
+            // favorites import talks to the platform: handle() runs it off the actor loop
+            is GetFavoriteCandidates -> {
+                val users = requestBus.request<UsersResponse>(GetUsers, timeoutMs = FAVORITES_COMMAND_TIMEOUT_MS)
+                    .users.filter { it.userId in cmd.userIds }
+                FavoriteCandidatesResponse(favoriteCandidates(users))
+            }
+            is ImportFavorites -> FavoritesImportResponse(importFavorites(cmd.modelIds))
+
             is RefreshRoomCmd -> {
                 val room = rooms[cmd.roomId]
                     ?: throw NoSuchElementException("room ${cmd.roomId} not found")
@@ -307,6 +318,84 @@ class RoomComponent(
         eventBus.publish(RoomAdded(id, name))
     }
 
+    /**
+     * The platform favorites of [users] as import candidates, for the WebUI to pick from.
+     *
+     * Favorites only carry model ids, so unknown ids are resolved to their room name; a room
+     * that is already known reuses the name it has and is flagged [FavoriteCandidate.existing]
+     * instead of being offered again. Ids that cannot be resolved, and accounts whose favorites
+     * request fails, are skipped.
+     */
+    suspend fun favoriteCandidates(users: List<User>): List<FavoriteCandidate> {
+        val favoriteIds = users.flatMap { fetchFavoriteIds(it) }.distinct()
+        val known = rooms
+        val existing = favoriteIds.mapNotNull { id -> known[id]?.let { FavoriteCandidate(id, it.name, existing = true) } }
+        val fresh = resolveRoomNames(favoriteIds.filterNot { known.containsKey(it) })
+            .map { (id, name) -> FavoriteCandidate(id, name, existing = false) }
+        return (existing + fresh).sortedBy { it.name.lowercase() }
+    }
+
+    /**
+     * Imports the picked favorites as rooms, **disarmed** — the scheduler is never told about
+     * them, so an import only widens the room list. Models that are already rooms are left
+     * untouched, and the changes are persisted to list.conf.
+     *
+     * @return the names of the rooms that were added
+     */
+    suspend fun importFavorites(modelIds: List<Long>): List<String> {
+        val known = rooms.keys
+        val added = resolveRoomNames(modelIds.distinct().filterNot { it in known }).map { (id, name) ->
+            SensitiveStringRegistry.mask(name)
+            internalAdd(id, name, FAVORITES_DEFAULT_QUALITY, Duration.INFINITE, 0, false, false)
+            logger.info("Favorite imported as room: id={}, name={}", id, name)
+            name
+        }
+        if (added.isNotEmpty()) {
+            logger.info("Imported {} favorite(s) as disarmed room(s)", added.size)
+            // persist the new rooms (disarmed, so they are written commented out)
+            eventBus.publish(PersistConfig)
+        }
+        return added
+    }
+
+    private suspend fun fetchFavoriteIds(user: User): List<Long> = try {
+        apiClient.userFetchFavoriteIds(user)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        logger.warn("Could not read the favorites of user {}: {}", user.userId, e.message)
+        emptyList()
+    }
+
+    /**
+     * Resolves favorite model ids to `id to name`, in bounded batches: a favorites list can be
+     * long and must not turn into one burst of requests on the platform.
+     */
+    private suspend fun resolveRoomNames(modelIds: List<Long>): List<Pair<Long, String>> {
+        val resolved = mutableListOf<Pair<Long, String>>()
+        modelIds.chunked(FAVORITES_LOOKUP_CONCURRENCY).forEach { chunk ->
+            val names = coroutineScope {
+                chunk.map { id ->
+                    async {
+                        try {
+                            apiClient.roomNameFromId(id)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            logger.warn("Could not resolve the name of model {}: {}", id, e.message)
+                            null
+                        }
+                    }
+                }.awaitAll()
+            }
+            chunk.zip(names).forEach { (id, name) ->
+                if (name == null) logger.warn("Skipping favorite {}: the model name is unknown", id)
+                else resolved += id to name
+            }
+        }
+        return resolved
+    }
+
 
     private suspend fun saveListConf() {
         // Serialize saves: debounce jobs may overlap when cancellation races an
@@ -345,3 +434,12 @@ class RoomComponent(
         else -> "${bytes}Bi"
     }
 }
+
+/** How many favorite models are resolved to room names at once during a favorites import. */
+private const val FAVORITES_LOOKUP_CONCURRENCY = 8
+
+/** Quality assigned to rooms discovered through favorites; the user can change it later. */
+private const val FAVORITES_DEFAULT_QUALITY = "highest"
+
+/** Platform timeout for a favorites command: several accounts plus one lookup per unknown model. */
+private const val FAVORITES_COMMAND_TIMEOUT_MS = 120_000L
