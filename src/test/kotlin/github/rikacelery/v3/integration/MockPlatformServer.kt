@@ -112,6 +112,7 @@ class MockPlatformServer(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val rooms = ConcurrentHashMap<Long, MockRoom>()
     private val roomsByName = ConcurrentHashMap<String, MockRoom>()
+    private val favoritesByUser = ConcurrentHashMap<Long, List<Long>>()
     private val recordedRequests = CopyOnWriteArrayList<MockRequest>()
     private val recordedPushes = CopyOnWriteArrayList<MockPush>()
     private val sessions = CopyOnWriteArrayList<WsHandle>()
@@ -147,6 +148,11 @@ class MockPlatformServer(
     }
 
     fun room(id: Long): MockRoom = rooms[id] ?: error("no mock room $id")
+
+    /** Sets the account's favorited model ids, served by `/api/front/users/{id}/favorites`. */
+    fun setFavorites(userId: Long, modelIds: List<Long>) {
+        favoritesByUser[userId] = modelIds
+    }
 
     fun masterUrl(roomId: Long): String = baseUrl + masterPath(roomId)
 
@@ -447,9 +453,35 @@ class MockPlatformServer(
                         })
                         put("user", buildJsonObject {
                             put("user", buildJsonObject {
+                                // the slug doubles as the room name on the platform
+                                put("username", room.name)
                                 put("ticketRate", room.ticketRate)
                                 put("privateRate", room.privateRate)
                             })
+                        })
+                    }
+                )
+            }
+
+            // account favorites: model ids only, and only for an authenticated request
+            get("/api/front/users/{id}/favorites") {
+                if (call.applyFault(call.request.path())) return@get
+                val userId = call.parameters["id"]?.toLongOrNull()
+                val cookie = call.request.headers["Cookie"]
+                if (userId == null || cookie.isNullOrBlank()) {
+                    call.respondJson(
+                        buildJsonObject {
+                            put("error", "User is unauthorized")
+                            put("data", buildJsonArray {})
+                        },
+                        HttpStatusCode.Forbidden
+                    )
+                    return@get
+                }
+                call.respondJson(
+                    buildJsonObject {
+                        put("modelIds", buildJsonArray {
+                            favoritesByUser[userId].orEmpty().forEach { add(JsonPrimitive(it)) }
                         })
                     }
                 )
