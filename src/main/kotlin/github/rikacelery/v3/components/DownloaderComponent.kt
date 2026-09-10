@@ -102,24 +102,32 @@ class DownloaderComponent(
 
         for (seg in cmd.urls) {
             val idx = active.idx.incrementAndGet()
-            var url = seg.url
-            hooks.forEach { url = it.beforeDownload(url) }
-
             val job = workerScope.launch {
+                val history = FailureHistory()
+                var failureLogged = false
+                fun logFailure(reason: String) {
+                    if (failureLogged) return
+                    failureLogged = true
+                    logger.warn("Segment download failed: roomId={}, idx={}, url={}, reason={}, {}",
+                        cmd.roomId, idx, seg.url, reason, history.summary())
+                }
                 try {
                     active.semaphore.withPermit {
-                        eventBus.publish(DownloadStarted(cmd.roomId, idx, url, System.currentTimeMillis()))
-                        val result = downloadSegment(url, idx)
+                        eventBus.publish(DownloadStarted(cmd.roomId, idx, seg.url, System.currentTimeMillis()))
+                        var url = seg.url
+                        hooks.forEach { url = it.beforeDownload(url) }
+                        val result = downloadSegment(url, idx, history)
                         val hooked = hooks.fold(result) { acc, hook -> hook.onDownloadResult(cmd.roomId, acc) }
                         active.emitter.complete(idx.toLong(), hooked)
 
-                        when (result) {
+                        when (hooked) {
                             is DownloadResult.Success -> {
                                 eventBus.publish(SegmentDownloaded(cmd.roomId, idx, seg.url,
-                                    result.meta.fetchDurationMs, result.meta.proxied, result.data.size, gen))
+                                    hooked.meta.fetchDurationMs, hooked.meta.proxied, hooked.data.size, gen))
                             }
                             is DownloadResult.Failed -> {
-                                eventBus.publish(DownloadError(cmd.roomId, idx, seg.url, result.reason))
+                                logFailure(hooked.reason)
+                                eventBus.publish(DownloadError(cmd.roomId, idx, seg.url, hooked.reason))
                             }
                             is DownloadResult.CutPoint -> {}
                         }
@@ -127,13 +135,24 @@ class DownloaderComponent(
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     // Still account for the segment so OrderedEmitter cannot stall forever.
                     withContext(NonCancellable) {
-                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, "cancelled", transportError = true))
+                        try {
+                            active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, "cancelled", transportError = true))
+                        } finally {
+                            logFailure("cancelled")
+                            eventBus.publish(DownloadError(cmd.roomId, idx, seg.url, "cancelled"))
+                        }
                     }
                     throw e
                 } catch (e: Exception) {
-                    logger.error("Download worker failed: idx=$idx, url=${seg.url}", e)
+                    logger.trace("Download worker failed: idx=$idx, url=${seg.url}", e)
                     withContext(NonCancellable) {
-                        active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, e.message ?: "worker error", transportError = true))
+                        val reason = e.message ?: "worker error"
+                        try {
+                            active.emitter.complete(idx.toLong(), DownloadResult.Failed(idx, seg.url, reason, transportError = true))
+                        } finally {
+                            logFailure(reason)
+                            eventBus.publish(DownloadError(cmd.roomId, idx, seg.url, reason))
+                        }
                     }
                 }
             }
@@ -153,6 +172,24 @@ class DownloaderComponent(
 
     /** Thrown when a download stalls; treated as transport error. */
     private class StreamStallException(message: String) : Exception(message)
+
+    /** Shared by a segment's direct/proxy requests; repeated failures are counted together. */
+    private class FailureHistory {
+        var attempts = 0
+        private var stalls = 0
+        private val failures = linkedMapOf<String, Int>()
+
+        @Synchronized
+        fun record(url: String, route: String, reason: String) {
+            if (reason.startsWith("stall:")) stalls++
+            val key = "${CdnSelector.hostOf(url)} $route: $reason"
+            failures[key] = (failures[key] ?: 0) + 1
+        }
+
+        @Synchronized
+        fun summary(): String = "attempts=$attempts, stalls=$stalls, history=[" +
+            failures.entries.joinToString("; ") { (reason, count) -> "$reason (x$count)" } + "]"
+    }
 
     // ── Probe scheduling ──
     /** Probe interval: fire probes for non-selected hosts this often (ms). */
@@ -174,7 +211,7 @@ class DownloaderComponent(
      *  - other 4xx are likewise permanent (auth/URL problem), so they also stop the loop;
      *  - transport errors / stalls / 5xx penalize the host and retry until [segmentDeadlineMs].
      */
-    private suspend fun downloadSegment(url: String, idx: Int): DownloadResult {
+    private suspend fun downloadSegment(url: String, idx: Int, history: FailureHistory): DownloadResult {
         val start = System.currentTimeMillis()
         val segmentDeadlineMs = runtimeTuning.downloaderDeadline.inWholeMilliseconds
         val deadline = start + segmentDeadlineMs
@@ -190,15 +227,18 @@ class DownloaderComponent(
             if (host.isEmpty()) break
             tried += host
             attempts++
+            history.attempts = attempts
 
             val resolvedUrl = if (CdnSelector.hosts.isNotEmpty()) CdnSelector.rewriteHost(url, host) else url
             val result = try {
-                attemptDownload(resolvedUrl, idx, minOf(runtimeTuning.downloaderAttemptTimeout.inWholeMilliseconds, remaining))
+                attemptDownload(resolvedUrl, idx, minOf(runtimeTuning.downloaderAttemptTimeout.inWholeMilliseconds, remaining), history)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                logger.error("downloadSegment attempt failed: idx=$idx, host=$host", e)
-                DownloadResult.Failed(idx, resolvedUrl, e.message ?: "download failed", transportError = true)
+                logger.trace("downloadSegment attempt failed: idx=$idx, host=$host", e)
+                val reason = e.message ?: "download failed"
+                history.record(resolvedUrl, "ATTEMPT", reason)
+                DownloadResult.Failed(idx, resolvedUrl, reason, transportError = true)
             }
 
             when {
@@ -208,17 +248,17 @@ class DownloaderComponent(
                 }
                 result is DownloadResult.Failed && result.statusCode == 404 -> {
                     // Assignment expired server-side — retrying any host is pointless.
-                    logger.info("Segment #{} gone (404 on {}), giving up after {} attempt(s)", idx, host, attempts)
+                    logger.trace("Segment #{} gone (404 on {}), giving up after {} attempt(s)", idx, host, attempts)
                     return result
                 }
                 result is DownloadResult.Failed && (result.statusCode ?: 0) in 400..499 -> {
                     // Other client errors (403 etc.): the URL itself is rejected everywhere.
-                    logger.info("Segment #{} rejected (HTTP {} on {}), giving up", idx, result.statusCode, host)
+                    logger.trace("Segment #{} rejected (HTTP {} on {}), giving up", idx, result.statusCode, host)
                     return result
                 }
                 result is DownloadResult.Failed -> {
                     if (result.transportError) CdnSelector.recordFailure(host)
-                    logger.debug("Segment #{} attempt {} failed on {}: {}", idx, attempts, host, result.reason)
+                    logger.trace("Segment #{} attempt {} failed on {}: {}", idx, attempts, host, result.reason)
                     lastFail = result
                 }
                 else -> { /* CutPoint cannot happen here */ }
@@ -259,12 +299,12 @@ class DownloaderComponent(
      * structured (coroutineScope), so a timeout or a lost race cancels the loser instead
      * of leaking it until the socket timeout.
      */
-    private suspend fun attemptDownload(resolvedUrl: String, idx: Int, budgetMs: Long): DownloadResult {
+    private suspend fun attemptDownload(resolvedUrl: String, idx: Int, budgetMs: Long, history: FailureHistory): DownloadResult {
         val start = System.currentTimeMillis()
         return withTimeoutOrNull(budgetMs.milliseconds) {
             coroutineScope {
                 val directDeferred = async {
-                    downloadWithClient(httpClientProvider.direct("dl_${Random.nextInt(32)}"), resolvedUrl, idx, false)
+                    downloadWithClient(httpClientProvider.direct("dl_${Random.nextInt(32)}"), resolvedUrl, idx, false, history)
                 }
 
                 val raceThresholdMs = runtimeTuning.downloaderRaceDelay.inWholeMilliseconds
@@ -278,9 +318,9 @@ class DownloaderComponent(
                     return@coroutineScope directResult
                 }
 
-                logger.debug("Direct download slow/failed for idx={}, falling back to proxy race", idx)
+                logger.trace("Direct download slow/failed for idx={}, falling back to proxy race", idx)
                 val proxyDeferred = async {
-                    downloadWithClient(httpClientProvider.proxied("px_${Random.nextInt(5)}"), resolvedUrl, idx, true)
+                    downloadWithClient(httpClientProvider.proxied("px_${Random.nextInt(5)}"), resolvedUrl, idx, true, history)
                 }
 
                 val result = if (directDeferred.isCompleted) {
@@ -288,6 +328,7 @@ class DownloaderComponent(
                     // chance instead of letting select() immediately return the direct failure.
                     withTimeoutOrNull(minOf(raceThresholdMs, budgetMs).milliseconds) { proxyDeferred.await() }
                         ?: DownloadResult.Failed(idx, resolvedUrl, "proxy timeout", transportError = true)
+                            .also { history.record(resolvedUrl, "PROXY", it.reason) }
                 } else {
                     select<DownloadResult> {
                         directDeferred.onAwait { r ->
@@ -306,12 +347,13 @@ class DownloaderComponent(
                 result
             }
         } ?: DownloadResult.Failed(idx, resolvedUrl, "attempt timeout after ${budgetMs}ms", transportError = true)
+            .also { history.record(resolvedUrl, "ATTEMPT", it.reason) }
     }
 
     private suspend fun downloadWithClient(
-        client: HttpClient, url: String, idx: Int, proxied: Boolean
+        client: HttpClient, url: String, idx: Int, proxied: Boolean, history: FailureHistory
     ): DownloadResult {
-        return try {
+        val result = try {
             // Stall watchdog #1: no response headers within stallTimeoutMs → dead path, bail out.
             val response = withTimeout(runtimeTuning.downloaderStallTimeout) { client.get(url) }
             val stream = response.bodyAsChannel()
@@ -334,27 +376,31 @@ class DownloaderComponent(
             // our own stall watchdog on client.get(); external cancellation is rethrown via ensureActive
             currentCoroutineContext().ensureActive()
             val stallTimeoutMs = runtimeTuning.downloaderStallTimeout.inWholeMilliseconds
-            logger.warn("downloadWithClient stalled: idx=$idx, url=$url, proxied=$proxied (no response within ${stallTimeoutMs}ms)")
+            logger.trace("downloadWithClient stalled: idx=$idx, url=$url, proxied=$proxied (no response within ${stallTimeoutMs}ms)")
             DownloadResult.Failed(idx, url, "stall: no response within ${stallTimeoutMs}ms", transportError = true)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // the download race was resolved and this coroutine was cancelled — not an error
             throw e
         } catch (e: StreamStallException) {
-            logger.warn("downloadWithClient stalled: idx=$idx, url=$url, proxied=$proxied (${e.message})")
+            logger.trace("downloadWithClient stalled: idx=$idx, url=$url, proxied=$proxied (${e.message})")
             DownloadResult.Failed(idx, url, "stall: " + e.message, transportError = true)
         } catch (e: ResponseException) {
             // HTTP status errors (404 etc.) are routine — one line, no stack trace.
             // 4xx = the assignment itself is rejected (host is fine); 5xx implicates the host.
-            logger.warn("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied, status=${e.response.status}")
+            logger.trace("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied, status=${e.response.status}")
             DownloadResult.Failed(
                 idx, url, "HTTP " + e.response.status,
                 transportError = e !is ClientRequestException,
                 statusCode = e.response.status.value
             )
         } catch (e: Exception) {
-            logger.error("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied", e)
+            logger.trace("downloadWithClient failed: idx=$idx, url=$url, proxied=$proxied", e)
             DownloadResult.Failed(idx, url, e.message ?: "download failed", transportError = true)
         }
+        if (result is DownloadResult.Failed) {
+            history.record(url, if (proxied) "PROXY" else "DIRECT", result.reason)
+        }
+        return result
     }
 
     /**

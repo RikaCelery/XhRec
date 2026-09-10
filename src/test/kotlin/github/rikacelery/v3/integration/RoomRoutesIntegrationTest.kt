@@ -130,6 +130,7 @@ class RoomRoutesIntegrationTest {
     fun `break and restart produce separate files`() = withFixture { fx ->
         fx.ready()
         fx.startRecording()
+        val initialDownload = fx.awaitEvent<SegmentDownloaded> { it.roomId == 1001L }
 
         fx.get("/break?id=1001").expectOk("Break signaled")
         val broken = fx.awaitEvent<FileReady>(15.seconds) { it.roomId == 1001L }
@@ -137,7 +138,11 @@ class RoomRoutesIntegrationTest {
 
         // the scheduler preconfigures again automatically after a break and keeps recording
         fx.awaitEventCount<RecordingStarted>(2, 15.seconds) { it.roomId == 1001L }
-        val downloadsBeforeRestart = fx.events.filterIsInstance<SegmentDownloaded>().count { it.roomId == 1001L }
+        // RecordingStarted precedes playlist polling. Wait for bytes in this generation
+        // before closing it, otherwise the writer correctly discards an empty file.
+        val afterBreakDownload = fx.awaitEvent<SegmentDownloaded>(20.seconds) {
+            it.roomId == 1001L && it.generation != initialDownload.generation
+        }
 
         // /restart stops the running session (closing its file) and arms the room again
         fx.get("/restart?id=1001").expectOk("Restarted")
@@ -146,7 +151,10 @@ class RoomRoutesIntegrationTest {
 
         // the room is still public, so re-arming it records again without a status change
         fx.awaitEventCount<RecordingStarted>(3, 20.seconds) { it.roomId == 1001L }
-        fx.awaitEventCount<SegmentDownloaded>(downloadsBeforeRestart + 1, 20.seconds) { it.roomId == 1001L }
+        fx.awaitEvent<SegmentDownloaded>(20.seconds) {
+            it.roomId == 1001L && it.generation != initialDownload.generation &&
+                it.generation != afterBreakDownload.generation
+        }
 
         fx.get("/remove?id=1001").expectOk("Removed")
         val all = fx.awaitEventCount<FileReady>(3, 15.seconds) { it.roomId == 1001L }

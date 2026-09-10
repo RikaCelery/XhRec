@@ -167,7 +167,12 @@ class RuntimeInjectionTest {
     }
 
     @Test
-    fun `scheduler uses injected clients and master candidates`() = runBlocking {
+    fun `scheduler uses injected clients and records successful master fetch`() = checkSchedulerMaster(false)
+
+    @Test
+    fun `scheduler records master failure and fallback success on their respective hosts`() = checkSchedulerMaster(true)
+
+    private fun checkSchedulerMaster(failPrimary: Boolean) = runBlocking {
         val testScope = CoroutineScope(coroutineContext + SupervisorJob())
         val requests = CopyOnWriteArrayList<String>()
         val client = HttpClient(MockEngine { request ->
@@ -178,7 +183,9 @@ class RuntimeInjectionTest {
                     """{"item":{"status":"public"}}""",
                     headers = jsonHeaders
                 )
-                url.startsWith("http://127.0.0.1:18082/master/") -> respond(
+                request.url.encodedPath.startsWith("/master/") && failPrimary && request.url.host == "127.0.0.1" ->
+                    respond("not found", HttpStatusCode.NotFound)
+                request.url.encodedPath.startsWith("/master/") -> respond(
                     """
                         #EXTM3U
                         #EXT-X-MOUFLON:PSCH:key-id
@@ -189,7 +196,7 @@ class RuntimeInjectionTest {
                 request.url.encodedPath == "/media/model.m3u8" -> respond("#EXTM3U")
                 else -> error("unexpected request $url")
             }
-        })
+        }) { expectSuccess = true }
         val provider = RecordingProvider(client, client)
         val eventBus = EventBus()
         installRequestAnswers(eventBus)
@@ -209,7 +216,10 @@ class RuntimeInjectionTest {
             runtimeTuning = RuntimeTuning(preconfigRetryInterval = 4.milliseconds),
             masterUrlCandidates = { roomId, pkey, token ->
                 candidateArgs += Triple(roomId, pkey, token)
-                listOf("http://127.0.0.1:18082/master/$roomId?pkey=$pkey&token=${token.orEmpty()}")
+                buildList {
+                    add("http://127.0.0.1:18082/master/$roomId?pkey=$pkey&token=${token.orEmpty()}")
+                    if (failPrimary) add("http://127.0.0.2:18082/master/$roomId?pkey=$pkey&token=${token.orEmpty()}")
+                }
             }
         )
         val entry = SchedulerEntry(7, "model", scheduler).apply { pkey = "room-key" }
@@ -224,9 +234,24 @@ class RuntimeInjectionTest {
             assertEquals(listOf(Triple<Long, String, String?>(7L, "room-key", "")), candidateArgs)
             assertTrue(provider.proxiedCalls.any { it.key == "master_7" })
             assertTrue(provider.proxiedCalls.any { it.key == "preconfig_7" })
-            assertTrue(requests.all { it.startsWith("http://127.0.0.1:18082/") })
+            assertTrue(requests.all {
+                it.startsWith("http://127.0.0.1:18082/") || (failPrimary && it.startsWith("http://127.0.0.2:18082/master/"))
+            })
             assertTrue(requests.any { it == "http://127.0.0.1:18082/master/7?pkey=room-key&token=" })
             assertTrue(requests.any { it == "http://127.0.0.1:18082/media/model.m3u8?psch=v2&pkey=key-id" })
+            val stats = CdnSelector.snapshot()
+            val successHost = if (failPrimary) "127.0.0.2" else "127.0.0.1"
+            val success = stats.getValue(successHost)
+            assertEquals(1, success.totalSuccesses)
+            assertEquals(0, success.totalErrors)
+            assertTrue(success.estimatedDurationMs > 0)
+            assertTrue(success.estimateSource != "none")
+            assertTrue(success.confidence > 0)
+            if (failPrimary) {
+                val failure = stats.getValue("127.0.0.1")
+                assertEquals(0, failure.totalSuccesses)
+                assertEquals(1, failure.totalErrors)
+            }
         } finally {
             entry.scope.cancel()
             testScope.cancel()
