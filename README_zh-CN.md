@@ -35,9 +35,10 @@ java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.jso
 每行一个房间。以 `#` 或 `;` 开头的行视为未激活（不会自动录制）。
 
 ```ini
-# https://stripchat.com/modelA q:720p limit:120
+#https://stripchat.com/modelA q:720p limit:120
 ; https://stripchat.com/modelB q:240p
 https://stripchat.com/modelC q:highest
+https://stripchat.com/modelD q:highest nopublic nofreespy autopay:private
 ```
 
 | 字段            | 描述                                                                                                          |
@@ -45,8 +46,16 @@ https://stripchat.com/modelC q:highest
 | `q:<quality>`   | 画质偏好: `240p`, `480p`, `720p`, `720p60`, `1080p`, `1080p60`, 或 `highest` (默认)。`raw` 已弃用，请用 `highest` |
 | `limit:<sec>`   | 录制时长限制（秒）                                                                                               |
 | `size:<bytes>`  | 录制大小限制（支持后缀: `K`, `M`, `G`, 如 `500M`）                                                                |
-| `autopay`       | 对私密秀开启自动支付                                                                                             |
 | `pkey:<key>`    | 自定义 psch 密钥                                                                                               |
+| `nopublic`      | 不录制公开（免费）秀                                                                                             |
+| `nofreespy`     | 不录制可用免费偷窥额度观看的私密秀                                                                                 |
+| `autopay`       | 自动购买门票与偷窥（等价于 `autopay:ticket autopay:private`）                                                      |
+| `autopay:ticket`  | 自动购买门票以录制群秀                                                                                        |
+| `autopay:private` | 自动花费代币录制私密秀                                                                                        |
+
+录制开关的默认值：公开秀开启、免费偷窥开启、门票自动购买关闭、偷窥自动付费关闭。
+因此 `nopublic` 与 `nofreespy` 是"取消默认"的开关（不写即保持默认），而 `autopay`
+两项则需要显式开启。四个开关都可以在面板里按房间修改（房间行右侧的滑杆按钮）。
 
 如果请求的画质不可用，系统会自动选择最接近的匹配项。
 
@@ -131,7 +140,7 @@ cookie_string_here
 
 | 接口       | 参数                                                              | 描述                 |
 |------------|------------------------------------------------------------------|---------------------|
-| `/add`     | `name`, `quality`, `active`, `limit`, `autopay`, `pkey`, `size`   | 添加房间              |
+| `/add`     | `name`, `quality`, `active`, `limit`, `autopayTicket`, `autoPaySpy`, `pkey`, `size` | 添加房间 |
 | `/remove`  | `id`                                                             | 删除房间              |
 | `/restart` | `id`                                                             | 停止后重新开始录制      |
 | `/break`   | `id`                                                             | 暂时中断（下次轮询时恢复）|
@@ -143,7 +152,8 @@ cookie_string_here
 | `/activate`   | `id`                     | 启用自动录制               |
 | `/deactivate` | `id`                     | 禁用自动录制               |
 | `/quality`    | `id`, `q`                | 设置画质                  |
-| `/autopay`    | `id`, `v` (true/false)   | 切换自动支付               |
+| `/filter`     | `id`, `kind` (`public`\|`freespy`\|`ticket`\|`paidspy`), `v` | 切换某个录制开关 |
+| `/autopay`    | `id`, `v` (true/false), `kind` (`ticket`\|`private`) | `/filter` 的兼容别名 |
 | `/limit`      | `id`, `v` （秒）          | 设置时长限制（0 = 不限）     |
 | `/sizelimit`  | `id`, `v`                | 设置大小限制（0 = 不限）     |
 
