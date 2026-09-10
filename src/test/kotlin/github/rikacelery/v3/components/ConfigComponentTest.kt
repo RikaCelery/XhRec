@@ -7,17 +7,21 @@ import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.events.*
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.nio.file.Path
 import kotlin.test.*
 
@@ -116,16 +120,31 @@ class ConfigComponentTest {
         val rb1 = RequestBus(bus, backgroundScope)
         rb1.request<ConfigResponse>(ToggleMask)
 
-        // give async IO save time to complete
-        delay(300)
+        // the toggle is persisted by the caller (like the /mask/toggle route does); the save runs
+        // on Dispatchers.IO, so a fixed delay (virtual here) would only race it
+        bus.publish(PersistConfig)
+        awaitSavedConfig(configPath) { it["maskSensitiveLogs"]?.jsonPrimitive?.content == "false" }
+        // only one component may answer the request below, otherwise the assertion races comp1
+        comp1.stop()
 
         val comp2 = ConfigComponent(config, ApiClient(config.hosts.platformHosts), bus, this)
         comp2.start()
         val rb2 = RequestBus(bus, backgroundScope)
-        val mask = rb2.request<ConfigResponse>(GetMaskStatus)
-        assertEquals(false, mask.value)
+        // loadConfig hops through Dispatchers.IO, so the virtual request timeout can fire while
+        // that hop is in flight: poll on a real dispatcher until the loaded value shows up
+        val mask = withContext(Dispatchers.IO) {
+            val deadline = System.currentTimeMillis() + 10_000
+            var value: Any? = null
+            while (value != false && System.currentTimeMillis() < deadline) {
+                value = runCatching {
+                    rb2.request<ConfigResponse>(GetMaskStatus, timeoutMs = 2_000).value
+                }.getOrNull()
+                if (value != false) delay(25)
+            }
+            value
+        }
+        assertEquals(false, mask, "the saved mask must be loaded back by the new component")
 
-        comp1.stop()
         comp2.stop()
     }
 
@@ -144,10 +163,8 @@ class ConfigComponentTest {
         val comp = ConfigComponent(config, ApiClient(config.hosts.platformHosts), bus, this)
         comp.start()
 
-        // give async IO save time to complete
-        delay(300)
-
-        val saved = Json.parseToJsonElement(configPath.readText()).jsonObject
+        // the file the test wrote has no maskSensitiveLogs key: seeing it proves saveConfig ran
+        val saved = awaitSavedConfig(configPath) { it.containsKey("maskSensitiveLogs") }
         assertEquals("mirror.example.com", saved["platformHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
         assertEquals("ws.mirror.example.com", saved["webSocketHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
         assertEquals("cdn.mirror.example.com", saved["hlsHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
@@ -184,10 +201,32 @@ class ConfigComponentTest {
         assertEquals(listOf("new1.example.com", "new2.example.com"), cfg.platformHosts)
         assertEquals(listOf("cdn.new.example.com", "cdn2.new.example.com"), cfg.hlsHosts)
 
-        delay(300)
-        val saved = Json.parseToJsonElement(configPath.readText()).jsonObject
+        val saved = awaitSavedConfig(configPath) {
+            it["platformHosts"]?.jsonArray?.first()?.jsonPrimitive?.content == "new1.example.com"
+        }
         assertEquals("new1.example.com", saved["platformHosts"]?.jsonArray?.first()?.jsonPrimitive?.content)
         comp.stop()
+    }
+
+    /**
+     * Waits for a config save to land. `saveConfig` writes through `Dispatchers.IO`, while a
+     * `delay` inside `runTest` only advances virtual time — so reading the file right after a
+     * fixed sleep races the writer and fails on a loaded machine.
+     */
+    private suspend fun awaitSavedConfig(
+        file: File,
+        timeoutMs: Long = 10_000,
+        predicate: (JsonObject) -> Boolean = { true }
+    ): JsonObject = withContext(Dispatchers.IO) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var parsed: JsonObject? = null
+        while (parsed == null && System.currentTimeMillis() < deadline) {
+            parsed = runCatching { Json.parseToJsonElement(file.readText()).jsonObject }
+                .getOrNull()
+                ?.takeIf(predicate)
+            if (parsed == null) delay(25)
+        }
+        parsed ?: throw AssertionError("config was not saved as expected: ${file.absolutePath}")
     }
 
     @Test

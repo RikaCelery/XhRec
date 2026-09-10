@@ -263,11 +263,12 @@ class RoomRoutesIntegrationTest {
         fx.mock.setRoomStatus(1001, "p2p")
 
         fx.awaitEvent<FileReady>(15.seconds) { it.roomId == 1001L }
-        fx.awaitSession(1001, SessionState.Recording)
-        assertTrue(
-            fx.mock.requests().any { it.method == "PUT" && it.path.contains("/spy") },
-            "spy show must be purchased: ${fx.mock.requests().map { "${it.method} ${it.path}" }}"
-        )
+        // the stopped session still reports Recording while it closes, so waiting for the state
+        // alone can return before anything was purchased: wait for the purchase and the next session
+        fx.await(15.seconds, "spy show purchase") {
+            fx.mock.requests().any { it.method == "PUT" && it.path.contains("/spy") }.takeIf { it }
+        }
+        fx.awaitEventCount<RecordingStarted>(2, 15.seconds) { it.roomId == 1001L }
     }
 
     @Test
