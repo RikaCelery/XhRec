@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package github.rikacelery.v3.core
 
 import github.rikacelery.v3.hooks.EventHook

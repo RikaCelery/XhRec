@@ -41,7 +41,7 @@ data class TransitionRecord<S, E>(
         val targetStr = when (target) {
             is ERROR -> "ERROR"
             is KEEP -> "KEEP"
-            is NextState -> "-> ${(target as NextState<S>).state}"
+            is NextState -> "-> ${target.state}"
         }
         val dataStr = if (data != null) " [data=$data]" else ""
         return "[$timestamp] $fromState --($event)--> $targetStr$dataStr"
