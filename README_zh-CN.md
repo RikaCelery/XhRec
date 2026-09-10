@@ -164,7 +164,7 @@ cookie_string_here
 |-------------|--------------------------------------------------|
 | `/status`   | 活跃房间状态（分段数、字节数、正在运行的下载任务）           |
 | `/list`     | 所有房间的状态、会话状态、画质                          |
-| `/dashboard`| 聚合数据: rooms, statuses, listv2, metrics          |
+| `/dashboard`| 聚合数据: rooms, statuses, listv2, metrics，以及每个房间的 `hint`（解释已启用却未录制的原因: `public_filter_off`、`ticket_purchase_off`、`private_filter_off`、`no_free_spy`、`preconfig_failed`，可附带原始 `detail`） |
 | `/metrics`  | Prometheus 指标接口                                 |
 
 | `/mask/toggle` | 切换日志脱敏开关      |

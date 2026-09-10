@@ -143,6 +143,10 @@ object GetArmedRoomIds : Request {
 object GetRoomDetailedStatus : Request {
     override fun toString() = "GetRoomDetailedStatus"
 }
+/** Why each armed room is not recording right now; rooms with nothing to explain are absent. */
+object GetRecordingHints : Request {
+    override fun toString() = "GetRecordingHints"
+}
 data class GetValidPaymentAccount(val price: Long) : Request {
     override fun toString() = "GetValidPaymentAccount(price=$price)"
 }
@@ -165,6 +169,9 @@ data class RoomConfigResponse(
     val settings: github.rikacelery.v3.data.RoomSettings
 ) : Response {
     override fun toString() = "RoomConfigResponse(quality=${settings.quality}, timeLimit=${settings.timeLimit}, sizeLimitBytes=${settings.sizeLimitBytes})"
+}
+data class RecordingHintsResponse(val hints: Map<Long, github.rikacelery.v3.data.RoomHint>) : Response {
+    override fun toString() = "RecordingHintsResponse(count=${hints.size})"
 }
 data class ConfigResponse(val value: Any?) : Response {
     override fun toString() = "ConfigResponse(value=$value)"

@@ -364,6 +364,10 @@
                             </td>
                             <td class="px-2 py-1.5 text-center text-xs text-slate-500">
                                 {{room.roomStatus}}
+                                <span v-if="room.hint" class="block mt-0.5 text-[10px] text-amber-600 leading-tight"
+                                    :title="room.hint.detail || ''">
+                                    <i class="fa-solid fa-circle-question mr-0.5"></i>{{hintText(room.hint)}}
+                                </span>
                             </td>
                             <td class="px-2 py-1.5 text-center">
                                 <div class="thumb-container">
@@ -1034,6 +1038,11 @@
                             'e.g. 1G, 0 = unlimited': '例如 1G，0 表示不限',
                             'Save limits': '保存限制',
                             'Click to change the recording filters': '点击修改录制开关',
+                            'Public recording off': '已关闭公开录制',
+                            'Ticket purchase off': '已关闭门票购买',
+                            'Private recording off': '已关闭私密录制',
+                            'No free spy access': '无免费偷窥额度',
+                            'Not recordable': '暂时无法录制',
                             'ML Prediction': '机器学习预测', 'ML Model Status': '模型状态',
                             'Train Now': '立即训练', 'Trained': '已训练', 'Not Ready': '未就绪',
                             'CDN Model': 'CDN 模型', 'Schedule Model': '开播模型', 'trees': '棵树',
@@ -1306,6 +1315,19 @@
                 },
                 closeRoomSettings() {
                     this.settingsRoom = null;
+                },
+                // Why a room is not recording, as returned by /dashboard. The detail is the raw
+                // platform-level reason (for example "no account") and stays untranslated.
+                hintText(hint) {
+                    const keys = {
+                        public_filter_off: 'Public recording off',
+                        ticket_purchase_off: 'Ticket purchase off',
+                        private_filter_off: 'Private recording off',
+                        no_free_spy: 'No free spy access',
+                        preconfig_failed: 'Not recordable',
+                    };
+                    const label = keys[hint.code] ? this.$t(keys[hint.code]) : hint.code;
+                    return hint.detail ? `${label} (${hint.detail})` : label;
                 },
                 roomFilters(room) {
                     return [

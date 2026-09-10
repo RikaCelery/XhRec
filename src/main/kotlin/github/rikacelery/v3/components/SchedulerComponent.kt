@@ -6,6 +6,8 @@ import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RoomHint
+import github.rikacelery.v3.data.RoomHintCode
 import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.data.RoomStatus
 import github.rikacelery.v3.data.RuntimeTuning
@@ -168,6 +170,34 @@ class SchedulerEntry(
         RoomStatus.isPrivate(status) -> settings.autoPaySpy ||
             (settings.recordFreeSpy && !freeSpyExhausted)
         else -> false
+    }
+
+    /**
+     * Why an armed room is not recording, or null when there is nothing to explain: the session
+     * is running, the show is simply not on, or recording is about to start. The dashboard shows
+     * it next to the room status, so a room that is waiting for the room status to change can be
+     * told apart from one that was switched off or cannot get a token.
+     */
+    fun hint(): RoomHint? {
+        if (fsm.currentState == SchedulerState.Recording) return null
+        return when {
+            RoomStatus.isPublic(roomStatus) && !settings.recordPublic ->
+                RoomHint(RoomHintCode.PUBLIC_FILTER_OFF)
+
+            RoomStatus.isGroupShow(roomStatus) && !settings.autoPayTicket ->
+                RoomHint(RoomHintCode.TICKET_PURCHASE_OFF)
+
+            RoomStatus.isPrivate(roomStatus) && !settings.autoPaySpy && freeSpyExhausted ->
+                RoomHint(RoomHintCode.NO_FREE_SPY)
+
+            RoomStatus.isPrivate(roomStatus) && !settings.autoPaySpy && !settings.recordFreeSpy ->
+                RoomHint(RoomHintCode.PRIVATE_FILTER_OFF)
+
+            fsm.currentState == SchedulerState.Preconfiguring && lastFailReason != null ->
+                RoomHint(RoomHintCode.PRECONFIG_FAILED, lastFailReason)
+
+            else -> null
+        }
     }
 
     internal fun kindOf(status: String): String = when {
@@ -820,6 +850,10 @@ class SchedulerComponent(
             }
 
             is GetArmedRoomIds -> entries.keys().toList()
+
+            is GetRecordingHints -> RecordingHintsResponse(
+                entries.mapNotNull { (roomId, entry) -> entry.hint()?.let { roomId to it } }.toMap()
+            )
 
             is ShutdownCmd -> {
                 gracefulStop = true

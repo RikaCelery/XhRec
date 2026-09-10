@@ -4,6 +4,7 @@ import github.rikacelery.v3.components.SessionState
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.SegmentDownloaded
+import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -134,6 +135,60 @@ class RecordingFilterIntegrationTest {
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "a private show without free spy access must not be recorded"
         )
+    }
+
+    @Test
+    fun `the dashboard explains the filters that keep a room quiet`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "quiet", status = "public")
+        fx.mock.addRoom(1002, "ticketed", status = "groupShow")
+
+        fx.get("/add?name=quiet&active=false").expectOk("Room added: quiet")
+        fx.get("/filter?id=1001&kind=public&v=false").expectOk("Filter public set to false")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.get("/add?name=ticketed&active=false").expectOk("Room added: ticketed")
+        fx.get("/activate?id=1002").expectOk("Activated")
+
+        val quiet = fx.awaitRoom("quiet") { it.path("room.hint.code") == "public_filter_off" }
+        assertEquals("public_filter_off", quiet.path("room.hint.code"))
+        val ticketed = fx.awaitRoom("ticketed") { it.path("room.hint.code") == "ticket_purchase_off" }
+        assertEquals("ticket_purchase_off", ticketed.path("room.hint.code"))
+    }
+
+    @Test
+    fun `the dashboard explains a private show it cannot watch for free`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "off")
+        fx.get("/add?name=model&active=false").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.awaitRoomSubscribed(1001)
+        fx.mock.setRoomStatus(1001, "p2p")
+
+        val room = fx.awaitRoom("model") { it.path("room.hint.code") == "no_free_spy" }
+        assertEquals("no_free_spy", room.path("room.hint.code"))
+    }
+
+    @Test
+    fun `the dashboard explains a failed preconfig with its reason`() = withFixture { fx ->
+        fx.ready(users = emptyList())
+        fx.mock.addRoom(1001, "model", status = "off")
+        fx.get("/add?name=model&active=false&autoPaySpy=true").expectOk("Room added: model")
+        fx.get("/activate?id=1001").expectOk("Activated")
+        fx.awaitRoomSubscribed(1001)
+        fx.mock.setRoomStatus(1001, "p2p")
+
+        val room = fx.awaitRoom("model") { it.path("room.hint.code") == "preconfig_failed" }
+        assertEquals("preconfig_failed", room.path("room.hint.code"))
+        assertEquals("no account", room.path("room.hint.detail"))
+    }
+
+    @Test
+    fun `a recording room has no hint`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        val room = fx.awaitRoom("model") { it.boolField("listening") }
+        assertTrue(room["room"]!!.jsonObject["hint"] == null, "a recording room needs no explanation: $room")
     }
 
     @Test

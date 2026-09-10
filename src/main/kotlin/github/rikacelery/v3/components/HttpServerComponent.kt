@@ -335,6 +335,7 @@ class HttpServerComponent(
                 }
                 get("/dashboard") {
                     val rooms = requestBus.request<List<Room>>(GetRooms)
+                    val hints = requestBus.request<RecordingHintsResponse>(GetRecordingHints).hints
                     val statuses = requestBus.request<Map<Long, Map<String, Any>>>(GetRoomDetailedStatus)
                     val sessions = requestBus.request<List<RoomSession>>(GetSessions)
                     val armedIds = requestBus.request<List<Long>>(GetArmedRoomIds).toSet()
@@ -374,6 +375,12 @@ class HttpServerComponent(
                                         put("sizeLimitBytes", r.sizeLimitBytes)
                                         put("recordPublic", r.recordPublic); put("recordFreeSpy", r.recordFreeSpy)
                                         put("autoPayTicket", r.autoPayTicket); put("autoPaySpy", r.autoPaySpy)
+                                        hints[r.id]?.let { hint ->
+                                            put("hint", buildJsonObject {
+                                                put("code", hint.code.wireName)
+                                                hint.detail?.let { put("detail", it) }
+                                            })
+                                        }
                                     })
                                 })
                             }

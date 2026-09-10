@@ -170,7 +170,7 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 |--------------|---------------------------------------------------------|
 | `/status`    | Active room status (segments, bytes, running downloads) |
 | `/list`      | All rooms with status, session state, quality           |
-| `/dashboard` | Consolidated payload: rooms, statuses, listv2, metrics  |
+| `/dashboard` | Consolidated payload: rooms, statuses, listv2, metrics, and a per-room `hint` explaining why an armed room is not recording (`public_filter_off`, `ticket_purchase_off`, `private_filter_off`, `no_free_spy`, `preconfig_failed` plus an optional raw `detail`) |
 | `/metrics`   | Prometheus metrics endpoint                             |
 
 | `/mask/toggle` | Toggle log masking on/off |
