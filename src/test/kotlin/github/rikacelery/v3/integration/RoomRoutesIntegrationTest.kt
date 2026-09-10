@@ -175,6 +175,9 @@ class RoomRoutesIntegrationTest {
 
         // "highest" resolves to the top variant of the mock ladder
         fx.awaitSession(1001, SessionState.Recording, quality = "720p")
+        // bytes before the cut: the writer discards an empty recording, so a restart before the
+        // first segment would publish no FileReady at all
+        fx.awaitEvent<SegmentDownloaded>(15.seconds) { it.roomId == 1001L }
 
         fx.get("/quality?id=1001&q=360p").expectOk("Quality set to 360p")
         fx.awaitRoom("model") { it.path("room.quality") == "360p" }
@@ -251,6 +254,9 @@ class RoomRoutesIntegrationTest {
             fx.mock.requests().any { it.method == "POST" && it.path.contains("/groupShows/") },
             "group show must be purchased: ${fx.mock.requests().map { "${it.method} ${it.path}" }}"
         )
+        // bytes before the cut: switching the status before the first segment is downloaded
+        // would close an empty recording, which the writer discards without a FileReady
+        fx.awaitEvent<SegmentDownloaded>(15.seconds) { it.roomId == 1001L }
 
         // switch the room to a paid private show; the old recording is cut and a spy show is purchased
         fx.mock.room(1001).modelToken = ""

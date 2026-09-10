@@ -172,11 +172,18 @@ class MockPlatformServerTest {
         val segments = mock.startSegments(7, 40.milliseconds)
         val rotation = mock.rotateStatuses(7, listOf("off", "public", "groupShow"), 40.milliseconds)
         try {
-            withTimeout(5.seconds) {
-                while (room.availableSegments < 3 || room.status == "off") delay(20.milliseconds)
+            // The status keeps rotating, so it is read once with the wait and asserted on that
+            // snapshot: re-reading it after the loop can catch the next "off" tick instead.
+            val status = withTimeout(5.seconds) {
+                var current: String
+                do {
+                    delay(20.milliseconds)
+                    current = room.status
+                } while (room.availableSegments < 3 || current == "off")
+                current
             }
             assertTrue(room.availableSegments >= 3, "available=${room.availableSegments}")
-            assertTrue(room.status != "off", "status=${room.status}")
+            assertTrue(status != "off", "status=$status")
             assertTrue(mock.pushes().any { it.channel.startsWith("broadcastChanged@7") })
         } finally {
             segments.cancelAndJoin()
