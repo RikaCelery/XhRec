@@ -1,0 +1,28 @@
+---
+# This should work in place for testing, but to use it elsewhere, there are things
+# that you will need to update manually if you are familiar with docker.
+# For localhost use https://localhost:8090
+services:
+  xhrec:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    container_name: xhrec
+    restart: unless-stopped
+    ports:
+      - 8090:8090
+    dns:
+      - 9.9.9.9
+      - 149.112.112.112
+    environment:
+      - TZ=America/Chicago  # Update to your local time zone
+    volumes:
+      # Mount configuration files/templates directory
+      - ./config:/app/config
+      # Mount directory where recorded video streams are saved
+      - ./recordings:/app/recordings
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
