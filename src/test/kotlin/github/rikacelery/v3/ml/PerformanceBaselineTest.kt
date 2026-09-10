@@ -17,7 +17,7 @@ class PerformanceBaselineTest {
                 (i % 24).toDouble(),
                 (i % 7).toDouble(),
                 if ((i % 7) >= 5) 1.0 else 0.0,
-                (rng.nextDouble() * 100).toDouble(),
+                rng.nextDouble() * 100,
                 rng.nextDouble() * 300,
                 rng.nextDouble() * 60,
                 rng.nextInt(5).toDouble(),

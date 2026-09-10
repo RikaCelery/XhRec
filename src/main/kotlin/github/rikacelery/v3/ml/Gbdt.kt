@@ -129,8 +129,8 @@ class Gbdt(
         while (queue.isNotEmpty()) {
             val job = queue.removeFirst()
             val idxs = job.idxs
-            val gSum = idxs.sumOf { grad[it].toDouble() }
-            val hSum = idxs.sumOf { hess[it].toDouble() }
+            val gSum = idxs.sumOf { grad[it] }
+            val hSum = idxs.sumOf { hess[it] }
             val leafVal = -gSum / (hSum + l2)
 
             if (job.depth >= maxDepth || idxs.size < minLeaf * 2) {
@@ -158,10 +158,10 @@ class Gbdt(
                         t += step
                         continue
                     }
-                    val gl = left.sumOf { grad[it].toDouble() }
-                    val hl = left.sumOf { hess[it].toDouble() }
-                    val gr = right.sumOf { grad[it].toDouble() }
-                    val hr = right.sumOf { hess[it].toDouble() }
+                    val gl = left.sumOf { grad[it] }
+                    val hl = left.sumOf { hess[it] }
+                    val gr = right.sumOf { grad[it] }
+                    val hr = right.sumOf { hess[it] }
                     val gain = score(gl, hl) + score(gr, hr) - score(gSum, hSum)
                     if (gain > bestGain) {
                         bestGain = gain

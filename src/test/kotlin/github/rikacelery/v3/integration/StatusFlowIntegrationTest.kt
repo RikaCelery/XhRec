@@ -29,7 +29,8 @@ class StatusFlowIntegrationTest {
         "groupShow,false,false,false",
         "groupShow,true,false,true",
         "p2p,false,false,false",
-        "p2p,false,true,true",
+        "p2p,false,true,false",
+        "private,false,true,true",
         "virtualPrivate,false,true,true",
         "weirdStatus,false,false,false",
         "weirdStatus,false,true,true"

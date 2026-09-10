@@ -1,0 +1,55 @@
+name: Compile Warnings
+
+# Fails a pull request as soon as the Kotlin compiler reports a warning the baseline does not
+# know about. Runs on main too, so a warning that slips in through a direct push still shows up.
+# The check itself lives in .github/scripts/check_compile_warnings.py and can be run locally.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compile-warnings-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  warnings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: zulu
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          # this job must compile from scratch to see every warning, so it never writes the cache
+          cache-read-only: true
+
+      - name: Collect compiler warnings
+        shell: bash
+        run: python3 .github/scripts/check_compile_warnings.py
+
+      - name: Upload the warning list
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: compile-warnings
+          path: build/compile-warnings.txt
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
