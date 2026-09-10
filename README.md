@@ -110,6 +110,18 @@ cookie_string_here
 
 ![dashboard](image.png)
 
+#### Import favorites
+
+The heart button in the toolbar imports the models one or more accounts favorited on the site:
+
+1. pick the accounts (from `users.txt`) whose favorites should be read;
+2. `Fetch Favorites` resolves each favorited model to its room name — models that are already
+   rooms are listed as *Already added* and cannot be picked again;
+3. uncheck whatever you do not want, then `Import Selected`.
+
+Imported rooms are **not armed** (written commented out in `list.conf`), so nothing starts
+recording until you arm them from the room list.
+
 ### UserScript
 
 [install](https://greasyfork.org/zh-CN/scripts/582444-xhrec-control-panel)
@@ -150,6 +162,14 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 
 | `/mask/toggle` | Toggle log masking on/off |
 | `/mask/status` | Get current mask status (true/false) |
+
+### Favorites Import
+
+| Endpoint                 | Params        | Description                                                                     |
+|--------------------------|---------------|---------------------------------------------------------------------------------|
+| `/users`                 |               | Loaded accounts (`userId`, `username`, `coins` — cookies stay in the process)    |
+| `/favorites/candidates`  | `users` (ids) | Favorites of those accounts, resolved to room names, `existing` marks known ones |
+| `/favorites/import`      | `ids` (POST)  | Import the picked models as disarmed rooms                                       |
 
 ### Live Preview
 
