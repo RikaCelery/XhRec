@@ -42,8 +42,8 @@ class RoomComponent(
     eventBus: EventBus,
     parentScope: CoroutineScope,
     private val runtimeTuning: RuntimeTuning = RuntimeTuning(),
-    private val roomStatusFetcher: suspend (String) -> String = { roomName ->
-        apiClient.roomFetchBroadcastInfo(roomName).PathSingle("item.status").asString()
+    private val roomStatusFetcher: suspend (Long) -> String = { roomId ->
+        apiClient.roomFetchBroadcastInfo(roomId).PathSingle("item.status").asString()
     }
 ) : Actor<RoomMsg>("RoomComponent", eventBus, parentScope) {
 
@@ -313,7 +313,7 @@ class RoomComponent(
         }
         refreshWindows[room.id] = window
         window.invokeOnCompletion { refreshWindows.remove(room.id, window) }
-        val status = roomStatusFetcher(room.name)
+        val status = roomStatusFetcher(room.id)
         val current = rooms[room.id] ?: return
         if (status != current.status) {
             rooms[room.id] = current.copy(status = status)
@@ -332,7 +332,7 @@ class RoomComponent(
         refreshLock.withLock {
             rooms.values.forEach { room ->
                 try {
-                    val info = apiClient.roomFetchBroadcastInfo(room.name)
+                    val info = apiClient.roomFetchBroadcastInfo(room.id)
                     val status = info.PathSingle("item.status").asString()
                     val oldStatus = room.status
                     if (status != oldStatus) {

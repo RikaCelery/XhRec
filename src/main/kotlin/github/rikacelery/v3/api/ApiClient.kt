@@ -139,11 +139,12 @@ class ApiClient(
 
     suspend fun getRoomFromUrlOrSlug(path: String): Pair<Long, String> {
         val slug = path.substringAfterLast("/")
+        val roomId = roomIdFromName(slug)
         val j = withRetry(
             3,
             stopIf = { it is RenameException || it is DeletedException || it is ModelNotFoundException || is4xx(it) }
         ) {
-            roomFetchBroadcastInfo(slug).jsonObject
+            roomFetchBroadcastInfo(roomId).jsonObject
         }
         val id = j.PathSingle("item.modelId").asLong()
         val name = j.PathSingle("item.username").asString()
@@ -206,6 +207,15 @@ class ApiClient(
         return Json.parseToJsonElement(response.bodyAsText()).jsonObject
     }
 
+    suspend fun roomFetchRoomId(roomName: String): JsonObject {
+        val response = withHostFallback { host ->
+            withRetry(3) {
+                ensure2xx(host, apiClient.get(apiUrl(host, "api/front/users/user-ids/" + roomName )))
+            }
+        }
+        return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+    }
+
     /**
      * Resolves a room's slug from its model id. Favorites carry ids only, while rooms,
      * list.conf and the broadcasts API are keyed by slug — broadcasts by numeric id
@@ -214,6 +224,11 @@ class ApiClient(
     suspend fun roomNameFromId(roomId: Long): String? =
         roomFetchCamInfo(roomId, "").PathSingleOrNull("user.user.username")
             ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+
+    suspend fun roomIdFromName(roomName: String): Long? =
+        roomFetchRoomId(roomName).PathSingleOrNull("id")
+            ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?.toLongOrNull()
 
     suspend fun roomFetchModelToken(roomId: Long, user: User): String? {
         val info = roomFetchCamInfo(roomId, user.cookie)
@@ -279,8 +294,8 @@ class ApiClient(
         return response.status.value in 200..299
     }
 
-    suspend fun roomQualities(roomName: String): List<String> {
-        val info = roomFetchBroadcastInfo(roomName)
+    suspend fun roomQualities(roomId: Long): List<String> {
+        val info = roomFetchBroadcastInfo(roomId)
         val presetElem = info.PathSingleOrNull("item.settings.presets") ?: run {
             return emptyList()
         }
@@ -298,7 +313,7 @@ class ApiClient(
      * Fetches broadcast info. Explicitly handles 404: "model renamed" and
      * "model deleted" are business exceptions (no retry / no host failover).
      */
-    suspend fun roomFetchBroadcastInfo(roomName: String): JsonObject {
+    suspend fun roomFetchBroadcastInfo(roomId: Long?): JsonObject {
         // Rename/Deleted/NotFound are domain answers: the same request on another host answers the
         // same way, so they must neither be retried nor fail over.
         val domainBusiness: (Throwable) -> Boolean = {
@@ -309,7 +324,7 @@ class ApiClient(
         val noRetry: (Throwable) -> Boolean = { domainBusiness(it) || is4xx(it) }
         return withHostFallback(stopIf = domainBusiness) { host ->
             withRetry(3, stopIf = noRetry) {
-                val response = apiClient.get(apiUrl(host, "api/front/v1/broadcasts/" + roomName))
+                val response = apiClient.get(apiUrl(host, "api/front/v2/broadcasts/" + roomId))
                 val status = response.status.value
                 if (status in 200..299) {
                     Json.parseToJsonElement(response.bodyAsText()).jsonObject
