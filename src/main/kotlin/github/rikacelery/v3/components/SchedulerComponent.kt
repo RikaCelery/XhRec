@@ -39,7 +39,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
@@ -448,14 +448,22 @@ class SchedulerEntry(
         return CdnSelector.resolve(url)
     }
 
-    /** Verify the resolved variant playlist is actually fetchable before handing it to the Session. */
+    /**
+     * Verify the resolved variant playlist is actually fetchable before handing it to the Session.
+     *
+     * A probe that outlives the watchdog is a *failed probe*, not a cancellation of the caller:
+     * [withTimeoutOrNull] consumes the timeout so the answer stays `false` and the preconfig loop
+     * can retry. Letting the timeout escape as a `CancellationException` (which the catch below
+     * rethrows, as [SchedulerEntry.preconfigSignal] does) silently cancelled that loop, leaving
+     * the room stuck in `Preconfiguring` with no log, no hint and no retry.
+     */
     private suspend fun playlistUsable(url: String): Boolean {
         return try {
-            withTimeout(5.seconds) {
+            withTimeoutOrNull(component.runtimeTuning.preconfigProbeTimeout) {
                 val client = component.httpClientProvider.proxied("preconfig_$roomId")
                 val response = withRetry(2) { client.get(url) }
                 response.status.value in 200..299
-            }
+            } ?: false
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -491,6 +499,12 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
             on(SchedulerEvent.RestartRecording) to KEEP
             on(SchedulerEvent.BackToArmed) to KEEP
             on(SchedulerEvent.StopAndWait) to KEEP
+            // A preconfig attempt runs off the actor loop, so its answer can already be in the
+            // mailbox when BackToArmed cancels the loop. The room is armed because it is no longer
+            // recordable (or was restarted), so the late answer is dropped instead of being an
+            // illegal transition.
+            on(SchedulerEvent.PreconfigDone) to KEEP
+            on(SchedulerEvent.PreconfigFailed) to KEEP
             on(SchedulerEvent.SettingsChanged) to KEEP action { d ->
                 val st = d?.roomStatus ?: return@action
                 roomStatus = st
@@ -555,6 +569,11 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
             on(SchedulerEvent.BackToArmed) to SchedulerState.Armed action { stopPreconfigLoop() }
             on(SchedulerEvent.RestartRecording) to KEEP
             on(SchedulerEvent.StopAndWait) to KEEP
+            // No session of this entry is running yet — recording only starts on PreconfigDone — so
+            // an exit surfacing here belongs to an earlier incarnation of the room (the session the
+            // dashboard stopped before re-activating it). It carries nothing to act on, and taking
+            // its lastIndex would restart the next recording at the wrong segment.
+            on(SchedulerEvent.SessionExit) to KEEP
             on(SchedulerEvent.SettingsChanged) to KEEP action { d ->
                 if (d?.roomStatus != null) roomStatus = d.roomStatus
                 if (!canRecord(roomStatus)) self(SchedulerEvent.BackToArmed)
