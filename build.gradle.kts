@@ -17,7 +17,7 @@ application {
 }
 
 dependencies {
-    implementation("ch.qos.logback:logback-classic:1.5.32")
+    implementation("ch.qos.logback:logback-classic:1.6.3")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.5.2")
 
     implementation("io.ktor:ktor-server-core-jvm:3.5.2")
