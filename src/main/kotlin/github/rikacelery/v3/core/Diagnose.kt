@@ -102,7 +102,6 @@ private fun <S, E> List<github.rikacelery.v3.fsm.TransitionRecord<S, E>>.toJsonA
                     is KEEP -> "KEEP"
                     is ERROR -> "ERROR"
                     is NextState -> "-> ${t.state}"
-                    else -> t.toString()
                 })
                 if (record.data != null) put("data", BusMonitor.shorten(record.data))
             })
