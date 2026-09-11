@@ -93,6 +93,14 @@ object GetHostsConfig : Request {
 data class SetHostsConfig(val hosts: github.rikacelery.v3.data.HostsConfig) : Request {
     override fun toString() = "SetHostsConfig(platformHosts=${hosts.platformHosts}, ws=${hosts.webSocketHosts}, hls=${hosts.hlsHosts})"
 }
+/** Current root log level, for the dashboard's dynamic log-level control. */
+object GetLogLevel : Request {
+    override fun toString() = "GetLogLevel"
+}
+/** Sets the root log level at runtime; the choice is persisted to xhrec.json. */
+data class SetLogLevel(val level: String) : Request {
+    override fun toString() = "SetLogLevel(level=$level)"
+}
 
 // ── Downloader commands (Actor messages, not RequestBus) ──
 

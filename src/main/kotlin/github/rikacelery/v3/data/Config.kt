@@ -13,5 +13,10 @@ data class SystemConfig(
     val listConfPath: String = "list.conf",
     val configPath: String = "xhrec.json",
     val maskSensitiveLogs: Boolean = true,
-    val apiToken: String = ""
+    val apiToken: String = "",
+    /**
+     * Root log level chosen in the dashboard, or `""` to keep whatever `logback.xml` configures.
+     * Applied at startup and whenever the dashboard changes it.
+     */
+    val logLevel: String = ""
 )

@@ -3,6 +3,8 @@ package github.rikacelery.v3.core
 import github.rikacelery.v3.data.DataChannelMsg
 import github.rikacelery.v3.hooks.DataHook
 import kotlinx.coroutines.channels.Channel
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 
 class DataChannel(capacity: Int = 256) {
@@ -23,6 +25,13 @@ class DataChannel(capacity: Int = 256) {
             m = hook.intercept(m ?: return)
         }
         val msg = m ?: return
+        if (BusMonitor.wants(BusMonitor.DATA)) {
+            BusMonitor.record(BusMonitor.DATA, buildJsonObject {
+                put("msg", msg::class.simpleName ?: "")
+                roomOf(msg)?.let { put("room", it) }
+                if (msg is github.rikacelery.v3.data.StreamData) put("bytes", msg.data.size)
+            })
+        }
         val result = channel.trySend(msg)
         if (result.isFailure) {
             logger.warn("DataChannel full, dropping {} (room={})", msg::class.simpleName, roomOf(msg))

@@ -8,6 +8,7 @@ import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.LogLevels
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +18,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import java.io.File
-
 sealed interface ConfigMsg
 data class HandleConfigQuery(val env: CommandEnvelope) : ConfigMsg
 
@@ -40,6 +40,8 @@ class ConfigComponent(
     private val persistedDecryptKeys = config.decryptKeys.toMutableMap()
     private var maskSensitiveLogs = config.maskSensitiveLogs
     private var apiToken: String = config.apiToken
+    /** Last log level chosen in the dashboard; `""` means "whatever logback.xml sets". */
+    private var logLevel: String = config.logLevel
     private var hostsConfig: HostsConfig = config.hosts
     /** Serializes writes: the startup save and a config-change save may otherwise interleave. */
     private val saveLock = Mutex()
@@ -56,8 +58,10 @@ class ConfigComponent(
             }
             json["maskSensitiveLogs"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()?.let { maskSensitiveLogs = it }
             json["apiToken"]?.jsonPrimitive?.content?.let { apiToken = it }
+            json["logLevel"]?.jsonPrimitive?.content?.let { logLevel = it }
             hostsConfig = HostsConfig.fromJson(json)
             SensitiveStringRegistry.enabled = maskSensitiveLogs
+            applyLogLevel()
             applyHosts()
             logger.info("Loaded config from ${config.configPath}")
         } catch (e: Exception) {
@@ -79,6 +83,7 @@ class ConfigComponent(
                                 put("streamAuthKey", persistedStreamAuthKey)
                                 put("maskSensitiveLogs", maskSensitiveLogs)
                                 put("apiToken", apiToken)
+                                put("logLevel", logLevel)
                                 hostsConfig.toJson().forEach { (k, v) -> put(k, v) }
                                 put("decryptKeys", buildJsonObject {
                                     persistedDecryptKeys.forEach { (k, v) -> put(k, v) }
@@ -91,6 +96,19 @@ class ConfigComponent(
                     logger.error("Failed to save config to ${config.configPath}: ${e.message}", e)
                 }
             }
+        }
+    }
+
+    /** Re-apply the persisted log level; a blank value leaves logback.xml in charge. */
+    private fun applyLogLevel() {
+        if (logLevel.isBlank()) return
+        val applied = LogLevels.apply(logLevel)
+        if (applied == null) {
+            logger.warn("Ignoring unknown persisted log level '{}'", logLevel)
+            logLevel = ""
+        } else {
+            logLevel = applied
+            logger.info("Applied persisted log level {}", applied)
         }
     }
 
@@ -150,8 +168,52 @@ class ConfigComponent(
                 OkResponse
             }
 
+            // The effective level is read back from Logback rather than from `logLevel`, so the
+            // reported value is what is actually filtering logs even when logback.xml set it.
+            is GetLogLevel -> ConfigResponse(LogLevels.currentOrDefault())
+            is SetLogLevel -> {
+                val applied = LogLevels.apply(env.command.level)
+                if (applied == null) {
+                    logger.warn("Rejected unknown log level '{}'", env.command.level)
+                    ConfigResponse(null)
+                } else {
+                    logLevel = applied
+                    logger.info("Runtime log level set to {}", applied)
+                    scope.launch(Dispatchers.IO) { saveConfig() }
+                    ConfigResponse(applied)
+                }
+            }
+
             else -> return
         }
         eventBus.publish(CommandAck(env.id, ack))
     }
+
+    // —— Diagnostics ——
+
+    /**
+     * `/diagnose?actor=ConfigComponent`
+     *
+     * Secrets are reported as presence and length only — the auth key, API token and decrypt keys
+     * must never leave the process through a debug endpoint.
+     */
+    override suspend fun diagnose(section: String, args: Map<String, String>): JsonObject =
+        baseDiagnose(buildJsonObject {
+            put("maskSensitiveLogs", maskSensitiveLogs)
+            put("logLevel", logLevel.ifBlank { "(logback.xml)" })
+            put("effectiveLogLevel", LogLevels.currentOrDefault())
+            put("configPath", config.configPath)
+            put("hosts", JsonObject(hostsConfig.toJson()))
+            put("streamAuthKey", buildJsonObject {
+                put("present", persistedStreamAuthKey.isNotBlank())
+                put("length", persistedStreamAuthKey.length)
+            })
+            put("apiToken", buildJsonObject {
+                put("present", apiToken.isNotBlank())
+                put("length", apiToken.length)
+            })
+            put("decryptKeys", buildJsonArray {
+                persistedDecryptKeys.keys.forEach { add(JsonPrimitive(it)) }
+            })
+        })
 }

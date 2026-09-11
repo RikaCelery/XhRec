@@ -449,7 +449,9 @@ class XhrecIntegrationFixture(
             downloaderAttemptTimeout = 2.seconds,
             downloaderDeadline = downloaderDeadline,
             downloaderStallTimeout = downloaderStallTimeout,
-            downloaderRetryBackoff = 20.milliseconds
+            downloaderRetryBackoff = 20.milliseconds,
+            // short enough that a dropped stream client is noticed within a test
+            debugStreamHeartbeat = 200.milliseconds
         )
     }
 }

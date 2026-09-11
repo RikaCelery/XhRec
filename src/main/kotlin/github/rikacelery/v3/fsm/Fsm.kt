@@ -57,14 +57,20 @@ class StateMachine<S, E, D, C>(
     private val context: C,
     private val maxHistorySize: Int = 10
 ) {
+    @Volatile
     var currentState: S = initialState
         private set
 
     private var driving = false
+    private val historyLock = Any()
     private val _history = ArrayDeque<TransitionRecord<S, E>>(maxHistorySize)
 
+    /**
+     * Snapshot of the recent transitions. Guarded because diagnostics read it from the HTTP
+     * thread while the owning actor keeps driving transitions on its own loop.
+     */
     val history: List<TransitionRecord<S, E>>
-        get() = _history.toList()
+        get() = synchronized(historyLock) { _history.toList() }
 
     private val traceLogger = LoggerFactory.getLogger("v3.Fsm")
 
@@ -121,23 +127,26 @@ class StateMachine<S, E, D, C>(
     }
 
     private fun recordTransition(from: S, event: E, data: Any?, target: Target<S>) {
-        if (_history.size >= maxHistorySize) {
-            _history.removeFirst()
-        }
         val time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))
-        _history.addLast(TransitionRecord(time, from, event, data, target))
+        synchronized(historyLock) {
+            if (_history.size >= maxHistorySize) {
+                _history.removeFirst()
+            }
+            _history.addLast(TransitionRecord(time, from, event, data, target))
+        }
     }
 
     private fun dumpHistoryAndThrow(exception: FsmException): Nothing {
+        val snapshot = synchronized(historyLock) { _history.toList() }
         val sb = StringBuilder()
         sb.appendLine("=".repeat(60))
         val title = if (exception is FsmException.ActionFail) "ACTION CRASH" else "FSM ILLEGAL TRANSITION"
         sb.appendLine("$title: ${exception.message}")
-        sb.appendLine("recent ${_history.size} transitions:")
-        if (_history.isEmpty()) {
+        sb.appendLine("recent ${snapshot.size} transitions:")
+        if (snapshot.isEmpty()) {
             sb.appendLine("   (no history, failed at initial state)")
         } else {
-            _history.forEachIndexed { index, record ->
+            snapshot.forEachIndexed { index, record ->
                 sb.appendLine("   ${index + 1}. $record")
             }
         }

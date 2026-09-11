@@ -15,6 +15,7 @@ import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.DefaultHttpClientProvider
+import github.rikacelery.v3.utils.LogLevels
 import github.rikacelery.v3.utils.PredictionStore
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.*
@@ -33,7 +34,8 @@ private data class PersistedConfig(
     val decryptKeys: Map<String, String>,
     val maskSensitiveLogs: Boolean,
     val hosts: HostsConfig,
-    val apiToken: String
+    val apiToken: String,
+    val logLevel: String
 )
 
 private val mainLogger = LoggerFactory.getLogger("v3.Main")
@@ -42,7 +44,7 @@ private fun loadPersistedConfig(configPath: String): PersistedConfig {
     val file = File(configPath)
     val key = "YzWScuyQRGAGcxx1KIJmiQ7BY9Vi35ftwLqUOVO8uoo="
     val pkey = "Fq6m2TO2ZeBkRPm9"
-    val default = PersistedConfig(pkey, mapOf(pkey to key), true, HostsConfig.DEFAULT, "")
+    val default = PersistedConfig(pkey, mapOf(pkey to key), true, HostsConfig.DEFAULT, "", "")
     if (!file.exists()) return default
     try {
         val json = Json.parseToJsonElement(file.readText()).jsonObject
@@ -52,7 +54,8 @@ private fun loadPersistedConfig(configPath: String): PersistedConfig {
         val mask = json["maskSensitiveLogs"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
         val hosts = HostsConfig.fromJson(json)
         val apiToken = json["apiToken"]?.jsonPrimitive?.content ?: ""
-        return PersistedConfig(pkey, keys, mask, hosts, apiToken)
+        val logLevel = json["logLevel"]?.jsonPrimitive?.content ?: ""
+        return PersistedConfig(pkey, keys, mask, hosts, apiToken, logLevel)
     } catch (e: Exception) {
         mainLogger.error("Failed to load persisted config from $configPath", e)
         return default
@@ -96,7 +99,8 @@ fun main(vararg args: String) {
             listConfPath = cli.getOptionValue("file", "list.conf"),
             configPath = configPath,
             maskSensitiveLogs = persisted.maskSensitiveLogs,
-            apiToken = persisted.apiToken
+            apiToken = persisted.apiToken,
+            logLevel = persisted.logLevel
         )
 
         // Apply persisted runtime config before components start making API calls
@@ -106,6 +110,11 @@ fun main(vararg args: String) {
         val apiClient = ApiClient(persisted.hosts.platformHosts, httpClientProvider)
         CdnSelector.updateHosts(persisted.hosts.hlsHosts)
         SensitiveStringRegistry.enabled = persisted.maskSensitiveLogs
+        // Restore the dashboard's log level before the components start, so their startup logs
+        // already honor it. ConfigComponent re-applies it when it loads the file.
+        if (persisted.logLevel.isNotBlank() && LogLevels.apply(persisted.logLevel) == null) {
+            mainLogger.warn("Ignoring unknown persisted log level '{}'", persisted.logLevel)
+        }
 
         // 1. Core infrastructure
         val eventBus = EventBus()

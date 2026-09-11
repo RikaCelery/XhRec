@@ -260,6 +260,10 @@
                         :class="maskEnabled ? 'bg-amber-100 text-amber-700 hover:bg-amber-600 hover:text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600'">
                         <i class="fa-solid" :class="maskEnabled ? 'fa-eye-slash' : 'fa-eye'"></i>
                     </button>
+                    <button @click="openLogLevel()" :title="$t('Log Level — sets how much the server writes to its log at runtime. TRACE/DEBUG help when debugging a room; INFO and above keep the log small.')"
+                        class="h-8 px-2 flex items-center justify-center gap-1.5 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 text-[10px] font-bold tracking-wide transition-colors">
+                        <i class="fa-solid fa-bug text-xs"></i>{{ logLevel }}
+                    </button>
                     <button @click="toggleLocale()" :title="$t('Switch Language / 切换语言')"
                         class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800 transition-colors">
                         <i class="fa-solid fa-globe text-sm"></i>
@@ -652,6 +656,32 @@
                 </div>
             </div>
         </div>
+    <!-- Log Level Dialog -->
+    <div v-if="logLevelDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="logLevelDialog=false">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-md w-full p-5 border border-slate-200 dark:border-slate-700">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-bold text-slate-800 dark:text-slate-100">
+                    <i class="fa-solid fa-bug text-indigo-500 mr-2"></i>{{ $t('Log Level') }}
+                </h2>
+                <button @click="logLevelDialog=false" class="w-8 h-8 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-200"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">{{ $t('Applied immediately and remembered across restarts. Third-party loggers (netty, ktor) keep their own level.') }}</p>
+            <div class="flex flex-col gap-1.5">
+                <button v-for="lvl in logLevelLevels" :key="lvl" @click="setLogLevel(lvl)"
+                    class="flex items-center justify-between px-3 py-2 rounded-lg text-sm border transition-colors"
+                    :class="lvl === logLevel
+                        ? 'bg-indigo-50 border-indigo-400 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-500 dark:text-indigo-200 font-semibold'
+                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100 dark:bg-slate-900 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700'">
+                    <span>{{ lvl }}</span>
+                    <i class="fa-solid fa-check text-xs" v-if="lvl === logLevel"></i>
+                    <i class="fa-solid fa-bug text-xs opacity-40" v-else-if="lvl === 'TRACE' || lvl === 'DEBUG'"></i>
+                </button>
+            </div>
+            <div class="mt-5 flex justify-end">
+                <button @click="logLevelDialog=false" class="px-4 py-2 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm">{{ $t('Close') }}</button>
+            </div>
+        </div>
+    </div>
     <!-- Model Schedule Dialog -->
     <div v-if="scheduleDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
         <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-[90vw] max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -945,6 +975,9 @@
                     previewHeight: 40,
                     darkMode: false,
                     maskEnabled: true,
+                    logLevel: 'DEBUG',
+                    logLevelLevels: ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'OFF'],
+                    logLevelDialog: false,
                     hostsDialog: false,
                     scheduleDialog: false,
                     modelDetailDialog: false,
@@ -987,6 +1020,10 @@
                             'REC': '录制中', 'FETCH': '获取中', 'ARM': '监听中', 'OFF': '离线',
                             'Recording': '录制中', 'Fetching': '获取中', 'Listening': '监听中', 'Offline': '离线',
                             'Mask ON': '脱敏 开', 'Mask OFF': '脱敏 关', 'Network Error': '网络错误',
+                            'Log Level': '日志等级',
+                            'Log Level — sets how much the server writes to its log at runtime. TRACE/DEBUG help when debugging a room; INFO and above keep the log small.': '日志等级 — 设置服务器在运行时写入日志的详细程度。调试某个直播间时可用 TRACE/DEBUG；INFO 及以上可减小日志体积。',
+                            'Applied immediately and remembered across restarts. Third-party loggers (netty, ktor) keep their own level.': '立即生效并在重启后保留。第三方库日志（netty、ktor）保持各自等级不变。',
+                            'Log level not changed': '日志等级未更改',
                             'Invalid limit value': '无效的限时值', 'Invalid size value': '无效的大小值',
                             'CDN Performance': 'CDN 性能', 'Clear cooldown': '清除冷却', 'Clear': '清除', 'Cooldown cleared': '冷却已清除', 'active': '正常', 'confidence': '置信度',
                             'success': '成功', 'errors': '错误', 'unknown': '未知',
@@ -1156,6 +1193,30 @@
                         this.maskEnabled = text === 'true';
                         this.showToast(this.maskEnabled ? this.$t('Mask ON') : this.$t('Mask OFF'));
                     } catch (e) { this.showToast(this.$t('Network Error'), "error"); }
+                },
+                async openLogLevel() {
+                    await this.fetchLogLevel();
+                    this.logLevelDialog = true;
+                },
+                async fetchLogLevel() {
+                    try {
+                        const r = await fetch(`${HOST}/log/level`);
+                        const j = await r.json();
+                        if (j.level) this.logLevel = j.level;
+                        if (Array.isArray(j.levels) && j.levels.length) this.logLevelLevels = j.levels;
+                    } catch (_) {}
+                },
+                async setLogLevel(level) {
+                    try {
+                        const body = new URLSearchParams({ level });
+                        const r = await fetch(`${HOST}/log/level`, { method: 'POST', body });
+                        if (!r.ok) {
+                            this.showToast(`${this.$t('Log level not changed')}: ${await r.text()}`, 'error');
+                            return;
+                        }
+                        this.logLevel = (await r.text()).trim() || level;
+                        this.showToast(`${this.$t('Log Level')}: ${this.logLevel}`);
+                    } catch (e) { this.showToast(this.$t('Network Error'), 'error'); }
                 },
                 async fetchHostsConfig() {
                     try {
@@ -1574,6 +1635,9 @@
 
                 // Mask status
                 try { const r = await fetch(`${HOST}/mask/status`); this.maskEnabled = (await r.text()) === 'true'; } catch (_) {}
+
+                // Log level
+                await this.fetchLogLevel();
 
                 // Domain hosts config
                 await this.fetchHostsConfig();
