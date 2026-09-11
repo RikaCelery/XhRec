@@ -10,6 +10,7 @@ import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.SystemConfig
+import github.rikacelery.v3.events.*
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.ml.PredictionEngine
@@ -23,6 +24,7 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.time.Duration.Companion.seconds
 import org.apache.commons.cli.DefaultParser
 import org.apache.commons.cli.Options
 import org.apache.commons.cli.ParseException
@@ -227,7 +229,54 @@ fun main(vararg args: String) {
             }
         }
 
-        // 7. Cleanup on exit
+        // 7. JVM shutdown hook: without this, SIGTERM/docker stop kills the
+        // process immediately with no chance to run graceful shutdown -
+        // in-progress recordings get truncated mid-write and never reach
+        // post-processing. This mirrors what the HTTP shutdown routes do, so a
+        // container stop behaves the same as a graceful HTTP shutdown.
+        // When using docker, specify a longer stop_grace_period, since this can
+        // potentially take minutes.
+        Runtime.getRuntime().addShutdownHook(Thread {
+            runBlocking(Dispatchers.Default) {
+                mainLogger.info("Received termination signal, draining sessions before exit...")
+                try {
+                    requestBus.request<OkResponse>(ShutdownCmd)
+
+                    val sessions = requestBus.request<List<RoomSession>>(GetSessions)
+                        .filter { it.state == SessionState.Recording || it.state == SessionState.Fetching }
+                    for (s in sessions) {
+                        requestBus.request<OkResponse>(DeactivateCmd(s.roomId))
+                    }
+                    withTimeout(120.seconds) {
+                        awaitFinished(
+                            verb = "Stopped",
+                            targets = sessions.associate { it.roomId to it.roomName },
+                            stillRunning = {
+                                requestBus.request<List<RoomSession>>(GetSessions)
+                                    .filter { it.state == SessionState.Recording || it.state == SessionState.Fetching }
+                                    .map { it.roomId }
+                                    .toSet()
+                            }
+                        )
+                    }
+
+                    withTimeout(180.seconds) {
+                        awaitFinished(
+                            verb = "Post-processed",
+                            targets = postProcessorComponent.jobs.keys.associateWith { File(it).name },
+                            stillRunning = { postProcessorComponent.jobs.keys.toSet() }
+                        )
+                    }
+                } catch (e: Exception) {
+                    mainLogger.error("Error during shutdown drain, exiting anyway: ${e.message}", e)
+                } finally {
+                    eventBus.publish("ServerShutdown")
+                    shutdownSignal.await()
+                }
+            }
+        })
+
+        // 8. Cleanup on exit
         try {
             shutdownSignal.await()
         } finally {
@@ -247,6 +296,28 @@ fun main(vararg args: String) {
             ClientManager.close()
             appScope.cancel()
             println("XhRec v3 shut down")
+        }
+    }
+}
+
+/**
+ * Polls [stillRunning] every 500ms until every key in [targets] has dropped
+ * out of the returned set. Used by the shutdown hook to wait for both active
+ * recording sessions and pending post-processor jobs.
+ */
+private suspend fun <K : Any> awaitFinished(
+    verb: String,
+    targets: Map<K, String>,
+    stillRunning: suspend () -> Set<K>
+) {
+    val done = mutableSetOf<K>()
+    while (done.size < targets.size) {
+        delay(500)
+        val live = stillRunning()
+        for ((key, name) in targets) {
+            if (key in done || key in live) continue
+            done += key
+            mainLogger.info("$verb $name. remaining: ${targets.size - done.size}")
         }
     }
 }
