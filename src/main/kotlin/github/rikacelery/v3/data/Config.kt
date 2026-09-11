@@ -6,6 +6,7 @@ data class SystemConfig(
     val outputDir: File,
     val tmpDir: File,
     val port: Int,
+    val tls: Boolean = true,
     val proxy: String?,
     val decryptKeys: Map<String, String>,
     val streamAuthKey: String,

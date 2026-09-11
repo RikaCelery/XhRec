@@ -237,6 +237,7 @@ class XhrecIntegrationFixture(
         postProcessorComponent = PostProcessorComponent(eventBus, scope)
         httpServer = HttpServerComponent(
             port = 0,
+            tls = true,
             eventBus = eventBus,
             requestBus = requestBus,
             metricComponent = metricComponent,
