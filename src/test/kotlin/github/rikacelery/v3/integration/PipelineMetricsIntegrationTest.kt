@@ -3,6 +3,7 @@ package github.rikacelery.v3.integration
 import io.ktor.client.statement.bodyAsText
 import org.junit.jupiter.api.Test
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -41,7 +42,18 @@ class PipelineMetricsIntegrationTest {
             Regex("""xhrec_actor_mailbox_depth\{actor="SessionComponent"\} \d+""").containsMatchIn(after),
             "per-actor mailbox depth is what makes a lagging component visible"
         )
+
+        // CDN attribution is per actual serving host, so the label value is the mock's host:port
+        // and only the sum is stable enough to assert on.
+        assertTrue(
+            sumOf(after, "xhrec_cdn_segments_served_total") > sumOf(before, "xhrec_cdn_segments_served_total"),
+            "the CDN host that actually served each segment must be counted"
+        )
     }
+
+    private fun sumOf(payload: String, family: String): Long =
+        Regex("""$family\{host="[^"]*"\} (\d+)""").findAll(payload)
+            .sumOf { it.groupValues[1].toLong() }
 
     private fun assertGrew(before: String, after: String, family: String, labels: String) {
         val start = sample(before, family, labels)
@@ -50,6 +62,47 @@ class PipelineMetricsIntegrationTest {
             end > start,
             "$family{$labels} must grow while a room records, went $start -> $end"
         )
+    }
+
+    @Test
+    fun `room identity, arming and both state machines are exported`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        val metrics = fx.get("/metrics").bodyAsText()
+        for (expected in listOf(
+            """xhrec_room_info{roomId="1001",status="public",quality="720p"} 1""",
+            """xhrec_room_armed{roomId="1001"} 1""",
+            """xhrec_scheduler_state{roomId="1001",state="Recording"} 1""",
+            """xhrec_session_state{roomId="1001",state="Recording"} 1""",
+        )) {
+            assertTrue(expected in metrics, "missing $expected")
+        }
+        assertTrue(
+            Regex("""xhrec_room_last_progress_seconds\{roomId="1001"\} [\d.]+""").containsMatchIn(metrics),
+            "the progress clock is what makes a stalled room alertable without a window function"
+        )
+    }
+
+    @Test
+    fun `why an armed room is not recording is exported as a label`() = withFixture { fx ->
+        fx.ready()
+        fx.mock.addRoom(1001, "model", status = "off")
+        fx.get("/add?name=model&active=false")
+        fx.get("/filter?id=1001&kind=public&v=false")
+        fx.get("/activate?id=1001")
+        fx.mock.startSegments(1001, 30.milliseconds)
+        fx.awaitRoomSubscribed(1001)
+        fx.mock.setRoomStatus(1001, "public")
+
+        // The hint is computed on every scheduler transition, so it lands as soon as the room
+        // status change is driven through the FSM.
+        val hinted = fx.await(10.seconds, "the preconfig hint to be exported") {
+            Regex("""xhrec_room_hint\{roomId="1001",code="public_filter_off"\} 1""")
+                .takeIf { it.containsMatchIn(fx.get("/metrics").bodyAsText()) }
+                ?.let { true }
+        }
+        assertTrue(hinted, "the reason a room cannot record must be an alertable label")
     }
 
     /** Value of `family{labels}` in a Prometheus text payload, or 0 when the series is absent. */

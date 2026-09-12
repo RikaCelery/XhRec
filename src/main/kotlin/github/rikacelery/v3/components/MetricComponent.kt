@@ -3,6 +3,7 @@ package github.rikacelery.v3.components
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.PipelineMetrics
+import github.rikacelery.v3.core.RoomStateRegistry
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.HttpConnectionStats
@@ -305,6 +306,7 @@ class MetricComponent(
         // Bus, data channel and actor counters are process-wide and live in the objects that own
         // them; they are pulled here rather than pushed as events (see PipelineMetrics).
         PipelineMetrics.appendMetrics(sb)
+        RoomStateRegistry.appendMetrics(sb, now)
 
         return sb.toString()
     }

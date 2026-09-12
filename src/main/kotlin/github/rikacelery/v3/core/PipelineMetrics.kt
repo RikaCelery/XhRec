@@ -98,6 +98,31 @@ object PipelineMetrics {
         actors.remove(name)
     }
 
+    // ── CDN attribution for media traffic ─────────────────────────────────────
+
+    private val cdnServed = ConcurrentHashMap<String, AtomicLong>()
+    private val cdnServeFailures = ConcurrentHashMap<String, AtomicLong>()
+
+    /**
+     * One segment actually fetched from [host] — the host whose rewritten URL served the bytes,
+     * after any failover, not the host the selector first picked.
+     *
+     * Deliberately separate from `CdnSelector`'s `totalSuccesses`: that one also counts master
+     * playlist fetches and skips sub-millisecond downloads, so it cannot answer "which CDN carried
+     * the media traffic".
+     */
+    fun recordCdnServed(host: String) {
+        cdnServed.bump(host)
+    }
+
+    /**
+     * A segment this host failed to deliver (transport error, stall, 5xx). An expired assignment
+     * (404/403) is not attributed to the host, matching the selector's own penalty rule.
+     */
+    fun recordCdnServeFailure(host: String) {
+        cdnServeFailures.bump(host)
+    }
+
     // ── Prometheus rendering ──────────────────────────────────────────────────
 
     fun appendMetrics(sb: StringBuilder) {
@@ -158,6 +183,16 @@ object PipelineMetrics {
         family(sb, "xhrec_actor_handle_seconds_total", "Total time spent inside actor handlers", "counter")
         actors.forEach { (actor, stat) ->
             sb.appendLine("xhrec_actor_handle_seconds_total{actor=\"$actor\"} ${stat.handleNanos.get() / 1_000_000_000.0}")
+        }
+
+        family(sb, "xhrec_cdn_segments_served_total", "Segments actually served by this CDN host", "counter")
+        cdnServed.forEach { (host, count) ->
+            sb.appendLine("xhrec_cdn_segments_served_total{host=\"$host\"} ${count.get()}")
+        }
+
+        family(sb, "xhrec_cdn_segment_failures_total", "Segments this CDN host failed to deliver", "counter")
+        cdnServeFailures.forEach { (host, count) ->
+            sb.appendLine("xhrec_cdn_segment_failures_total{host=\"$host\"} ${count.get()}")
         }
     }
 

@@ -5,6 +5,7 @@ import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.OrderedEmitter
+import github.rikacelery.v3.core.PipelineMetrics
 import github.rikacelery.v3.data.DownloadMeta
 import github.rikacelery.v3.data.DownloadResult
 import github.rikacelery.v3.data.RuntimeTuning
@@ -301,6 +302,11 @@ class DownloaderComponent(
             when {
                 result is DownloadResult.Success -> {
                     CdnSelector.record(host, result.meta.fetchDurationMs)
+                    // `host` is the one whose rewritten URL served the bytes — after any failover,
+                    // not the selector's first pick. Counted here rather than through
+                    // `CdnSelector.record` because that one also counts master playlist fetches and
+                    // skips sub-millisecond downloads.
+                    PipelineMetrics.recordCdnServed(host)
                     return result
                 }
                 result is DownloadResult.Failed && result.statusCode == 404 -> {
@@ -314,7 +320,10 @@ class DownloaderComponent(
                     return result
                 }
                 result is DownloadResult.Failed -> {
-                    if (result.transportError) CdnSelector.recordFailure(host)
+                    if (result.transportError) {
+                        CdnSelector.recordFailure(host)
+                        PipelineMetrics.recordCdnServeFailure(host)
+                    }
                     logger.trace("Segment #{} attempt {} failed on {}: {}", idx, attempts, host, result.reason)
                     lastFail = result
                 }
