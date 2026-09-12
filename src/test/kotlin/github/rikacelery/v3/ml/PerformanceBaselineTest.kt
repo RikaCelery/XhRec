@@ -6,6 +6,9 @@ import kotlin.io.path.createTempDirectory
 import kotlin.random.Random
 import kotlin.system.measureNanoTime
 import kotlin.system.measureTimeMillis
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class PerformanceBaselineTest {
 
@@ -58,6 +61,8 @@ class PerformanceBaselineTest {
         val g = Gbdt(task = Gbdt.Task.REGRESSION)
         val (tx, _) = cdnDataset(1)
         val feature = tx[0]
+        assertTrue(model.trees.isNotEmpty(), "training must produce trees")
+        assertTrue(g.predict(model, feature).isFinite(), "a prediction must be a finite number")
         repeat(1000) { g.predict(model, feature) }
 
         val iters = 200_000
@@ -67,6 +72,9 @@ class PerformanceBaselineTest {
         val perPredictNs = nanos.toDouble() / iters
         val perPredictUs = perPredictNs / 1000.0
         val throughput = 1_000_000_000.0 / perPredictNs
+        assertTrue(perPredictNs.isFinite() && perPredictNs > 0.0, "predict must take measurable time")
+        // A deliberately loose floor: this guards against a catastrophic regression, not a benchmark.
+        assertTrue(throughput > 1_000.0, "inference should exceed 1k ops/s, was ${throughput.toLong()}")
         println()
         println("=== GBDT INFER BASELINE ===")
         println("  trees=" + model.trees.size + ", nodes total=" + model.trees.sumOf { it.nodes.size })
@@ -101,12 +109,18 @@ class PerformanceBaselineTest {
             println("  train binary n=" + n + "  ->  " + fmtMs(ms))
 
             val model = g.train(x, y, List(9) { "f" + it })
+            assertTrue(model.trees.isNotEmpty(), "binary training must produce trees")
             val saveMs = measureTimeMillis { Gbdt.save(model, File(dir, "m.json")) }
             val fileSize = File(dir, "m.json").length()
+            assertTrue(fileSize > 0, "the model file must be written")
             println("  save model  ->  " + fmtMs(saveMs) + " (" + "%.1f".format(fileSize / 1024.0) + " KB)")
 
             val loadMs = measureTimeMillis { Gbdt.load(File(dir, "m.json")) }
             println("  load model  ->  " + fmtMs(loadMs))
+
+            val loaded = Gbdt.load(File(dir, "m.json"))
+            assertNotNull(loaded, "the saved model must load back")
+            assertEquals(model.trees.size, loaded.trees.size, "round trip must preserve the tree count")
         } finally {
             dir.deleteRecursively()
         }
@@ -135,6 +149,8 @@ class PerformanceBaselineTest {
             println("  record+flush " + n + " samples  ->  " + fmtMs(ms))
             val size = File(dir, "ml-cdn-samples.jsonl").length()
             println("  file size  ->  " + "%.1f".format(size / 1024.0) + " KB")
+            assertTrue(size > 0, "the sample file must be written")
+            assertTrue(PredictionSampleStore.cdnCount() >= n, "recorded samples must be retained")
         } finally {
             PredictionSampleStore.clear(deleteFiles = true)
             dir.deleteRecursively()
