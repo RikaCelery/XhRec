@@ -17,6 +17,7 @@ import github.rikacelery.v3.components.SessionState
 import github.rikacelery.v3.components.WriterComponent
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.DataChannel
+import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Hosts
@@ -61,6 +62,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -406,6 +408,64 @@ class XhrecIntegrationFixture(
                 "sessions=${runCatching { sessions() }.getOrNull()}; " +
                 "armed=${runCatching { requestBus.request<List<Long>>(GetArmedRoomIds) }.getOrNull()}"
         )
+    }
+
+    /**
+     * Waits until [actor]'s FSM history for [roomId] records a transition for [event] (optionally
+     * whose recorded data contains [dataContains]) **and** the actor's mailbox is empty.
+     *
+     * That pair is the deterministic point at which a negative assertion is safe: the recorded
+     * transition is proof the room actually reacted to the trigger, and the empty mailbox proves
+     * the reaction finished. It replaces "sleep for N ms, then assert nothing happened", which both
+     * wastes time and races on a loaded machine.
+     */
+    suspend fun awaitTransition(
+        actor: Actor<*>,
+        roomId: Long,
+        event: String,
+        dataContains: String? = null,
+        timeout: Duration = 10.seconds
+    ) {
+        val what = "${actor.diagnoseName} room $roomId to process $event" +
+            (dataContains?.let { " ($it)" } ?: "")
+        await(timeout, what) {
+            val snapshot = actor.diagnose(Diagnosable.SECTION_HISTORY, mapOf("room" to roomId.toString()))
+            val history = snapshot["history"]?.jsonObject?.get(roomId.toString())?.jsonArray
+            val seen = history?.any { entry ->
+                val obj = entry.jsonObject
+                obj["event"]?.jsonPrimitive?.content == event &&
+                    (dataContains == null ||
+                        obj["data"]?.jsonPrimitive?.content?.contains(dataContains) == true)
+            } == true
+            val idle = snapshot["mailboxDepth"]?.jsonPrimitive?.intOrNull == 0
+            (seen && idle).takeIf { it }
+        }
+    }
+
+    /** Waits until the scheduler no longer tracks [roomId] (removed or deactivated) and is idle. */
+    suspend fun awaitSchedulerRoomGone(roomId: Long, timeout: Duration = 10.seconds) {
+        await(timeout, "scheduler to drop room $roomId") {
+            val snapshot = schedulerComponent.diagnose(Diagnosable.SECTION_SUMMARY, emptyMap())
+            val gone = snapshot["states"]?.jsonObject?.containsKey(roomId.toString()) != true
+            val idle = snapshot["mailboxDepth"]?.jsonPrimitive?.intOrNull == 0
+            (gone && idle).takeIf { it }
+        }
+    }
+
+    /** The session entry's diagnostics for [roomId], or null when the room has no session entry. */
+    suspend fun sessionEntry(roomId: Long): JsonObject? =
+        sessionComponent.diagnose(Diagnosable.SECTION_ENTRIES, mapOf("room" to roomId.toString()))
+            .jsonObject["entries"]?.jsonArray?.firstOrNull()?.jsonObject
+
+    /** Waits until the mock has recorded at least [atLeast] requests whose path contains [pathPart]. */
+    suspend fun awaitRequestCount(
+        pathPart: String,
+        atLeast: Int,
+        timeout: Duration = 10.seconds
+    ) {
+        await(timeout, ">= $atLeast requests matching '$pathPart'") {
+            (mock.requests().count { it.path.contains(pathPart) } >= atLeast).takeIf { it }
+        }
     }
 
     override fun close() {

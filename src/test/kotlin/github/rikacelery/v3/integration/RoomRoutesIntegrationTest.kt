@@ -10,12 +10,12 @@ import github.rikacelery.v3.events.SessionExit
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
-import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import org.junit.jupiter.api.Test
 import java.io.File
 import kotlin.test.assertEquals
@@ -110,7 +110,8 @@ class RoomRoutesIntegrationTest {
 
         fx.get("/remove?id=1001").expectOk("Removed")
         fx.awaitRoomAbsent(1001)
-        delay(1500)
+        // Barrier: the scheduler has processed the removal and is idle, so nothing is left to arm.
+        fx.awaitSchedulerRoomGone(1001)
         assertTrue(fx.sessions().isEmpty(), "a removed room must not start a session")
         assertTrue(fx.events.filterIsInstance<SegmentDownloaded>().isEmpty(), "a removed room must not download")
     }
@@ -216,13 +217,18 @@ class RoomRoutesIntegrationTest {
         fx.get("/limit?id=1001&v=0").expectOk("Time limit set to 0s")
 
         fx.awaitEventCount<FileReady>(1, 20.seconds) { it.roomId == 1001L && it.reason == EndReason.TimeLimit }
-        delay(2_500)
 
+        // Read the limit the restarted session actually applied (-1 = unlimited) instead of sleeping
+        // to see whether it cuts again; that is the property under test.
+        val applied = fx.await(10.seconds, "the restarted session to apply the new limit") {
+            fx.sessionEntry(1001)?.get("timeLimitMs")?.jsonPrimitive?.longOrNull?.takeIf { it == -1L }
+        }
+        assertEquals(-1L, applied, "the restarted session must use the new limit instead of the stale one")
         assertEquals(
             1,
             fx.events.filterIsInstance<FileReady>()
                 .count { it.roomId == 1001L && it.reason == EndReason.TimeLimit },
-            "the restarted session must use the new limit instead of the stale one"
+            "the restarted session must not cut again on the stale limit"
         )
     }
 

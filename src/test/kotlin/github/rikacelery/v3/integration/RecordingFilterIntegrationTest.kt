@@ -5,11 +5,9 @@ import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.SegmentDownloaded
 import kotlinx.serialization.json.jsonObject
-import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -32,8 +30,9 @@ class RecordingFilterIntegrationTest {
         fx.awaitRoomSubscribed(1001)
         fx.mock.setRoomStatus(1001, "public")
 
-        // bounded negative: the room must stay quiet while public recording is off
-        delay(1500)
+        // Deterministic barrier: once the scheduler has recorded this status transition and gone
+        // idle, the decision to stay quiet has been made — no sleep needed.
+        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "public")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "a public show must not be recorded while public recording is off: ${fx.sessions()}"
@@ -55,7 +54,8 @@ class RecordingFilterIntegrationTest {
         fx.mock.startSegments(1001, 30.milliseconds)
         fx.awaitRoomSubscribed(1001)
         fx.mock.setRoomStatus(1001, "public")
-        delay(750)
+        // Precondition barrier: the scheduler has processed the status and decided not to record.
+        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "public")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "precondition: the armed room stays quiet while public recording is off"
@@ -78,8 +78,8 @@ class RecordingFilterIntegrationTest {
         val file = fx.awaitEvent<FileReady>(15.seconds) { it.roomId == 1001L }
         assertEquals(EndReason.StatusChanged, file.reason)
 
-        // bounded negative: the new filter must keep the room quiet, not restart it
-        delay(750)
+        // The stop is complete once the scheduler is back to Armed; it must not restart after that.
+        fx.awaitTransition(fx.schedulerComponent, 1001, "BackToArmed")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "a public show must stay stopped after the filter was turned off: ${fx.sessions()}"
@@ -125,9 +125,9 @@ class RecordingFilterIntegrationTest {
         val before = fx.mock.requests().size
         fx.mock.setRoomStatus(1001, "private")
 
-        // the preconfig loop retries every 100ms in tests: an unthrottled probe would ask
-        // the platform about the privilege ~20 times in this window
-        delay(2000)
+        // Leaving Preconfiguring (privilege exhausted) is the deterministic end of the probing
+        // window: an unthrottled probe would have asked on every retry tick before this point.
+        fx.awaitTransition(fx.schedulerComponent, 1001, "BackToArmed")
         val probes = fx.mock.requests().drop(before)
             .count { it.path.contains("/api/front/v2/models/1001/cam") }
 
@@ -220,7 +220,8 @@ class RecordingFilterIntegrationTest {
         fx.awaitRoomSubscribed(1001)
         fx.mock.setRoomStatus(1001, "private")
 
-        delay(1500)
+        // Barrier: the scheduler processed the private status; the filter keeps it from recording.
+        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "private")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "free spy recording is off, so the private show must not be recorded"
@@ -238,14 +239,15 @@ class RecordingFilterIntegrationTest {
         fx.awaitRoomSubscribed(1001)
 
         fx.mock.setRoomStatus(1001, "private")
-        awaitRequestCount(fx, "/api/front/v2/models/1001/cam", atLeast = 1)
+        fx.awaitRequestCount("/api/front/v2/models/1001/cam", atLeast = 1)
         val firstShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }
         assertTrue(firstShow > 0, "the privilege must be probed when the private show starts")
 
         fx.mock.setRoomStatus(1001, "off")
-        delay(250)
+        // Barrier: the previous show's status change has been processed before flipping back.
+        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "off")
         fx.mock.setRoomStatus(1001, "private")
-        awaitRequestCount(fx, "/api/front/v2/models/1001/cam", atLeast = firstShow + 1)
+        fx.awaitRequestCount("/api/front/v2/models/1001/cam", atLeast = firstShow + 1)
 
         val secondShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }
         assertTrue(
@@ -254,26 +256,4 @@ class RecordingFilterIntegrationTest {
         )
     }
 
-    /**
-     * Waits until the mock has served at least [atLeast] requests whose path contains [pathPart].
-     *
-     * Used instead of a fixed sleep before a *positive* assertion: a loaded machine that is slow to
-     * reach the probe would otherwise fail the test even though the behaviour is correct.
-     */
-    private suspend fun awaitRequestCount(
-        fx: XhrecIntegrationFixture,
-        pathPart: String,
-        atLeast: Int,
-        timeout: Duration = 10.seconds
-    ) {
-        val deadline = System.currentTimeMillis() + timeout.inWholeMilliseconds
-        while (System.currentTimeMillis() < deadline) {
-            if (fx.mock.requests().count { it.path.contains(pathPart) } >= atLeast) return
-            delay(20.milliseconds)
-        }
-        throw AssertionError(
-            "timed out waiting for >=$atLeast requests matching '$pathPart'; " +
-                "saw ${fx.mock.requests().count { it.path.contains(pathPart) }}"
-        )
-    }
 }
