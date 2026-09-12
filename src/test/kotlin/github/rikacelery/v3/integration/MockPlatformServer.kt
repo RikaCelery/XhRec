@@ -86,7 +86,7 @@ class MockRoom(
     /** Platform-side deletion: broadcasts answers 404 "model already deleted". */
     @Volatile var deleted: Boolean = false
     @Volatile var ticketRate: Int = 100
-    @Volatile var privateRate: Int = 50
+    @Volatile var spyRate: Int = 50
     val presets: MutableList<String> = CopyOnWriteArrayList(listOf("360p", "720p"))
     @Volatile var fps: Int = 30
     @Volatile var height: Int = 720
@@ -476,7 +476,7 @@ class MockPlatformServer(
                                 // the slug doubles as the room name on the platform
                                 put("username", room.name)
                                 put("ticketRate", room.ticketRate)
-                                put("privateRate", room.privateRate)
+                                put("spyRate", room.spyRate)
                             })
                         })
                     }
