@@ -370,7 +370,7 @@ curl -skN "https://localhost:8090/debug/stream?types=data" | jq -c 'select(.room
 
 ```shell
 curl -sk https://localhost:8090/log/level
-# {"level":"DEBUG","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
+# {"level":"INFO","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
 
 curl -sk -X POST -d "level=TRACE" https://localhost:8090/log/level
 # TRACE
@@ -512,7 +512,7 @@ session has no earlier observation to compare against, so restarting the compari
 flag every ordinary cut as lost data.
 
 Per-poll detail is at `TRACE` — opt-in from the WebUI toolbar or `POST /log/level` — so it does not
-clutter the default `DEBUG` log. Read it as "N of the M ids this playlist advertised were already
+clutter the log at the default (`INFO`) level. Read it as "N of the M ids this playlist advertised were already
 covered, and the mark then moved from A to B":
 
 ```

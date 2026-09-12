@@ -24,8 +24,8 @@ object LogLevels {
     /** The levels offered to the dashboard, from most to least verbose. */
     val LEVELS = listOf("TRACE", "DEBUG", "INFO", "WARN", "ERROR", "OFF")
 
-    /** The default when `logback.xml` does not pin a root level and nothing was persisted. */
-    const val DEFAULT = "DEBUG"
+    /** The fallback when `logback.xml` does not pin a root level and nothing was persisted. */
+    const val DEFAULT = "INFO"
 
     private fun context(): LoggerContext? = LoggerFactory.getILoggerFactory() as? LoggerContext
 

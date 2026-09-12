@@ -357,7 +357,7 @@ curl -skN "https://localhost:8090/debug/stream?types=data" | jq -c 'select(.room
 
 ```shell
 curl -sk https://localhost:8090/log/level
-# {"level":"DEBUG","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
+# {"level":"INFO","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
 
 curl -sk -X POST -d "level=TRACE" https://localhost:8090/log/level
 # TRACE
@@ -488,7 +488,7 @@ DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1
 **会话接缝处不计入缺失**：时限切分、`Break`、重新激活之后，会话没有更早的观测可以对比；若把重启当作基线重置之外
 还去比较，就会把每一次正常的切分都误报成丢数据。
 
-每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认的 `DEBUG` 日志。
+每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认级别（`INFO`）的日志。
 读法是"播放列表提供的 M 个 id 中有 N 个已被覆盖，随后标记从 A 推进到 B"：
 
 ```
