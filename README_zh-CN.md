@@ -489,11 +489,16 @@ DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1
 **会话接缝处不计入缺失**：时限切分、`Break`、重新激活之后，会话没有更早的观测可以对比；若把重启当作基线重置之外
 还去比较，就会把每一次正常的切分都误报成丢数据。
 
-每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认的 `DEBUG` 日志：
+每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认的 `DEBUG` 日志。
+读法是"播放列表提供的 M 个 id 中有 N 个已被覆盖，随后标记从 A 推进到 B"：
 
 ```
-TRACE v3.SessionEntry - roomId=206236901 skipped 3 segment(s) at or below the resume mark (id 1002..1004, lastSegmentId=1750)
+TRACE v3.SessionEntry - roomId=152807806 skipped 1 of 3 advertised segment(s): id 1063 already at or below the resume mark (mark 1063 -> 1065)
 ```
+
+`id` 是**被跳过集合自身**的范围——只跳过一个时就是一个单值，不是播放列表窗口；而标记打印成 `A -> B`，是因为
+到这里它已经被本轮最新的 id 推进过了。所以上面这行表示：窗口是 `1063..1065`，进入本轮时标记是 `1063`，因此
+1063 已经写过被跳过，而 1064、1065 是新入队的并把标记推进到了 1065。
 
 当超过 `thresholdSkipLogDelay` 一直没有新分片时，会话会**报告一次**，并且说的是真正发生的事，而不是累计的
 跳过事件数（同一批 id 每次轮询都会被重复计数，累计值会严重夸大）：

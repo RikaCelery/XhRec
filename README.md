@@ -512,11 +512,17 @@ session has no earlier observation to compare against, so restarting the compari
 flag every ordinary cut as lost data.
 
 Per-poll detail is at `TRACE` — opt-in from the WebUI toolbar or `POST /log/level` — so it does not
-clutter the default `DEBUG` log:
+clutter the default `DEBUG` log. Read it as "N of the M ids this playlist advertised were already
+covered, and the mark then moved from A to B":
 
 ```
-TRACE v3.SessionEntry - roomId=206236901 skipped 3 segment(s) at or below the resume mark (id 1002..1004, lastSegmentId=1750)
+TRACE v3.SessionEntry - roomId=152807806 skipped 1 of 3 advertised segment(s): id 1063 already at or below the resume mark (mark 1063 -> 1065)
 ```
+
+`id` is the skipped set's own range — a single id when one entry was skipped, not the playlist's
+window — and the mark is printed as a transition because by then it has already advanced to this
+poll's newest id. So the line above means the window was `1063..1065`, the mark stood at `1063`, so
+1063 was already written and skipped while 1064 and 1065 were queued and moved the mark to 1065.
 
 When nothing new has arrived for `thresholdSkipLogDelay`, the session says so **once**, and says what
 actually happened rather than a count of skip events (the same ids repeat on every poll, so a running

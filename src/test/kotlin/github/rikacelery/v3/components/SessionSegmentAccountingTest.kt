@@ -193,6 +193,14 @@ class SessionSegmentAccountingTest {
         }
     }
 
+    @Test
+    fun `a one-element id range renders as a single id, not as a range`() {
+        // `id 1063..1063` in a log reads like a typo and hides that only one entry was skipped
+        assertEquals("1063", formatIdRange(1063L, 1063L))
+        assertEquals("1061..1063", formatIdRange(1061L, 1063L))
+        assertEquals("?", formatIdRange(null, null))
+    }
+
     private fun newEntry(scope: CoroutineScope): SessionEntry {
         val eventBus = EventBus()
         val requestBus = RequestBus(eventBus, scope)

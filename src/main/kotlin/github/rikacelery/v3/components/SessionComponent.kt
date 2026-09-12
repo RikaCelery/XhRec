@@ -102,6 +102,16 @@ data class SessionHandleCommand(val env: CommandEnvelope) : SessionMsg
 
 private val sessionLogger = LoggerFactory.getLogger("v3.SessionEntry")
 
+/**
+ * Renders a segment-id range for logs: a single id when both ends are the same, so a one-element
+ * set does not read as a typo (`id 1063` rather than `id 1063..1063`).
+ */
+internal fun formatIdRange(min: Long?, max: Long?): String = when {
+    min == null || max == null -> "?"
+    min == max -> min.toString()
+    else -> "$min..$max"
+}
+
 class CircleCache(private val capacity: Int) {
     private val set = LinkedHashSet<String>()
     @Synchronized fun add(url: String): Boolean {
@@ -242,6 +252,7 @@ class SessionEntry(
                 unseen.add(Segment(init, -1))
             }
         }
+        val markBefore = lastSegmentId
         var skipped = 0L
         var skippedMin = Long.MAX_VALUE
         var skippedMax = Long.MIN_VALUE
@@ -275,9 +286,13 @@ class SessionEntry(
             // TRACE, not DEBUG, because skipping is the *steady state* of a healthy recording — the
             // playlist is a sliding window that re-lists what was just written — so at DEBUG (the
             // default root level) it would be unconditional noise on every poll of every room.
+            //
+            // Both numbers matter and neither is the window: `id` is the skipped set's own range
+            // (a single id when one entry was skipped), and the mark is printed as a transition
+            // because it has already advanced to this poll's newest id by the time we get here.
             sessionLogger.trace(
-                "roomId={} skipped {} segment(s) at or below the resume mark (id {}..{}, lastSegmentId={})",
-                roomId, skipped, skippedMin, skippedMax, lastSegmentId
+                "roomId={} skipped {} of {} advertised segment(s): id {} already at or below the resume mark (mark {} -> {})",
+                roomId, skipped, parsed.segments.size, formatIdRange(skippedMin, skippedMax), markBefore, lastSegmentId
             )
         }
         return unseen
@@ -293,8 +308,8 @@ class SessionEntry(
         if (progressed) {
             if (skipStreakReported || waitedMs >= component.runtimeTuning.thresholdSkipLogDelay.inWholeMilliseconds) {
                 sessionLogger.info(
-                    "roomId={} caught up with the resume mark after {}s; {} skip event(s) (id {}..{}), recording resumed",
-                    roomId, waitedMs / 1000, skippedInStreak, skippedMinId, skippedMaxId
+                    "roomId={} caught up with the resume mark after {}s; {} skip event(s) (id {}), recording resumed",
+                    roomId, waitedMs / 1000, skippedInStreak, formatIdRange(skippedMinId, skippedMaxId)
                 )
             }
             resetSkipStreak()
@@ -305,8 +320,8 @@ class SessionEntry(
             // Report what actually happened — the playlist stopped advancing — rather than a count of
             // skip events, which repeats the same ids on every poll and greatly overstates the total.
             sessionLogger.warn(
-                "roomId={} no new segments for {}s: the playlist still advertises only id {}..{}, all already covered by the resume mark ({})",
-                roomId, waitedMs / 1000, skippedMinId, skippedMaxId, lastSegmentId
+                "roomId={} no new segments for {}s: the playlist still advertises only id {}, all already covered by the resume mark ({})",
+                roomId, waitedMs / 1000, formatIdRange(skippedMinId, skippedMaxId), lastSegmentId
             )
         }
     }
