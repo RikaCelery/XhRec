@@ -170,7 +170,7 @@ data class RoomSettingsChanged(
 
 // ── Misc ──
 
-enum class EndReason { SizeLimit, TimeLimit, StreamEnd, UserStop, NewInit, StatusChanged }
+enum class EndReason { SizeLimit, TimeLimit, StreamEnd, UserStop, NewInit, StatusChanged, WriterError }
 
 interface Request
 interface Response

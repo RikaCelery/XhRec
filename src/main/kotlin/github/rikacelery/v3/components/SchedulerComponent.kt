@@ -900,6 +900,10 @@ class SchedulerComponent(
                 logger.error("Writer fatal room {}: {}", event.roomId, event.error)
                 entries.remove(event.roomId)?.scope?.cancel()
                 evictRoomClients(event.roomId)
+                // The writer has already closed and deleted the partial file, so a session left
+                // running would keep downloading bytes into nothing. Stop it for the same reason
+                // RoomRemoved does; with the entry gone the resulting SessionExit is just ignored.
+                sessionComponent.tell(StopRecording(event.roomId, EndReason.WriterError))
             }
             // A room removed from the list while armed/recording must be disarmed and its
             // recording stopped, otherwise the session keeps writing and the UI shows a
