@@ -31,13 +31,13 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -391,9 +391,13 @@ class RuntimeInjectionTest {
     fun `downloader uses injected direct proxy and probe clients with short race timing`() = runTest {
         val directRequests = CopyOnWriteArrayList<Pair<HttpMethod, String>>()
         val proxyRequests = CopyOnWriteArrayList<String>()
+        // The direct path is held open by a latch rather than a 20ms sleep: the race must be decided
+        // by "direct is still busy", not by whether a real delay outran the 2ms race window, which
+        // flipped under CPU load.
+        val directGate = CompletableDeferred<Unit>()
         val direct = HttpClient(MockEngine { request ->
             directRequests += request.method to request.url.toString()
-            if (request.method == HttpMethod.Get) delay(20.milliseconds)
+            if (request.method == HttpMethod.Get) directGate.await()
             respond("direct")
         })
         val proxied = HttpClient(MockEngine { request ->
@@ -432,6 +436,10 @@ class RuntimeInjectionTest {
             assertTrue(provider.proxiedCalls.any { it.key.startsWith("px_") })
             assertTrue((directRequests.map { it.second } + proxyRequests).all { it.startsWith("http://127.0.0.") })
         } finally {
+            // Release the direct path before tearing down: the raced loser is normally cancelled,
+            // but a MockEngine handler runs in the client's own scope and can outlive that cancel —
+            // leaving it parked on the gate makes runTest fail with UncompletedCoroutinesError.
+            directGate.complete(Unit)
             downloader.stop()
             CdnSelector.updateHosts(oldCdnHosts)
             direct.close()
