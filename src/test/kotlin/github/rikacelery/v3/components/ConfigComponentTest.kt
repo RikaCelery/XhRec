@@ -6,6 +6,7 @@ import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.HostsConfig
 import github.rikacelery.v3.data.SystemConfig
 import github.rikacelery.v3.events.*
+import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -19,6 +20,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -30,6 +32,16 @@ class ConfigComponentTest {
 
     @TempDir
     lateinit var tempDir: Path
+
+    /**
+     * ConfigComponent mirrors `maskSensitiveLogs` onto the process-wide registry, and the toggle
+     * test flips it to false. Restore the default afterwards so the flag cannot leak into another
+     * test class that renders a log message.
+     */
+    @AfterEach
+    fun restoreMasking() {
+        SensitiveStringRegistry.enabled = true
+    }
 
     private fun TestScope.createComponents(): Triple<EventBus, RequestBus, ConfigComponent> {
         val configPath = tempDir.resolve("xhrec.json").toFile()
