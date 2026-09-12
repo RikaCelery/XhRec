@@ -766,22 +766,34 @@ class SessionComponent(
         e.generation = SecureRandom().nextLong()
         e.lastSegmentId = msg.startIndex?.minus(1)
         e.lastInitUrl = null
-        e.fsm.driveCatch(RecordingEvent.StartRecording)?.let { logger.error("Session FSM drive failed", it) }
+        drive(e, RecordingEvent.StartRecording)
     }
 
     private fun onStopRecording(msg: StopRecording) {
         val e = entries[msg.roomId] ?: return
-        e.fsm.driveCatch(RecordingEvent.StopRecording, RecordingDriveData(stopReason = msg.reason))
-            ?.let { logger.error("Session FSM drive failed", it) }
+        drive(e, RecordingEvent.StopRecording, RecordingDriveData(stopReason = msg.reason))
     }
 
     private fun driveFsm(sig: SessionSignal) {
         val e = entries[sig.roomId] ?: return
-        e.fsm.driveCatch(sig.event, sig.data)?.let { logger.error("Session FSM drive failed", it) }
-        // The playlist loop drives this every poll, so the exported progress clock and resume-mark
-        // lag stay fresh without a second timer.
-        RoomStateRegistry.update(sig.roomId) {
+        drive(e, sig.event, sig.data)
+    }
+
+    /**
+     * The single place the session's FSM is driven, and therefore the single place the exported
+     * session state is refreshed.
+     *
+     * The session has several drive sites — `driveFsm` for the playlist loop's self-scheduled
+     * signals, `onBus` for the downloader's confirmations, and the two command handlers — and
+     * instrumenting only `driveFsm` left the exported state stale: the transition back to `Idle`
+     * arrives as `CutPointDone` through `onBus`, so `sessionActive` was never cleared and the room
+     * kept exporting an ageing progress clock. (The scheduler has the same shape and the same bug.)
+     */
+    private fun drive(e: SessionEntry, event: RecordingEvent, data: RecordingDriveData? = null) {
+        e.fsm.driveCatch(event, data)?.let { logger.error("Session FSM drive failed", it) }
+        RoomStateRegistry.update(e.roomId) {
             sessionState = e.fsm.currentState.name
+            sessionActive = e.fsm.currentState == RecordingState.Recording
             lastProgressAtMs = e.lastProgressAt.toEpochMilli()
             resumeMarkAhead = e.lastPollMarkAhead
         }
@@ -791,24 +803,23 @@ class SessionComponent(
         when (event) {
             is SegmentDownloaded -> {
                 val e = entries[event.roomId] ?: return
-                e.fsm.driveCatch(
-                    RecordingEvent.SegmentDownloaded,
+                drive(
+                    e, RecordingEvent.SegmentDownloaded,
                     RecordingDriveData(segBytes = event.bytes.toLong(), segGeneration = event.generation)
-                )?.let { logger.error("Session FSM drive failed", it) }
+                )
             }
             is CutPointDone -> {
                 val e = entries[event.roomId] ?: return
-                e.fsm.driveCatch(
-                    RecordingEvent.CutPointDone,
+                drive(
+                    e, RecordingEvent.CutPointDone,
                     RecordingDriveData(segGeneration = event.generation, stopReason = event.reason)
-                )?.let { logger.error("Session FSM drive failed", it) }
+                )
             }
             is StopEvent -> {
                 logger.info("Stop event received: stopping all active sessions")
                 entries.values.forEach { e ->
                     if (e.fsm.currentState == RecordingState.Recording) {
-                        e.fsm.driveCatch(RecordingEvent.StopRecording, RecordingDriveData(stopReason = EndReason.UserStop))
-                            ?.let { logger.error("Session FSM drive failed", it) }
+                        drive(e, RecordingEvent.StopRecording, RecordingDriveData(stopReason = EndReason.UserStop))
                     }
                 }
             }

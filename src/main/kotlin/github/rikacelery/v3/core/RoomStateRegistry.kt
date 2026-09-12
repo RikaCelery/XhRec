@@ -27,6 +27,8 @@ object RoomStateRegistry {
         @Volatile var hintCode: String? = null
         @Volatile var sessionState: String = ""
         @Volatile var lastProgressAtMs: Long = 0L
+        /** A recording session is running; only then does a progress clock mean anything. */
+        @Volatile var sessionActive: Boolean = false
         @Volatile var resumeMarkAhead: Long = 0L
     }
 
@@ -78,12 +80,14 @@ object RoomStateRegistry {
             room.hintCode?.let { sb.appendLine("xhrec_room_hint{roomId=\"$id\",code=\"${escape(it)}\"} 1") }
         }
 
-        family(sb, "xhrec_room_last_progress_seconds", "Seconds since the session last queued or received data", "gauge")
+        family(sb, "xhrec_room_last_progress_seconds", "Seconds since the running session last queued or received data", "gauge")
         rooms.forEach { (id, room) ->
-            if (room.lastProgressAtMs > 0) {
-                val ageSeconds = (nowMs - room.lastProgressAtMs).coerceAtLeast(0) / 1000.0
-                sb.appendLine("xhrec_room_last_progress_seconds{roomId=\"$id\"} $ageSeconds")
-            }
+            // Only a running session has a progress clock. An armed room that is merely waiting for
+            // the show, or one whose recording is switched off, would otherwise age a stale value
+            // for ever and read as a room that is recording but stalled.
+            if (!room.sessionActive || room.lastProgressAtMs <= 0) return@forEach
+            val ageSeconds = (nowMs - room.lastProgressAtMs).coerceAtLeast(0) / 1000.0
+            sb.appendLine("xhrec_room_last_progress_seconds{roomId=\"$id\"} $ageSeconds")
         }
 
         family(sb, "xhrec_room_resume_mark_ahead", "How far the resume mark leads the newest advertised segment id", "gauge")

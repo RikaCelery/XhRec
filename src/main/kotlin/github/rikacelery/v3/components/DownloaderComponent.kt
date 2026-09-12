@@ -306,7 +306,7 @@ class DownloaderComponent(
                     // not the selector's first pick. Counted here rather than through
                     // `CdnSelector.record` because that one also counts master playlist fetches and
                     // skips sub-millisecond downloads.
-                    PipelineMetrics.recordCdnServed(host)
+                    PipelineMetrics.recordCdnServed(host, result.meta.fetchDurationMs)
                     return result
                 }
                 result is DownloadResult.Failed && result.statusCode == 404 -> {

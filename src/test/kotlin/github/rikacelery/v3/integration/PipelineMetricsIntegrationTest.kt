@@ -2,6 +2,7 @@ package github.rikacelery.v3.integration
 
 import io.ktor.client.statement.bodyAsText
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -76,6 +77,85 @@ class PipelineMetricsIntegrationTest {
                 ?.let { true }
         }
         assertTrue(cut, "the reason a file was cut must be an alertable label")
+    }
+
+    @Test
+    fun `actual segment duration is exported as a proper histogram`() = withFixture { fx ->
+        fx.ready()
+        val before = fx.get("/metrics").bodyAsText()
+        fx.startRecording()
+        val after = fx.get("/metrics").bodyAsText()
+
+        // One metadata block per family however many hosts there are: a repeated HELP/TYPE makes
+        // strict scrapers reject the whole payload.
+        assertEquals(
+            1, after.lines().count { it == "# TYPE xhrec_cdn_segment_duration_seconds histogram" },
+            "the histogram family must be declared exactly once"
+        )
+        assertTrue(
+            sumOf(after, "xhrec_cdn_segment_duration_seconds_count") >
+                sumOf(before, "xhrec_cdn_segment_duration_seconds_count"),
+            "every served segment must be observed"
+        )
+
+        val counts = Regex("""xhrec_cdn_segment_duration_seconds_count\{host="([^"]*)"\} (\d+)""")
+            .findAll(after).associate { it.groupValues[1] to it.groupValues[2].toLong() }
+        val buckets = Regex("""xhrec_cdn_segment_duration_seconds_bucket\{host="([^"]*)",le="([^"]+)"\} (\d+)""")
+            .findAll(after)
+            .groupBy({ it.groupValues[1] }, { it.groupValues[2] to it.groupValues[3].toLong() })
+
+        assertTrue(buckets.isNotEmpty(), "at least one host must be exported")
+        buckets.forEach { (host, entries) ->
+            val values = entries.map { it.second }
+            assertEquals(values.sorted(), values, "histogram buckets must be cumulative for $host")
+            assertEquals(
+                counts[host], entries.first { it.first == "+Inf" }.second,
+                "the +Inf bucket must equal _count for $host"
+            )
+        }
+    }
+
+    @Test
+    fun `session-scoped series disappear once a room stops recording`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        val during = fx.get("/metrics").bodyAsText()
+        assertTrue(
+            """xhrec_bytes_write_total{roomId="1001"}""" in during,
+            "the file being written is exported while the session runs"
+        )
+        assertTrue(
+            """xhrec_segment_id_current{roomId="1001"}""" in during,
+            "segment info is exported while the session runs"
+        )
+        assertTrue(
+            """xhrec_room_last_progress_seconds{roomId="1001"}""" in during,
+            "the progress clock is exported while the session runs"
+        )
+
+        fx.get("/deactivate?id=1001")
+
+        val gone = fx.await(10.seconds, "the session-scoped series to be withdrawn") {
+            val body = fx.get("/metrics").bodyAsText()
+            ("""xhrec_bytes_write_total{roomId="1001"}""" !in body
+                && """xhrec_segment_id_current{roomId="1001"}""" !in body
+                && """xhrec_downloading_current{roomId="1001"}""" !in body
+                && """xhrec_quality{roomId="1001"""" !in body
+                && """xhrec_room_last_progress_seconds{roomId="1001"}""" !in body).takeIf { it }
+        }
+        assertTrue(
+            gone,
+            "a frozen \"current file\" reads as a room that is still recording, and an ageing idle " +
+                "clock reads as a room that is recording but stalled"
+        )
+
+        // Lifetime counters stay, so a finished session is still worth looking at afterwards, and
+        // the liveness gauge has to keep answering 0 rather than vanishing.
+        val after = fx.get("/metrics").bodyAsText()
+        assertTrue("""xhrec_downloaded_total{roomId="1001"}""" in after, "lifetime counters must survive")
+        assertTrue("""xhrec_room_download_bytes_total{roomId="1001"}""" in after, "cumulative bytes must survive")
+        assertTrue("""xhrec_recording{roomId="1001"} 0""" in after, "an offline room must report recording=0")
     }
 
     private fun assertGrew(before: String, after: String, family: String, labels: String) {
