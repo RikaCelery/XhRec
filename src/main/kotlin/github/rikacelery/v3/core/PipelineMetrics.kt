@@ -123,6 +123,26 @@ object PipelineMetrics {
         cdnServeFailures.bump(host)
     }
 
+    // ── Live event source ─────────────────────────────────────────────────────
+
+    /** 1 while at least one WebSocket pool is connected. */
+    @Volatile
+    var wsConnected: Boolean = false
+        private set
+
+    val wsConnects = AtomicLong(0)
+    val wsDisconnects = AtomicLong(0)
+
+    fun recordWsConnected() {
+        wsConnected = true
+        wsConnects.incrementAndGet()
+    }
+
+    fun recordWsDisconnected() {
+        wsConnected = false
+        wsDisconnects.incrementAndGet()
+    }
+
     // ── Prometheus rendering ──────────────────────────────────────────────────
 
     fun appendMetrics(sb: StringBuilder) {
@@ -194,6 +214,17 @@ object PipelineMetrics {
         cdnServeFailures.forEach { (host, count) ->
             sb.appendLine("xhrec_cdn_segment_failures_total{host=\"$host\"} ${count.get()}")
         }
+
+        // Losing the WebSocket is not fatal but it is silent: room status changes stop arriving, so
+        // rooms sit armed and unrecorded until the periodic refresh happens to notice.
+        family(sb, "xhrec_ws_connected", "The live event WebSocket is connected (1) or not (0)", "gauge")
+        sb.appendLine("xhrec_ws_connected ${if (wsConnected) 1 else 0}")
+
+        family(sb, "xhrec_ws_connects_total", "Successful WebSocket connects", "counter")
+        sb.appendLine("xhrec_ws_connects_total ${wsConnects.get()}")
+
+        family(sb, "xhrec_ws_disconnects_total", "WebSocket disconnects", "counter")
+        sb.appendLine("xhrec_ws_disconnects_total ${wsDisconnects.get()}")
     }
 
     /** One HELP/TYPE pair per family: repeating them inside the loop makes strict scrapers reject. */

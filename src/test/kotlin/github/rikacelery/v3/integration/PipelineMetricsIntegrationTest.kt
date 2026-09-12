@@ -55,6 +55,29 @@ class PipelineMetricsIntegrationTest {
         Regex("""$family\{host="[^"]*"\} (\d+)""").findAll(payload)
             .sumOf { it.groupValues[1].toLong() }
 
+    @Test
+    fun `websocket health and why a file was cut are exported`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        val connected = fx.await(10.seconds, "the websocket gauge to report connected") {
+            Regex("""xhrec_ws_connected 1""")
+                .takeIf { it.containsMatchIn(fx.get("/metrics").bodyAsText()) }
+                ?.let { true }
+        }
+        assertTrue(connected, "a connected live event source must be visible: losing it is silent")
+
+        // `/break` cuts the file with a known reason, which must land as a label rather than only
+        // as a log line.
+        fx.get("/break?id=1001")
+        val cut = fx.await(10.seconds, "the cut reason to be counted") {
+            Regex("""xhrec_room_cut_total\{roomId="1001",reason="[A-Za-z]+"\} [1-9]""")
+                .takeIf { it.containsMatchIn(fx.get("/metrics").bodyAsText()) }
+                ?.let { true }
+        }
+        assertTrue(cut, "the reason a file was cut must be an alertable label")
+    }
+
     private fun assertGrew(before: String, after: String, family: String, labels: String) {
         val start = sample(before, family, labels)
         val end = sample(after, family, labels)
