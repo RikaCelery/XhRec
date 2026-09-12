@@ -427,6 +427,7 @@ class SessionEntry(
             withTimeout(component.runtimeTuning.playlistFetchTimeout) {
                 val client = component.httpClientProvider.proxied("m3u8_$roomId")
                 val attemptMs = component.runtimeTuning.playlistAttemptTimeout.inWholeMilliseconds
+                val startedAt = System.currentTimeMillis()
                 val response = withRetry(3) {
                     client.get(playlistUrl) {
                         timeout {
@@ -441,6 +442,7 @@ class SessionEntry(
                     }
                 }
                 val text = response.bodyAsText()
+                val latencyMs = System.currentTimeMillis() - startedAt
                 val key = decryptKey ?: run {
                     val fetched = component.requestBus.request<ConfigResponse>(GetDecryptKey(pkey)).value as? String
                     if (fetched != null) decryptKey = fetched
@@ -451,6 +453,13 @@ class SessionEntry(
                 )
                 val parsed = component.m3u8Parser.parse(text, key)
                 CdnSelector.recordPlaylistSuccess(CdnSelector.hostOf(playlistUrl))
+                // The only producer of this event: without it `xhrec_refresh_latency_ms` and
+                // `xhrec_segment_id_current` are declared, consumed and scraped, but stay at 0
+                // forever. The latency covers the whole fetch including retries and the body read,
+                // which is what "how long did this refresh take" means to an operator.
+                component.publish(
+                    PlaylistRefreshed(roomId, latencyMs, parsed.segments.maxOfOrNull { it.index } ?: 0)
+                )
                 SessionSignal(roomId, RecordingEvent.PlaylistFetched, RecordingDriveData(playlist = parsed))
             }
         } catch (e: TimeoutCancellationException) {
