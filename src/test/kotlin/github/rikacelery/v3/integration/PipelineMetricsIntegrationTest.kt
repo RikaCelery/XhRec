@@ -133,6 +133,10 @@ class PipelineMetricsIntegrationTest {
             """xhrec_room_last_progress_seconds{roomId="1001"}""" in during,
             "the progress clock is exported while the session runs"
         )
+        assertTrue(
+            """xhrec_room_download_bytes_total{roomId="1001"}""" in during,
+            "the session byte counter is exported while the session runs"
+        )
 
         fx.get("/deactivate?id=1001")
 
@@ -142,7 +146,8 @@ class PipelineMetricsIntegrationTest {
                 && """xhrec_segment_id_current{roomId="1001"}""" !in body
                 && """xhrec_downloading_current{roomId="1001"}""" !in body
                 && """xhrec_quality{roomId="1001"""" !in body
-                && """xhrec_room_last_progress_seconds{roomId="1001"}""" !in body).takeIf { it }
+                && """xhrec_room_last_progress_seconds{roomId="1001"}""" !in body
+                && """xhrec_room_download_bytes_total{roomId="1001"}""" !in body).takeIf { it }
         }
         assertTrue(
             gone,
@@ -154,7 +159,6 @@ class PipelineMetricsIntegrationTest {
         // the liveness gauge has to keep answering 0 rather than vanishing.
         val after = fx.get("/metrics").bodyAsText()
         assertTrue("""xhrec_downloaded_total{roomId="1001"}""" in after, "lifetime counters must survive")
-        assertTrue("""xhrec_room_download_bytes_total{roomId="1001"}""" in after, "cumulative bytes must survive")
         assertTrue("""xhrec_recording{roomId="1001"} 0""" in after, "an offline room must report recording=0")
     }
 
