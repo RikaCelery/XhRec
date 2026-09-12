@@ -1,0 +1,27 @@
+# Keep the Docker build context to sources only. Without this, `COPY . .` sent the
+# Gradle/Maven caches, build output, logs and local secrets to the daemon (tens of MB),
+# and invalidated the dependency layer on every local build.
+.git
+.gradle
+.gradle-home
+.kotlin
+build
+bin
+out
+tmp
+logs
+.idea
+.vscode
+.github
+docs
+
+# Local secrets and machine-specific state (gitignored, but not by Docker)
+xhrec.json
+xhrec.keystore
+users.txt
+list.conf
+postprocessor.json
+*.jsonl
+*.log
+*.m3u8
+*.png
