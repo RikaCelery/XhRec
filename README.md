@@ -280,30 +280,31 @@ curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries
       "lastPollSkipped": 2,
       "lastPollEnqueuedMedia": false,
       "playlistLoopRunning": true,
-      "skipStreak": { "skipped": 987, "minId": 1002, "maxId": 1004, "reported": true },
+      "resumeMarkAhead": { "ahead": 746, "reported": true, "since": "2026-09-11T22:21:50.492Z" },
       "fsm": { "state": "Recording", "history": [ "…" ] }
     }
   ]
 }
 ```
 
-**How to read a stuck room.** The three fields below tell the two failure modes apart, which is
-otherwise invisible:
+**How to read a stuck room.** These fields tell the failure modes apart, which is otherwise
+invisible:
 
 | Field | Meaning |
 | --- | --- |
 | `lastPollSegmentCount` | media segments the last playlist actually advertised |
 | `lastPollEnqueuedMedia` | whether any of them was queued for download |
-| `lastPollSkipped` | how many were skipped as already covered by the resume mark (normal) |
+| `lastPollSkipped` | how many were already covered by the resume mark (normal overlap) |
+| `resumeMarkAhead.ahead` | how far the mark leads the newest advertised id; > 0 beyond the threshold is a backlog |
 | `lastPollGap` | how many ids the playlist jumped over this poll and never showed us (lost) |
 | `previousNewSegmentId` | the highest id this session has queued; the baseline for the gap check |
-| `lastSegmentId` | the resume mark; segments with an id at or below it are skipped |
+| `lastSegmentId` | the resume mark |
 | `noProgressMs` | how long since the session last queued or received anything |
 
-`lastPollSegmentCount > 0` with `lastPollEnqueuedMedia: false` means the playlist is healthy but
-every segment sits behind the resume mark — the stream has not caught up yet. `lastPollSegmentCount
-= 0` means the playlist itself is empty. A growing `mailboxDepth` on a component means its actor is
-falling behind rather than idle.
+`resumeMarkAhead.reported: true` is the stall: the mark leads the playlist, so every advertised
+segment is already recorded and nothing can be downloaded. `lastPollSegmentCount = 0` instead means
+the playlist itself is empty. A growing `mailboxDepth` on a component means its actor is falling
+behind rather than idle.
 
 `section=history` shows how a room reached its current state, which is usually where the answer is:
 
@@ -493,11 +494,23 @@ level regardless.
 
 ### Diagnosing a stalled recording
 
-**Skipping is the normal steady state, not a fault.** The media playlist is a sliding window that
-re-lists segments already written, so every healthy poll skips the overlap and enqueues only what is
-new. Those skips are counted in `xhrec_segments_skipped_total{roomId=…}`, which therefore rises
-steadily for *any* room that is recording. The signal to watch is that counter climbing while
-`xhrec_downloaded_total` stands still.
+**An overlap with the resume mark is normal, not a fault.** The media playlist is a sliding window
+that re-lists segments already written, so the window and the mark "join up": a healthy poll queues
+only what is new and silently ignores the rest. That is why `xhrec_segments_skipped_total{roomId=…}`
+does **not** move for a healthy room — counting the ordinary overlap would make it grow forever
+without ever meaning anything.
+
+What is worth reporting is the mark running *ahead* of the playlist, because then every advertised
+segment is already recorded and nothing can be downloaded until the stream catches up. The session
+reports that once per episode at `WARN`, and only that report moves the counter:
+
+```
+WARN v3.SessionEntry - roomId=206236901 the resume mark is 746 segment id(s) ahead of the playlist (mark=1750, newest advertised=1004); everything advertised is already recorded, so nothing can be recorded until the stream catches up
+INFO v3.SessionEntry - roomId=206236901 the stream caught up with the resume mark after 2154s (it was 746 id(s) ahead)
+```
+
+The cutoff is `resumeMarkAheadThreshold` (10 by default): a lead of a few ids is ordinary jitter,
+while a mark far ahead is what a resume mark left over from an earlier broadcast looks like.
 
 The opposite failure is `xhrec_segment_missing_total{roomId=…}`: ids the stream published that the
 playlist never showed us. If one refresh ends at id 3 and the next already starts at 7, then 4, 5
@@ -514,8 +527,8 @@ session has no earlier observation to compare against, so restarting the compari
 flag every ordinary cut as lost data.
 
 Per-poll detail is at `TRACE` — opt-in from the WebUI toolbar or `POST /log/level` — so it does not
-clutter the log at the default (`INFO`) level. Read it as "N of the M ids this playlist advertised were already
-covered, and the mark then moved from A to B":
+clutter the default log. Read it as "N of the M ids this playlist advertised were already covered,
+and the mark then moved from A to B":
 
 ```
 TRACE v3.SessionEntry - roomId=152807806 skipped 1 of 3 advertised segment(s): id 1063 already at or below the resume mark (mark 1063 -> 1065)
@@ -526,17 +539,7 @@ window — and the mark is printed as a transition because by then it has alread
 poll's newest id. So the line above means the window was `1063..1065`, the mark stood at `1063`, so
 1063 was already written and skipped while 1064 and 1065 were queued and moved the mark to 1065.
 
-When nothing new has arrived for `thresholdSkipLogDelay`, the session says so **once**, and says what
-actually happened rather than a count of skip events (the same ids repeat on every poll, so a running
-total would overstate it badly):
-
-```
-WARN  v3.SessionEntry - roomId=170139817 no new segments for 32s: the playlist still advertises only id 1025..1027, all already covered by the resume mark (1027)
-INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 skip event(s) (id 1002..1789), recording resumed
-```
-
-Short overlaps after an ordinary cut stay silent; only a *persistent* streak is reported. Two further
-lines are worth recognising:
+Two further lines are worth recognising:
 
 ```
 WARN  v3.SessionEntry - Recording stalled roomId=…: no segment for 90s (playlist carries 0 media segment(s));

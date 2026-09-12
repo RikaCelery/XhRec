@@ -214,6 +214,16 @@ class MockPlatformServer(
         room.availableSegments += count
     }
 
+    /**
+     * Moves the room's newest segment id back to [to], so the playlist advertises ids *below* the
+     * ids the recorder has already seen. Models what a broadcast restart looks like from inside a
+     * session: the platform restarts its counter while the recorder still holds a resume mark from
+     * the previous show, so every advertised segment is already covered.
+     */
+    fun rewindSegments(id: Long, to: Int) {
+        room(id).availableSegments = to
+    }
+
     /** Applies [statuses] in order (first immediately), then loops every [period]. */
     fun rotateStatuses(id: Long, statuses: List<String>, period: Duration): Job {
         require(statuses.isNotEmpty())
