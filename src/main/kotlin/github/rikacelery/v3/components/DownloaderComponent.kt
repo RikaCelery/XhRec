@@ -38,6 +38,9 @@ sealed interface DownloaderMsg
 data class DoDownload(val cmd: Download) : DownloaderMsg
 data class DoCutPoint(val cut: CutPoint) : DownloaderMsg
 
+/** A session has fully ended; drop this room's emitter and any lingering workers. */
+data class ReleaseRoom(val roomId: Long) : DownloaderMsg
+
 data class ActiveDownload(
     val emitter: OrderedEmitter,
     val semaphore: Semaphore,
@@ -67,8 +70,43 @@ class DownloaderComponent(
         when (msg) {
             is DoDownload -> handleDownload(msg.cmd)
             is DoCutPoint -> handleCutPoint(msg.cut)
-
+            is ReleaseRoom -> releaseRoom(msg.roomId)
         }
+    }
+
+    override suspend fun onStart(scope: CoroutineScope) {
+        // A finished session leaves no more work for its room, so the emitter and any workers can go.
+        subscribe(RecordingStopped::class)
+    }
+
+    override suspend fun wrapEvent(event: Any): DownloaderMsg? = when (event) {
+        is RecordingStopped -> ReleaseRoom(event.roomId)
+        else -> null
+    }
+
+    /**
+     * Drop a room's ordered emitter and cancel any worker still holding it.
+     *
+     * The per-room entry used to live for the whole process, so every room ever recorded leaked an
+     * `ActiveDownload` (emitter + semaphore + running-job set). `CutPointDone` guarantees all
+     * earlier indices finished, so by the time the session reports `RecordingStopped` there is
+     * nothing left to order.
+     */
+    private fun releaseRoom(roomId: Long) {
+        val active = rooms.remove(roomId) ?: return
+        active.active = false
+        active.runningJobs.forEach { it.cancel() }
+        active.runningJobs.clear()
+    }
+
+    override fun stop() {
+        super.stop()
+        rooms.values.forEach { active ->
+            active.active = false
+            active.runningJobs.forEach { it.cancel() }
+        }
+        rooms.clear()
+        workerScope.cancel()
     }
 
     private suspend fun handleDownload(cmd: Download) {

@@ -97,7 +97,7 @@ abstract class Actor<T : Any>(
         }
     }
 
-    fun stop() {
+    open fun stop() {
         started = false
         Diagnostics.unregister(name)
         mailbox.close()
