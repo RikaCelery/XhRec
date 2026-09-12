@@ -390,7 +390,7 @@ class SchedulerEntry(
             return null
         }
         val paidCam = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
-        val price = paidCam.PathSingleOrNull("user.user.privateRate")?.asInt()
+        val price = paidCam.PathSingleOrNull("user.user.spyRate")?.asInt()
         if (price == null) {
             lastFailReason = "price unavailable"
             tokenFailure = TokenFailure.PriceUnavailable
