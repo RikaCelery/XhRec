@@ -71,6 +71,7 @@ fun main(vararg args: String) {
         .addOption("o", "output", true, "output directory")
         .addOption("t", "tmp", true, "temp directory")
         .addOption("p", "port", true, "HTTP port")
+        .addOption("s", "tls", true, "Enable TLS/SSL (Default: true)")
         .addOption("u", "users", true, "users.txt path")
         .addOption("post", true, "postprocessor.json path")
     val cli = try {
@@ -95,6 +96,7 @@ fun main(vararg args: String) {
             outputDir = File(cli.getOptionValue("output", "out")),
             tmpDir = File(cli.getOptionValue("tmp", "tmp")),
             port = cli.getOptionValue("port", "8090").toInt(),
+            tls = cli.getOptionValue("tls", "true").toBoolean(),
             proxy = System.getenv("http_proxy"),
             decryptKeys = persisted.decryptKeys,
             streamAuthKey = persisted.pkey,
@@ -189,6 +191,7 @@ fun main(vararg args: String) {
 
         val httpServer = HttpServerComponent(
             config.port,
+            config.tls,
             eventBus,
             requestBus,
             metricComponent,
