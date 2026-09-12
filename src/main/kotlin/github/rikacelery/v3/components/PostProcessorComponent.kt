@@ -88,8 +88,11 @@ class PostProcessorComponent(
 
                 is RecordingStopped -> {
                     val rp = rooms.remove(e.roomId) ?: return
+                    // Close, never join: closing lets the consumer drain the remaining files and
+                    // exit on its own. Joining here suspended the actor loop for as long as
+                    // post-processing took (ffmpeg can run for minutes), which stalled FileReady
+                    // routing for every other room.
                     rp.channel.close()
-                    rp.job?.join()
                 }
 
                 else -> {}
