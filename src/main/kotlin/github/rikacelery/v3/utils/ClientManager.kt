@@ -222,8 +222,11 @@ object ClientManager {
 
     /** Close and remove every client a room's recording may have created. */
     fun removeRoomClients(roomId: Long) {
-        listOf("m3u8_$roomId", "master_$roomId", "preconfig_$roomId").forEach { key ->
-            synchronized(lock) { if (clientsProxied.containsKey(key)) logger.info("Closed per-room client {}", key) }
+        listOf("m3u8", "master", "preconfig").forEach { kind ->
+            val key = "${kind}_$roomId"
+            // Log the id through the roomId key (and the kind separately): the masking rule only
+            // covers `roomId=`, so printing the bare cache key would leak the id as `m3u8_1001`.
+            synchronized(lock) { if (clientsProxied.containsKey(key)) logger.info("roomId={} closed per-room client kind={}", roomId, kind) }
             removeClient(key)
         }
     }

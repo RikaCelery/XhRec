@@ -187,13 +187,13 @@ class Bootstrap(
                     try {
                         val (id, name) = apiClient.getRoomFromUrlOrSlug(parsed.url)
                         addRoomFromParsed(id, name, parsed)
-                        logger.info("Add room {} {}/{}",name,idx.getAndIncrement(),lines.size)
+                        logger.info("roomId={} roomName={} added {}/{}", id, name, idx.getAndIncrement(), lines.size)
                     } catch (e: RenameException) {
                         logger.error("Room renamed during load: $line -> ${e.newName}", e)
                         try {
                             val (id, name) = apiClient.getRoomFromUrlOrSlug(e.newName)
                             addRoomFromParsed(id, name, parsed)
-                            logger.info("Add room {} {}/{}",name,idx.getAndIncrement(),lines.size)
+                            logger.info("roomId={} roomName={} added {}/{}", id, name, idx.getAndIncrement(), lines.size)
                         } catch (ex: Exception) {
                             logger.error("Failed to load room from '$line' after rename: ${ex.message}", ex)
                         }

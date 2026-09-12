@@ -733,7 +733,7 @@ class SessionComponent(
     private fun onStartRecording(msg: StartRecording) {
         val e = entries.getOrPut(msg.roomId) { SessionEntry(msg.roomId, msg.roomName, this) }
         if (e.fsm.currentState != RecordingState.Idle) {
-            logger.warn("StartRecording ignored: room {} in state {}", msg.roomId, e.fsm.currentState)
+            logger.warn("roomId={} StartRecording ignored in state {}", msg.roomId, e.fsm.currentState)
             return
         }
         e.roomName = msg.roomName

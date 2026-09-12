@@ -345,9 +345,9 @@ class SchedulerEntry(
             if (component.apiClient.roomRequestGroupShow(roomId, u)) {
                 component.requestBus.request<OkResponse>(DeductCoins(u.userId, price.toLong()))
                 groupShowPurchased = true
-                schedulerLogger.info("Bought group-show ticket for room {} (user {}), charged {}", roomId, u.userId, price)
+                schedulerLogger.info("roomId={} bought group-show ticket (user {}), charged {}", roomId, u.userId, price)
             } else {
-                schedulerLogger.warn("Group-show purchase rejected for room {}, will retry on the next preconfig", roomId)
+                schedulerLogger.warn("roomId={} group-show purchase rejected, retrying on the next preconfig", roomId)
             }
         }
         if (token == null) {
@@ -676,14 +676,14 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 if (d?.tokenFailure == TokenFailure.NoFreeSpy && !settings.autoPaySpy) {
                     freeSpyExhausted = true
                     schedulerLogger.info(
-                        "Room {}: no free spy access, waiting for the next private show", roomId
+                        "roomId={} no free spy access, waiting for the next private show", roomId
                     )
                     self(SchedulerEvent.BackToArmed)
                     return@action
                 }
                 // stay in Preconfiguring; the ticker retries automatically
                 if (lastFailReason != d?.failReason) {
-                    schedulerLogger.warn("Preconfig failed room={}: {}", roomId, d?.failReason)
+                    schedulerLogger.warn("roomId={} preconfig failed: {}", roomId, d?.failReason)
                     lastFailReason = d?.failReason
                 }
             }
@@ -926,7 +926,7 @@ class SchedulerComponent(
                 }
             }
             is WriterFatal -> {
-                logger.error("Writer fatal room {}: {}", event.roomId, event.error)
+                logger.error("roomId={} writer fatal: {}", event.roomId, event.error)
                 entries.remove(event.roomId)?.scope?.cancel()
                 evictRoomClients(event.roomId)
                 // The writer has already closed and deleted the partial file, so a session left
@@ -941,7 +941,7 @@ class SchedulerComponent(
                 entries.remove(event.roomId)?.scope?.cancel()
                 evictRoomClients(event.roomId)
                 sessionComponent.tell(StopRecording(event.roomId, EndReason.UserStop))
-                logger.info("Room {} removed: disarmed and recording stopped", event.roomId)
+                logger.info("roomId={} removed, disarmed and recording stopped", event.roomId)
             }
             is AuthExpired -> logger.warn("Auth expired user {}", event.userId)
             is StopEvent -> {
@@ -987,7 +987,7 @@ class SchedulerComponent(
                 this.settings = settings.copy(pkey = settings.pkey.ifBlank { streamAuthKey })
             }
         }
-        logger.info("Room {} ({}) armed and waiting", name, room)
+        logger.info("roomId={} ({}) armed and waiting", room, name)
         return entry
     }
 
@@ -1004,7 +1004,7 @@ class SchedulerComponent(
                             )
                         }
                     }
-                    logger.info("Room {} ({}) activated (armed)", name, cmd.roomId)
+                    logger.info("roomId={} ({}) activated (armed)", cmd.roomId, name)
                     requestBus.request<OkResponse>(RefreshRoomCmd(cmd.roomId))
                     // Arming a room that is already recordable must not wait for the next
                     // status event: the refresh above only publishes RoomStatusChanged when
@@ -1025,7 +1025,7 @@ class SchedulerComponent(
                 } catch (e: Exception) {
                     // The room is not armed when any of the requests above fail, so answering
                     // OkResponse here left the dashboard showing an active room that never records.
-                    logger.error("Failed to activate room {}: {}", cmd.roomId, e.message, e)
+                    logger.error("roomId={} activation failed: {}", cmd.roomId, e.message, e)
                     ErrorResponse("Failed to activate room ${cmd.roomId}: ${e.message}")
                 }
             }
@@ -1034,7 +1034,7 @@ class SchedulerComponent(
                 entries.remove(cmd.roomId)?.scope?.cancel()
                 evictRoomClients(cmd.roomId)
                 sessionComponent.tell(StopRecording(cmd.roomId, EndReason.UserStop))
-                logger.info("Room {} deactivated", cmd.roomId)
+                logger.info("roomId={} deactivated", cmd.roomId)
                 OkResponse
             }
 

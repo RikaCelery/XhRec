@@ -678,10 +678,10 @@ class HttpServerComponent(
                             }
                         } catch (e: ClosedWriteChannelException) {
                             // client (browser) closed the preview — normal, not an error
-                            logger.debug("SSE client disconnected for room $id")
+                            logger.debug("roomId=$id SSE client disconnected")
                             return@respondOutputStream
                         } catch (e: Exception) {
-                            logger.error("SSE stream error for room $id: ${e.message}", e)
+                            logger.error("roomId=$id SSE stream error: ${e.message}", e)
                             return@respondOutputStream
                         } finally {
                             mseStore.unsubscribe(id, ch)

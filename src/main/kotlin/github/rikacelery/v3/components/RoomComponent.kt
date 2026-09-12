@@ -107,7 +107,7 @@ class RoomComponent(
                 is RoomStatusChanged -> {
                     rooms[event.roomId]?.let {
                         rooms[event.roomId] = it.copy(status = event.newStatus)
-                        logger.debug("Room {} status: {} -> {}", event.roomId, event.oldStatus, event.newStatus)
+                        logger.debug("roomId={} status: {} -> {}", event.roomId, event.oldStatus, event.newStatus)
                     }
                 }
 
@@ -177,7 +177,7 @@ class RoomComponent(
 
             is SetRoomQuality -> {
                 rooms[cmd.roomId]?.let { rooms[it.id] = it.copy(quality = cmd.quality) }
-                logger.info("User changed quality for room {} to {}", cmd.roomId, cmd.quality)
+                logger.info("roomId={} quality changed to {}", cmd.roomId, cmd.quality)
                 eventBus.publish(QualityChangeRequested(cmd.roomId, cmd.quality))
                 OkResponse
             }
@@ -210,12 +210,12 @@ class RoomComponent(
                 } else try {
                     val (id, name) = apiClient.getRoomFromUrlOrSlug(cmd.name)
                     if (rooms.containsKey(id) || rooms.values.any { it.name.equals(name, true) }) {
-                        logger.warn("Duplicate room: id={}, name={}", id, name)
+                        logger.warn("roomId={} roomName={} duplicate room, ignoring add", id, name)
                         ErrorResponse("Exist $name")
                     } else {
                         rooms[id] = newRoom(id, name, cmd.settings)
                         SensitiveStringRegistry.maskRoom(id, name)
-                        logger.info("Room added: id={}, name={}, quality={}", id, name, cmd.settings.quality)
+                        logger.info("roomId={} roomName={} added, quality={}", id, name, cmd.settings.quality)
                         eventBus.publish(RoomAdded(id, name))
                         RoomNameResponse(name)
                     }
@@ -230,7 +230,7 @@ class RoomComponent(
                     ErrorResponse("system initializing, please retry")
                 } else {
                     val removed = rooms.remove(cmd.roomId)
-                    logger.info("Room removed: id={}, name={}", cmd.roomId, removed?.name)
+                    logger.info("roomId={} roomName={} removed", cmd.roomId, removed?.name)
                     eventBus.publish(RoomRemoved(cmd.roomId, removed?.name ?: ""))
                     OkResponse
                 }
@@ -317,7 +317,7 @@ class RoomComponent(
         if (status != current.status) {
             rooms[room.id] = current.copy(status = status)
             eventBus.publish(RoomStatusChanged(room.id, current.status, status))
-            logger.debug("refreshRoom: room {} status {} -> {}", room.id, current.status, status)
+            logger.debug("roomId={} status {} -> {}", room.id, current.status, status)
         }
     }
 
@@ -337,19 +337,19 @@ class RoomComponent(
                     if (status != oldStatus) {
                         rooms[room.id] = room.copy(status = status)
                         eventBus.publish(RoomStatusChanged(room.id, oldStatus, status))
-                        logger.debug("refreshAll: room {} status {} -> {}", room.id, oldStatus, status)
+                        logger.debug("roomId={} status {} -> {}", room.id, oldStatus, status)
                     }
                 } catch (e: RenameException) {
                     val oldName = room.name
-                    logger.error("Room ${room.id} renamed: $oldName -> ${e.newName}", e)
+                    logger.error("roomId={} renamed: {} -> {}", room.id, oldName, e.newName, e)
                     rooms[room.id] = room.copy(name = e.newName)
                     eventBus.publish(RoomRenamed(room.id, oldName, e.newName))
                 } catch (e: DeletedException) {
-                    logger.error("Room ${room.id} deleted: ${room.name}", e)
+                    logger.error("roomId={} roomName={} deleted", room.id, room.name, e)
                     rooms.remove(room.id)
                     eventBus.publish(RoomRemoved(room.id, room.name))
                 } catch (e: Exception) {
-                    logger.error("refreshAll error room ${room.id}: ${e.message}", e)
+                    logger.error("roomId={} refreshAll error: {}", room.id, e.message, e)
                 }
             }
         }
@@ -409,7 +409,7 @@ class RoomComponent(
         val added = resolveRoomNames(modelIds.distinct().filterNot { it in known }).map { (id, name) ->
             SensitiveStringRegistry.maskRoom(id, name)
             internalAdd(id, name, RoomSettings(quality = FAVORITES_DEFAULT_QUALITY))
-            logger.info("Favorite imported as room: id={}, name={}", id, name)
+            logger.info("roomId={} roomName={} favorite imported (disarmed)", id, name)
             name
         }
         if (added.isNotEmpty()) {

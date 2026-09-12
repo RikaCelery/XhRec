@@ -46,12 +46,12 @@ data class ActiveFile(
         try {
             fos.close()
         } catch (e: Exception) {
-            log.error("Failed to close fos for room $roomId: ${e.message}", e)
+            log.error("roomId=$roomId failed to close fos: ${e.message}", e)
         }
         try {
             eventFos.close()
         } catch (e: Exception) {
-            log.error("Failed to close eventFos for room $roomId: ${e.message}", e)
+            log.error("roomId=$roomId failed to close eventFos: ${e.message}", e)
         }
         file.delete()
         eventFile.delete()
@@ -89,7 +89,7 @@ class WriterComponent(
     private suspend fun handleStreamStart(msg: StreamStart) {
         val existing = files.remove(msg.roomId)
         if (existing != null) {
-            logger.info("Duplicate StreamStart for room ${msg.roomId}, closing existing file")
+            logger.info("roomId=${msg.roomId} duplicate StreamStart, closing existing file")
             closeActiveFile(existing, EndReason.NewInit)
         }
 
@@ -110,7 +110,7 @@ class WriterComponent(
             }
             logger.info("Opened file: $path")
         } catch (e: Exception) {
-            logger.error("Failed to open file for room ${msg.roomId}: ${e.message}", e)
+            logger.error("roomId=${msg.roomId} failed to open file: ${e.message}", e)
             eventBus.publish(WriterFatal(msg.roomId, e.message ?: "Unknown error"))
             files.remove(msg.roomId)?.dispose()
         }
@@ -127,7 +127,7 @@ class WriterComponent(
             }
             active.bytesWritten += data.size
         } catch (e: Exception) {
-            logger.error("Failed to write data for room ${msg.roomId}: ${e.message}", e)
+            logger.error("roomId=${msg.roomId} failed to write data: ${e.message}", e)
             eventBus.publish(WriterFatal(msg.roomId, e.message ?: "Unknown error"))
             files.remove(msg.roomId)?.dispose()
         }
@@ -145,7 +145,7 @@ class WriterComponent(
                 active.eventFos.write((msg.eventJson + "\n").toByteArray())
             }
         } catch (e: Exception) {
-            logger.error("Failed to write event for room ${msg.roomId}: ${e.message}", e)
+            logger.error("roomId=${msg.roomId} failed to write event: ${e.message}", e)
             eventBus.publish(WriterFatal(msg.roomId, e.message ?: "Unknown error"))
             files.remove(msg.roomId)?.dispose()
         }
@@ -203,7 +203,7 @@ class WriterComponent(
                 eventBus.publish(FileReady(active.roomId, finalFile, reason, active.roomName, active.startTime.toEpochMilli(), endTime.toEpochMilli(), durationMs, active.quality))
                 logger.info("Closed file: ${finalFile.absolutePath}, reason=$reason")
             } catch (e: Exception) {
-                logger.error("Failed to close file for room ${active.roomId}: ${e.message}", e)
+                logger.error("roomId=${active.roomId} failed to close file: ${e.message}", e)
                 eventBus.publish(WriterFatal(active.roomId, e.message ?: "Unknown error"))
                 active.dispose()
             }

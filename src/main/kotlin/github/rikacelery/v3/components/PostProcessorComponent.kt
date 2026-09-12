@@ -82,7 +82,7 @@ class PostProcessorComponent(
                     }
                     val sent = rp.channel.trySend(e)
                     if (sent.isFailure) {
-                        logger.error("PostProcessor room queue closed, dropping FileReady: {}", e.file)
+                        logger.error("roomId={} postprocessor queue closed, dropping FileReady: {}", e.roomId, e.file)
                     }
                 }
 
