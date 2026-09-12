@@ -247,7 +247,7 @@ fun main(vararg args: String) {
                     for (s in sessions) {
                         requestBus.request<OkResponse>(DeactivateCmd(s.roomId))
                     }
-                    withTimeout(120.seconds) {
+                    withTimeoutOrNull(120.seconds) {
                         awaitFinished(
                             verb = "Stopped",
                             targets = sessions.associate { it.roomId to it.roomName },
@@ -260,7 +260,7 @@ fun main(vararg args: String) {
                         )
                     }
 
-                    withTimeout(180.seconds) {
+                    withTimeoutOrNull(180.seconds) {
                         awaitFinished(
                             verb = "Post-processed",
                             targets = postProcessorComponent.jobs.keys.associateWith { File(it).name },
