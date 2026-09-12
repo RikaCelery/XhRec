@@ -990,9 +990,15 @@ class SchedulerComponent(
                             SchedulerDriveData(roomStatus = currentStatus)
                         )
                     }
-                } catch (_: Exception) {
+                    OkResponse
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The room is not armed when any of the requests above fail, so answering
+                    // OkResponse here left the dashboard showing an active room that never records.
+                    logger.error("Failed to activate room {}: {}", cmd.roomId, e.message, e)
+                    ErrorResponse("Failed to activate room ${cmd.roomId}: ${e.message}")
                 }
-                OkResponse
             }
 
             is DeactivateCmd -> {
