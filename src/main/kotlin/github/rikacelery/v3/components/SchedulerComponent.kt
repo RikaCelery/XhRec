@@ -137,6 +137,15 @@ class SchedulerEntry(
      */
     var freeSpyExhausted: Boolean = false
 
+    /**
+     * Set once the paid group-show ticket has been bought for the current episode. The purchase is
+     * a paid, non-idempotent platform call and the preconfig loop retries every
+     * [RuntimeTuning.preconfigRetryInterval], so without this marker a show whose model token
+     * lagged was bought — and the account charged — again on every tick. Cleared when the room
+     * leaves the group-show status.
+     */
+    var groupShowPurchased: Boolean = false
+
     // —— Status ——
     var roomStatus: String = ""
     var streamStatus: String = ""
@@ -329,9 +338,21 @@ class SchedulerEntry(
             return null
         }
         var token = component.apiClient.roomFetchModelToken(roomId, u)
+        if (token == null && !groupShowPurchased) {
+            // Buy the ticket at most once per group-show episode. roomRequestGroupShow is a paid,
+            // non-idempotent platform call and the preconfig loop runs again every
+            // preconfigRetryInterval, so re-buying here charged the account once per tick.
+            if (component.apiClient.roomRequestGroupShow(roomId, u)) {
+                component.requestBus.request<OkResponse>(DeductCoins(u.userId, price.toLong()))
+                groupShowPurchased = true
+                schedulerLogger.info("Bought group-show ticket for room {} (user {}), charged {}", roomId, u.userId, price)
+            } else {
+                schedulerLogger.warn("Group-show purchase rejected for room {}, will retry on the next preconfig", roomId)
+            }
+        }
         if (token == null) {
-            component.apiClient.roomRequestGroupShow(roomId, u)
-            component.requestBus.request<OkResponse>(DeductCoins(u.userId, price.toLong()))
+            // We just bought the ticket, or an earlier tick did: poll once more for the model token
+            // without paying again.
             delay(1.seconds)
             token = component.apiClient.roomFetchModelToken(roomId, u)
         }
@@ -873,6 +894,9 @@ class SchedulerComponent(
                 // the free spy privilege is probed once per private show, so anything that ends
                 // the show (offline, public, group show) re-arms the probe for the next one
                 if (!RoomStatus.isPrivate(event.newStatus)) entries[event.roomId]?.freeSpyExhausted = false
+                // the paid ticket is bought once per group show, so leaving the group-show status
+                // re-arms the purchase for the next one
+                if (!RoomStatus.isGroupShow(event.newStatus)) entries[event.roomId]?.groupShowPurchased = false
                 driveFsm(event.roomId, SchedulerEvent.RoomStatusChanged, SchedulerDriveData(roomStatus = event.newStatus))
             }
             is StreamStatusChanged -> driveFsm(event.roomId, SchedulerEvent.StreamStatusChanged, SchedulerDriveData(streamStatus = event.newStatus))
