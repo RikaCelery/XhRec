@@ -3,6 +3,7 @@ package github.rikacelery.v3.bootstrap
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.components.*
 import github.rikacelery.v3.data.RoomSettings
+import github.rikacelery.v3.data.SizeStrSerializer
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.postprocessors.*
@@ -255,25 +256,8 @@ class Bootstrap(
         )
     }
 
-    private fun parseSize(s: String): Long {
-        val regex = Regex("(\\d+(?:\\.\\d+)?)(Ti|Gi|Mi|Ki|Bi|T|G|M|K|B)")
-        var total = 0L
-        regex.findAll(s).forEach {
-            val v = it.groupValues[1].toDouble()
-            total += when (it.groupValues[2]) {
-                "Ti" -> v * 1024 * 1024 * 1024 * 1024
-                "Gi" -> v * 1024 * 1024 * 1024
-                "Mi" -> v * 1024 * 1024
-                "Ki" -> v * 1024
-                "Bi" -> v
-                "T" -> v * 1000_000_000_000
-                "G" -> v * 1000_000_000
-                "M" -> v * 1000_000
-                "K" -> v * 1000
-                "B" -> v
-                else -> 0L
-            }.toLong()
-        }
-        return total
-    }
+    private fun parseSize(s: String): Long =
+        // Reuse the canonical parser so list.conf, xhrec.json and the API agree. Stay lenient here:
+        // a malformed `size:` entry must not abort the whole list.conf load.
+        runCatching { SizeStrSerializer.parseSizeString(s) }.getOrDefault(0L)
 }

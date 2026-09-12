@@ -9,6 +9,7 @@ import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.data.RuntimeTuning
+import github.rikacelery.v3.data.SizeStrSerializer
 import github.rikacelery.v3.data.User
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.exceptions.DeletedException
@@ -490,13 +491,7 @@ class RoomComponent(
         }
     }
 
-    private fun formatSize(bytes: Long): String = when {
-        bytes >= 1024L * 1024 * 1024 * 1024 -> "${bytes / (1024L * 1024 * 1024 * 1024)}Ti"
-        bytes >= 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024 * 1024)}Gi"
-        bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)}Mi"
-        bytes >= 1024 -> "${bytes / 1024}Ki"
-        else -> "${bytes}Bi"
-    }
+    private fun formatSize(bytes: Long): String = SizeStrSerializer.format(bytes)
 
     // —— Diagnostics ——
 
