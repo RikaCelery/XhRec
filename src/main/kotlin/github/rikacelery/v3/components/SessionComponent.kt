@@ -117,10 +117,17 @@ internal fun formatIdRange(min: Long?, max: Long?): String = when {
 
 class CircleCache(private val capacity: Int) {
     private val set = LinkedHashSet<String>()
+
+    /**
+     * Records [url] and reports whether it is new. Repeats are always reported as seen, even when
+     * the cache is full — and a genuinely new url evicts only the oldest entry. The previous
+     * implementation cleared the whole set when full and returned `true`, so the constantly
+     * re-listed init URL was reported as new and re-injected into the middle of the file.
+     */
     @Synchronized fun add(url: String): Boolean {
+        if (set.contains(url)) return false
         if (set.size >= capacity) {
-            set.clear()
-            return true
+            set.firstOrNull()?.let { set.remove(it) }
         }
         return set.add(url)
     }
