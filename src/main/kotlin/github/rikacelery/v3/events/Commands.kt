@@ -148,6 +148,16 @@ object GetSessions : Request {
 object GetArmedRoomIds : Request {
     override fun toString() = "GetArmedRoomIds"
 }
+/**
+ * Rooms whose scheduler is resolving the stream right now — token, quality and playlist URL.
+ *
+ * Recording only starts once that succeeds, so the dashboard must not report these rooms as
+ * recording: a session from an earlier incarnation can still be closing while the scheduler has
+ * already moved on to preconfiguration, and that stale session would otherwise read as `Recording`.
+ */
+object GetPreconfiguringRoomIds : Request {
+    override fun toString() = "GetPreconfiguringRoomIds"
+}
 object GetRoomDetailedStatus : Request {
     override fun toString() = "GetRoomDetailedStatus"
 }

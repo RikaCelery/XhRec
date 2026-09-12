@@ -9,8 +9,14 @@ import github.rikacelery.v3.events.AddRoom
 import github.rikacelery.v3.events.CommandAck
 import github.rikacelery.v3.events.CommandEnvelope
 import github.rikacelery.v3.events.DeactivateCmd
+import github.rikacelery.v3.events.GetArmedRoomIds
+import github.rikacelery.v3.events.GetPreconfiguringRoomIds
+import github.rikacelery.v3.events.GetRecordingHints
+import github.rikacelery.v3.events.GetRoomDetailedStatus
 import github.rikacelery.v3.events.GetRooms
+import github.rikacelery.v3.events.GetSessions
 import github.rikacelery.v3.events.OkResponse
+import github.rikacelery.v3.events.RecordingHintsResponse
 import github.rikacelery.v3.events.RoomNameResponse
 import github.rikacelery.v3.hooks.EventHook
 import io.ktor.client.request.get
@@ -21,9 +27,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Test
+import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -113,6 +123,59 @@ class HttpRoutesTest {
             val html = response.bodyAsText()
             assertTrue(html.contains("Room Settings"), "the dashboard must carry the room settings dialog")
             assertTrue(html.contains("/filter?id="), "the dialog must call the recording filter route")
+        } finally {
+            harness.close()
+        }
+    }
+
+    /**
+     * Recording may only be shown while it is actually happening. A session from an earlier
+     * incarnation can still be closing — and `GetSessions` still reports that as Recording — while
+     * the scheduler has already moved on to preconfiguration (deactivate, then re-activate). The
+     * dashboard must report the room as Listening for that window instead of claiming a recording
+     * that is not running, and it must go back to Recording once preconfig is done.
+     */
+    @Test
+    fun `the dashboard never reports a preconfiguring room as recording`() = testApplication {
+        val harness = RouteHarness()
+        val preconfiguring = AtomicReference(listOf(1001L))
+        try {
+            harness.eventBus.installHook(object : EventHook {
+                override suspend fun intercept(event: Any): Any? {
+                    if (event is CommandEnvelope) {
+                        val answer = when (event.command) {
+                            is GetRooms -> listOf(harness.room)
+                            // the session of the previous incarnation is still closing: it maps to
+                            // Recording, which is exactly what must not leak into the UI here
+                            is GetSessions -> listOf(
+                                RoomSession(1001, "model", "highest", SessionState.Recording, Instant.now())
+                            )
+
+                            is GetArmedRoomIds -> listOf(1001L)
+                            is GetPreconfiguringRoomIds -> preconfiguring.get()
+                            is GetRecordingHints -> RecordingHintsResponse(emptyMap())
+                            is GetRoomDetailedStatus -> emptyMap<Long, Map<String, Any>>()
+                            else -> null
+                        }
+                        if (answer != null) harness.eventBus.publish(CommandAck(event.id, answer))
+                    }
+                    return event
+                }
+            })
+            application { harness.server.installApplication(this, stopEngine = {}) }
+
+            suspend fun session(): JsonObject = Json.parseToJsonElement(client.get("/dashboard").bodyAsText())
+                .jsonObject["listv2"]!!.jsonArray.single().jsonObject["session"]!!.jsonObject
+
+            val duringPreconfig = session()
+            assertEquals("Listening", duringPreconfig["status"]!!.jsonPrimitive.content)
+            assertFalse(duringPreconfig["active"]!!.jsonPrimitive.boolean, "preconfiguration is not a recording")
+            assertEquals(0L, duringPreconfig["startTime"]!!.jsonPrimitive.long)
+
+            preconfiguring.set(emptyList())
+            val recording = session()
+            assertEquals("Recording", recording["status"]!!.jsonPrimitive.content)
+            assertTrue(recording["active"]!!.jsonPrimitive.boolean)
         } finally {
             harness.close()
         }

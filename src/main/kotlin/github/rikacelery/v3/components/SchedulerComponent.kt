@@ -964,6 +964,9 @@ class SchedulerComponent(
 
             is GetArmedRoomIds -> entries.keys().toList()
 
+            is GetPreconfiguringRoomIds ->
+                entries.filterValues { it.fsm.currentState == SchedulerState.Preconfiguring }.keys.toList()
+
             is GetRecordingHints -> RecordingHintsResponse(
                 entries.mapNotNull { (roomId, entry) -> entry.hint()?.let { roomId to it } }.toMap()
             )
