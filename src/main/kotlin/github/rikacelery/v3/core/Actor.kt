@@ -21,12 +21,6 @@ abstract class Actor<T : Any>(
 ) : Diagnosable {
     private val mailbox = Channel<T>(capacity = mailboxCapacity)
 
-    /**
-     * Messages accepted but not yet handled. Kept by hand rather than read from the channel so it
-     * needs no experimental API, and it is the cheapest way to tell "this actor is behind" from
-     * "this actor is idle" when a component looks stuck.
-     */
-    private val mailboxDepth = AtomicInteger(0)
     protected val logger = LoggerFactory.getLogger(name)
     internal val scope =
         parentScope + SupervisorJob() + CoroutineName(name) + CoroutineExceptionHandler { context, throwable ->
@@ -76,11 +70,14 @@ abstract class Actor<T : Any>(
             startCompleted.set(true)
             signalSubscriptionsReady()
             for (msg in mailbox) {
+                val stat = PipelineMetrics.actor(name)
+                stat.inFlight.incrementAndGet()
+                val start = System.nanoTime()
                 try {
-                    val start = System.nanoTime()
                     handle(msg)
                     val duration = (System.nanoTime() - start) / 1_000_000
                     if (duration > slowHandlerThresholdMs) {
+                        stat.slow.incrementAndGet()
                         logger.warn(
                             "slow handler: actor={}, msg={}, took={}ms",
                             name, msg::class.simpleName, duration
@@ -89,9 +86,13 @@ abstract class Actor<T : Any>(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    stat.errors.incrementAndGet()
                     onError(e, msg)
                 } finally {
-                    mailboxDepth.decrementAndGet()
+                    stat.depth.decrementAndGet()
+                    stat.inFlight.decrementAndGet()
+                    stat.messages.incrementAndGet()
+                    stat.handleNanos.addAndGet(System.nanoTime() - start)
                 }
             }
         }
@@ -100,6 +101,7 @@ abstract class Actor<T : Any>(
     open fun stop() {
         started = false
         Diagnostics.unregister(name)
+        PipelineMetrics.forgetActor(name)
         mailbox.close()
         scope.cancel()
     }
@@ -107,16 +109,20 @@ abstract class Actor<T : Any>(
     suspend fun tell(msg: T) = enqueue(msg)
 
     /**
-     * Single funnel for every message entering the mailbox, so [mailboxDepth] stays truthful.
-     * Bus subscriptions enqueue directly rather than through [tell], and counting only one of the
-     * two paths made the depth drift negative.
+     * Single funnel for every message entering the mailbox, so the depth stays truthful. Bus
+     * subscriptions enqueue directly rather than through [tell], and counting only one of the two
+     * paths made the depth drift negative.
+     *
+     * The depth lives in [PipelineMetrics] rather than here so the exporter and `/diagnose` read the
+     * same counter instead of two copies that can disagree.
      */
     private suspend fun enqueue(msg: T) {
-        mailboxDepth.incrementAndGet()
+        val depth = PipelineMetrics.actor(name).depth
+        depth.incrementAndGet()
         try {
             mailbox.send(msg)
         } catch (e: Throwable) {
-            mailboxDepth.decrementAndGet()
+            depth.decrementAndGet()
             throw e
         }
     }
@@ -162,7 +168,7 @@ abstract class Actor<T : Any>(
         put("actor", name)
         put("type", this@Actor::class.simpleName ?: "")
         put("started", started)
-        put("mailboxDepth", mailboxDepth.get())
+        put("mailboxDepth", PipelineMetrics.actor(name).depth.get())
         put("mailboxCapacity", mailboxCapacity)
         extra.forEach { (key, value) -> put(key, value) }
     }

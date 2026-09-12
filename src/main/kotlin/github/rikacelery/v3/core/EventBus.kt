@@ -42,6 +42,7 @@ class EventBus {
         }
         if (e == null) return
         val published = e
+        PipelineMetrics.recordEventPublished(published::class.simpleName ?: "unknown")
 
         if (BusMonitor.wants(BusMonitor.EVENT)) {
             BusMonitor.record(BusMonitor.EVENT, buildJsonObject {
@@ -61,17 +62,18 @@ class EventBus {
 
     private fun recordBacklog(event: Any) {
         val now = System.currentTimeMillis()
+        val typeName = event::class.simpleName ?: "unknown"
+        PipelineMetrics.recordEventDropped(typeName)
         synchronized(backlogLock) {
             if (backlogStartTime == 0L) {
                 backlogStartTime = now
                 lastBacklogReportTime = now
                 logger.warn(
                     "EventBus buffer full, starting to back up. first event: {}",
-                    event::class.simpleName
+                    typeName
                 )
             }
             backlogTotal++
-            val typeName = event::class.simpleName ?: "unknown"
             backlogByType.merge(typeName, 1L, Long::plus)
 
             val elapsed = now - lastBacklogReportTime

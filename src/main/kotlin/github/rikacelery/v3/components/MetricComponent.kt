@@ -2,6 +2,7 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
+import github.rikacelery.v3.core.PipelineMetrics
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.HttpConnectionStats
@@ -212,6 +213,8 @@ class MetricComponent(
         family("xhrec_downloading_current", "Currently downloading segments", "gauge")
         family("xhrec_quality", "Recording quality", "gauge")
         family("xhrec_segment_downloaded_current", "Downloaded in current segment", "gauge")
+        family("xhrec_room_download_bytes_total", "Total bytes downloaded for a room", "counter")
+        family("xhrec_cdn_cooldown", "CDN host cooling down for segment downloads (1) or not (0)", "gauge")
         family("xhrec_cdn_estimated_duration_ms", "CDN host estimated duration at current time", "gauge")
         family("xhrec_cdn_confidence", "CDN host prediction confidence (0-1)", "gauge")
         family("xhrec_cdn_total_successes", "CDN host total successful downloads", "counter")
@@ -246,6 +249,7 @@ class MetricComponent(
             sb.appendLine("xhrec_downloading_current{roomId=\"$roomId\"} ${m.runningUrls.size}")
             sb.appendLine("xhrec_quality{roomId=\"$roomId\",quality=\"${m.quality}\"} 1")
             sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
+            sb.appendLine("xhrec_room_download_bytes_total{roomId=\"$roomId\"} ${m.lifetimeBytes.get()}")
         }
 
         // CDN host duration metrics
@@ -259,6 +263,7 @@ class MetricComponent(
             sb.appendLine("xhrec_cdn_total_errors{host=\"$host\"} ${stat.totalErrors}")
             sb.appendLine("xhrec_cdn_playlist_failures{host=\"$host\"} ${stat.playlistFailures}")
             sb.appendLine("xhrec_cdn_playlist_cooldown{host=\"$host\"} ${if (stat.playlistCooldownUntil > now) 1 else 0}")
+            sb.appendLine("xhrec_cdn_cooldown{host=\"$host\"} ${if (stat.cooldownUntil > now) 1 else 0}")
         }
 
         // Connection-level telemetry for the human-paced clients (playlist / master / preconfig),
@@ -296,6 +301,10 @@ class MetricComponent(
                 sb.appendLine("xhrec_http_cancelled_total{$labels} ${s.cancelled}")
             }
         }
+
+        // Bus, data channel and actor counters are process-wide and live in the objects that own
+        // them; they are pulled here rather than pushed as events (see PipelineMetrics).
+        PipelineMetrics.appendMetrics(sb)
 
         return sb.toString()
     }

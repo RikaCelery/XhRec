@@ -33,8 +33,18 @@ class DataChannel(capacity: Int = 256) {
             })
         }
         val result = channel.trySend(msg)
+        val type = msg::class.simpleName ?: "unknown"
         if (result.isFailure) {
-            logger.warn("DataChannel full, dropping {} (roomId={})", msg::class.simpleName, roomOf(msg))
+            // Dropping media here means the finished file is missing data, so it is counted as
+            // well as logged — a log line nobody greps is not an alert.
+            PipelineMetrics.recordChannelDropped(type)
+            logger.warn("DataChannel full, dropping {} (roomId={})", type, roomOf(msg))
+        } else {
+            PipelineMetrics.channelPending.incrementAndGet()
+            PipelineMetrics.recordChannelSent(
+                type,
+                if (msg is github.rikacelery.v3.data.StreamData) msg.data.size else 0
+            )
         }
     }
 
@@ -45,6 +55,13 @@ class DataChannel(capacity: Int = 256) {
         is github.rikacelery.v3.data.StreamEvent -> msg.roomId
     }
 
-    suspend fun receive(): DataChannelMsg = channel.receive()
+    suspend fun receive(): DataChannelMsg {
+        val msg = channel.receive()
+        // Counted after the receive so a cancelled or closed receive does not decrement a message
+        // that was never taken out of the channel.
+        PipelineMetrics.channelPending.decrementAndGet()
+        return msg
+    }
+
     fun close() = channel.close()
 }
