@@ -837,6 +837,10 @@ internal fun SessionEntry.diagnoseJson(): JsonObject = buildJsonObject {
     put("lastInitUrl", lastInitUrl?.substringBefore('?')?.let { JsonPrimitive(it) } ?: JsonNull)
     put("totalBytes", totalBytes)
     put("retryCount", retryCount)
+    // -1 means unlimited. Exposed so a restarted session's applied limit is directly checkable
+    // instead of being inferred from whether it happened to cut again.
+    put("timeLimitMs", if (timeLimit.isInfinite()) -1L else timeLimit.inWholeMilliseconds)
+    put("sizeLimitBytes", sizeLimitBytes)
     put("playlistLoopRunning", playlistLoop.isRunning)
     // Which hosts the playlist was already moved off in this session: the answer to "the playlist
     // keeps timing out, why is it still on the same CDN?".
