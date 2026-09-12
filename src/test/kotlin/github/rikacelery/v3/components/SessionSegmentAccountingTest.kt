@@ -12,21 +12,19 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
-import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * What a session accounts for in the playlist it polls, in both directions.
  *
- * *Skipped* entries are the normal steady state: the playlist is a sliding window that re-lists
- * what was already downloaded, so a few segments are skipped on every poll and that is silent by
- * design. When *every* advertised segment sits at or below the resume mark, however, the session is
- * not recording anything while still reporting `Recording` — that has to be visible, but exactly
- * once, with a matching line when it finally catches up.
+ * *Skipping* is the normal steady state: the playlist is a sliding window that overlaps the resume
+ * mark, so a few entries are already written and are simply not queued again. That must never be
+ * reported, and must never reach the metrics — it happens on every poll of every healthy room. What
+ * is worth reporting is the mark running far *ahead* of the playlist, because then nothing can be
+ * recorded at all until the stream catches up.
  *
  * *Missing* entries are the opposite failure: ids the stream published that the playlist never
  * showed us, because it advanced past them between two polls or carries a hole. Nothing else in the
@@ -37,7 +35,7 @@ import kotlin.test.assertTrue
 class SessionSegmentAccountingTest {
 
     @Test
-    fun `segments below the resume mark are counted as skipped, not enqueued`() =
+    fun `entries below the resume mark are skipped, not enqueued`() =
         runTest(UnconfinedTestDispatcher()) {
             val entry = newEntry(backgroundScope)
             try {
@@ -55,18 +53,14 @@ class SessionSegmentAccountingTest {
                     2, entry.lastPollSegmentCount,
                     "the playlist did advertise segments — this is what separates a filtered poll from an empty one"
                 )
-                assertEquals(2L, entry.skippedInStreak)
-                assertEquals(100L, entry.skippedMinId)
-                assertEquals(150L, entry.skippedMaxId)
-                assertEquals(2, entry.lastPollSkipped, "the poll's skip count is what reaches the metrics")
-                assertNotNull(entry.skipStreakSince)
+                assertEquals(2, entry.lastPollSkipped, "the poll reports how many entries it did not queue")
             } finally {
                 entry.scope.cancel()
             }
         }
 
     @Test
-    fun `a segment past the resume mark resets the streak`() = runTest(UnconfinedTestDispatcher()) {
+    fun `a segment past the resume mark advances the mark`() = runTest(UnconfinedTestDispatcher()) {
         val entry = newEntry(backgroundScope)
         try {
             entry.lastSegmentId = 100L
@@ -85,38 +79,76 @@ class SessionSegmentAccountingTest {
     }
 
     @Test
-    fun `a long skip streak is reported once and the catch-up is reported too`() =
+    fun `an overlap with the resume mark is normal and stays silent`() = runTest(UnconfinedTestDispatcher()) {
+        val entry = newEntry(backgroundScope)
+        try {
+            // the everyday case: the window and the mark join up, so the mark never leads
+            entry.computeUnseen(playlist(segUrl("1061"), segUrl("1062"), segUrl("1063")))
+            entry.computeUnseen(playlist(segUrl("1063"), segUrl("1064"), segUrl("1065")))
+
+            assertEquals(0L, entry.lastPollMarkAhead, "the mark and the window join up")
+            assertFalse(entry.markAheadReported, "an ordinary overlap must never be reported")
+            assertFalse(entry.lastPollMarkAheadJustReported, "and must never reach the metrics")
+        } finally {
+            entry.scope.cancel()
+        }
+    }
+
+    @Test
+    fun `a resume mark far ahead of the playlist is reported once per episode`() =
         runTest(UnconfinedTestDispatcher()) {
             val entry = newEntry(backgroundScope)
             try {
-                entry.lastSegmentId = 900L
-                entry.computeUnseen(playlist(segUrl("800"), segUrl("850")))
-                entry.noteSkipOutcome(progressed = false)
+                entry.lastSegmentId = 1750L
 
-                // a fresh streak has not lasted long enough to be worth a line
-                assertFalse(entry.skipStreakReported, "a short streak stays silent")
+                entry.computeUnseen(playlist(segUrl("1002"), segUrl("1003"), segUrl("1004")))
 
-                // age the streak past the reporting delay, the way a real stall would
-                entry.skipStreakSince = Instant.now().minusSeconds(120)
-                entry.noteSkipOutcome(progressed = false)
-                assertTrue(entry.skipStreakReported, "a persistent streak is reported once")
-                assertEquals(2L, entry.skippedInStreak)
-                assertEquals(800L, entry.skippedMinId)
+                assertEquals(746L, entry.lastPollMarkAhead, "the mark is 746 ids ahead of the newest advertised")
+                assertTrue(entry.markAheadReported)
+                assertTrue(entry.lastPollMarkAheadJustReported, "the first poll of the episode publishes it")
 
-                // repeated polls must not report again
-                entry.noteSkipOutcome(progressed = false)
-                assertTrue(entry.skipStreakReported)
-
-                // catching up ends the streak and clears the accounting
-                entry.noteSkipOutcome(progressed = true)
-                assertNull(entry.skipStreakSince)
-                assertEquals(0L, entry.skippedInStreak)
-                assertFalse(entry.skipStreakReported)
-                assertNull(entry.skippedMaxId)
+                // still stuck on the next poll, but the episode was already reported
+                entry.computeUnseen(playlist(segUrl("1002"), segUrl("1003"), segUrl("1004")))
+                assertEquals(746L, entry.lastPollMarkAhead)
+                assertFalse(entry.lastPollMarkAheadJustReported, "a reported backlog is not repeated")
             } finally {
                 entry.scope.cancel()
             }
         }
+
+    @Test
+    fun `a lead within the threshold is not a backlog`() = runTest(UnconfinedTestDispatcher()) {
+        val entry = newEntry(backgroundScope)
+        try {
+            entry.lastSegmentId = 1070L
+            entry.computeUnseen(playlist(segUrl("1050"), segUrl("1060")))
+            assertFalse(entry.markAheadReported, "a lead of exactly the threshold is still normal")
+
+            entry.lastSegmentId = 1071L
+            entry.computeUnseen(playlist(segUrl("1050"), segUrl("1060")))
+            assertTrue(entry.markAheadReported, "one id past the threshold is reported")
+        } finally {
+            entry.scope.cancel()
+        }
+    }
+
+    @Test
+    fun `the stream catching up clears the backlog`() = runTest(UnconfinedTestDispatcher()) {
+        val entry = newEntry(backgroundScope)
+        try {
+            entry.lastSegmentId = 1750L
+            entry.computeUnseen(playlist(segUrl("1002"), segUrl("1003")))
+            assertTrue(entry.markAheadReported)
+
+            entry.computeUnseen(playlist(segUrl("1748"), segUrl("1749"), segUrl("1751")))
+
+            assertEquals(0L, entry.lastPollMarkAhead)
+            assertFalse(entry.markAheadReported, "the episode is over")
+            assertNull(entry.markAheadSince)
+        } finally {
+            entry.scope.cancel()
+        }
+    }
 
     /** `<room>_<segmentId>_<16 alnum>_<10 digits>.mp4` is the shape the id parser expects. */
     private fun segUrl(id: String) = "https://media.example/$id" + "_${id}_ABCDEFGHIJKLMNOP_1700000000.mp4"

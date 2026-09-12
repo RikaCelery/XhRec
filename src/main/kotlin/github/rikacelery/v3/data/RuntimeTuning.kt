@@ -47,11 +47,15 @@ data class RuntimeTuning(
      */
     val sessionCutTimeout: Duration = 3.minutes,
     /**
-     * How long segments may keep being skipped by the resume mark (`lastSegmentId`) before the
-     * session says so once at WARN. Short skips are normal after a cut and must stay silent; a
-     * long one means the stream is behind the resume mark and nothing is being recorded.
+     * How far the resume mark may sit *ahead* of the newest advertised segment id before the
+     * session reports a backlog.
+     *
+     * A healthy playlist overlaps the mark by a segment or two — the mark and the window "join up"
+     * — so a small lead is normal and must stay silent. A mark far ahead means every advertised
+     * segment is already recorded and nothing can be downloaded until the stream catches up, which
+     * is exactly what a resume mark left over from an earlier broadcast looks like.
      */
-    val thresholdSkipLogDelay: Duration = 30.seconds,
+    val resumeMarkAheadThreshold: Int = 10,
     /**
      * How often the debug stream writes a heartbeat when nothing else is happening. The write is
      * also how a dropped client is detected: an idle connection is never noticed otherwise, and the

@@ -3,6 +3,7 @@ package github.rikacelery.v3.integration
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -115,18 +116,42 @@ class DiagnosticsEndpointTest {
     }
 
     @Test
-    fun `skips behind the resume mark are visible in the metrics too`() = withFixture { fx ->
+    fun `the ordinary playlist overlap is not counted as skipped`() = withFixture { fx ->
         fx.ready()
         fx.startRecording()
 
-        // A recording re-lists segments it already wrote, so its skip counter must move. Without
-        // this the log and the metrics disagree, which reads as a false alarm.
-        val skipped = fx.await(10.seconds, "the segments-skipped counter to move") {
+        // The window overlaps the resume mark on every poll of a healthy room. Counting that made
+        // the metric grow forever without ever meaning anything, so it must stay at zero.
+        fx.await(5.seconds, "the session to queue media segments") { baselineSet(fx) }
+        delay(600)
+
+        val skipped = Regex("""xhrec_segments_skipped_total\{roomId="1001"\} (\d+)""")
+            .find(fx.get("/metrics").bodyAsText())?.groupValues?.get(1)?.toLong()
+        assertEquals(0L, skipped, "a healthy recording must not report a resume-mark backlog")
+    }
+
+    @Test
+    fun `a resume mark left ahead of the playlist is reported in the metrics`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        // Let the session get far enough ahead that rewinding the stream leaves the mark well
+        // beyond the threshold, rather than a segment or two.
+        fx.await(10.seconds, "the session to get ahead of the rewind point") {
+            previousNewSegmentId(fx)?.takeIf { it >= 1030 }
+        }
+
+        // The platform restarts its segment counter while the recorder still holds a mark from
+        // before, so every advertised segment is already recorded. This is the stall the accounting
+        // exists to catch, and the only case that may move the counter.
+        fx.mock.rewindSegments(1001L, 2)
+
+        val skipped = fx.await(10.seconds, "the resume-mark backlog to be reported") {
             val body = fx.get("/metrics").bodyAsText()
             Regex("""xhrec_segments_skipped_total\{roomId="1001"\} (\d+)""")
                 .find(body)?.groupValues?.get(1)?.toLong()?.takeIf { it > 0 }
         }
-        assertTrue(skipped > 0, "skips must be counted, got $skipped")
+        assertTrue(skipped > 0, "a mark far ahead of the playlist must be reported, got $skipped")
     }
 
     @Test
@@ -152,11 +177,15 @@ class DiagnosticsEndpointTest {
 
     /** Non-null once the session has queued at least one media segment. */
     private suspend fun baselineSet(fx: XhrecIntegrationFixture): Boolean? =
+        previousNewSegmentId(fx)?.let { true }
+
+    /** The highest segment id the session has queued, straight from `/diagnose`. */
+    private suspend fun previousNewSegmentId(fx: XhrecIntegrationFixture): Long? =
         fx.get("/diagnose?actor=SessionComponent&section=entries&room=1001")
             .bodyAsJson().jsonObject["entries"]!!.jsonArray.firstOrNull()
             ?.jsonObject?.get("previousNewSegmentId")
             ?.takeIf { it !is JsonNull }
-            ?.let { true }
+            ?.jsonPrimitive?.content?.toLongOrNull()
 
     @Test
     fun `an unknown actor is reported as not found`() = withFixture { fx ->

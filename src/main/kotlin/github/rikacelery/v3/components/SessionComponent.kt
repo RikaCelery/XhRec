@@ -171,16 +171,16 @@ class SessionEntry(
     var lastProgressAt: Instant = Instant.now()
     var retryCount: Int = 0
 
-    // —— Resume-mark skip accounting ——
-    // The playlist normally lists a window that overlaps what was already downloaded, so some
-    // segments are skipped on every poll. That is silent by design. A *persistent* skip streak
-    // means every advertised segment is at or below the resume mark — the stream has not caught
-    // up and nothing is being recorded — which is worth one log line, not one per poll.
-    var skipStreakSince: Instant? = null
-    var skippedInStreak: Long = 0L
-    var skippedMinId: Long? = null
-    var skippedMaxId: Long? = null
-    var skipStreakReported: Boolean = false
+    // —— Resume-mark backlog accounting ——
+    // A healthy playlist *overlaps* the resume mark by a segment or two — the mark and the window
+    // join up — and the few entries that fall below the mark are simply already written. That is
+    // normal and silent. What is worth reporting is the mark running far *ahead* of the playlist:
+    // then every advertised segment is already recorded and nothing can be downloaded until the
+    // stream catches up, which is what a mark left from an earlier broadcast looks like.
+    var lastPollMarkAhead: Long = 0L
+    var lastPollMarkAheadJustReported: Boolean = false
+    var markAheadReported: Boolean = false
+    var markAheadSince: Instant? = null
 
     /**
      * Whether the most recent poll enqueued at least one *media* segment. The init segment is
@@ -311,9 +311,11 @@ class SessionEntry(
         var skipped = 0L
         var skippedMin = Long.MAX_VALUE
         var skippedMax = Long.MIN_VALUE
+        var advertisedMax = Long.MIN_VALUE
         val newIds = mutableListOf<Long>()
         for (seg in parsed.segments) {
             val segId = component.m3u8Parser.segmentIDFromUrl(seg.url)?.toLong()
+            if (segId != null && segId > advertisedMax) advertisedMax = segId
             if (segId != null) {
                 val threshold = lastSegmentId
                 if (threshold != null && segId <= threshold) {
@@ -331,16 +333,13 @@ class SessionEntry(
         }
         if (newIds.isNotEmpty()) lastSegmentId = newIds.max()
         noteSegmentGap(newIds)
+        noteMarkAhead(markBefore, advertisedMax.takeIf { it != Long.MIN_VALUE })
         lastPollSkipped = skipped.toInt()
         if (skipped > 0) {
-            if (skipStreakSince == null) skipStreakSince = Instant.now()
-            skippedInStreak += skipped
-            if (skippedMinId == null || skippedMin < skippedMinId!!) skippedMinId = skippedMin
-            if (skippedMaxId == null || skippedMax > skippedMaxId!!) skippedMaxId = skippedMax
-            // Which entries were dropped: one aggregated line per poll, never per segment. This is
-            // TRACE, not DEBUG, because skipping is the *steady state* of a healthy recording — the
-            // playlist is a sliding window that re-lists what was just written — so at DEBUG (the
-            // default root level) it would be unconditional noise on every poll of every room.
+            // Which entries fell below the mark: one aggregated line per poll, never per segment.
+            // This is TRACE, not DEBUG, because an overlap is the *steady state* of a healthy
+            // recording, so at DEBUG (the default root level) it would be unconditional noise on
+            // every poll of every room.
             //
             // Both numbers matter and neither is the window: `id` is the skipped set's own range
             // (a single id when one entry was skipped), and the mark is printed as a transition
@@ -354,39 +353,45 @@ class SessionEntry(
     }
 
     /**
-     * Called once per poll after the unseen set is known. Reports a skip streak that has lasted
-     * long enough to mean "this room is not recording", and the moment it catches up.
+     * Called once per poll. Reports a resume mark that has run far ahead of the playlist, and the
+     * moment the stream passes it again.
+     *
+     * The mark normally sits at (or just behind) the newest advertised id — the two "join up" — so
+     * a small lead means nothing and is not reported. Only a lead beyond
+     * [RuntimeTuning.resumeMarkAheadThreshold] is a backlog: everything advertised is already
+     * recorded and nothing can be downloaded until the stream advances.
      */
-    internal fun noteSkipOutcome(progressed: Boolean) {
-        val since = skipStreakSince ?: return
-        val waitedMs = JavaDuration.between(since, Instant.now()).toMillis()
-        if (progressed) {
-            if (skipStreakReported || waitedMs >= component.runtimeTuning.thresholdSkipLogDelay.inWholeMilliseconds) {
+    private fun noteMarkAhead(mark: Long?, advertisedMax: Long?) {
+        lastPollMarkAheadJustReported = false
+        val ahead = if (mark == null || advertisedMax == null) 0L else mark - advertisedMax
+        if (ahead <= component.runtimeTuning.resumeMarkAheadThreshold) {
+            if (markAheadReported) {
+                val waitedMs = markAheadSince?.let { JavaDuration.between(it, Instant.now()).toMillis() } ?: 0L
                 sessionLogger.info(
-                    "roomId={} caught up with the resume mark after {}s; {} skip event(s) (id {}), recording resumed",
-                    roomId, waitedMs / 1000, skippedInStreak, formatIdRange(skippedMinId, skippedMaxId)
+                    "roomId={} the stream caught up with the resume mark after {}s (it was {} id(s) ahead)",
+                    roomId, waitedMs / 1000, lastPollMarkAhead
                 )
             }
-            resetSkipStreak()
+            resetMarkAhead()
             return
         }
-        if (!skipStreakReported && waitedMs >= component.runtimeTuning.thresholdSkipLogDelay.inWholeMilliseconds) {
-            skipStreakReported = true
-            // Report what actually happened — the playlist stopped advancing — rather than a count of
-            // skip events, which repeats the same ids on every poll and greatly overstates the total.
-            sessionLogger.warn(
-                "roomId={} no new segments for {}s: the playlist still advertises only id {}, all already covered by the resume mark ({})",
-                roomId, waitedMs / 1000, formatIdRange(skippedMinId, skippedMaxId), lastSegmentId
-            )
-        }
+        lastPollMarkAhead = ahead
+        if (markAheadReported) return
+        markAheadReported = true
+        markAheadSince = Instant.now()
+        lastPollMarkAheadJustReported = true
+        sessionLogger.warn(
+            "roomId={} the resume mark is {} segment id(s) ahead of the playlist (mark={}, newest advertised={}); " +
+                "everything advertised is already recorded, so nothing can be recorded until the stream catches up",
+            roomId, ahead, mark, advertisedMax
+        )
     }
 
-    internal fun resetSkipStreak() {
-        skipStreakSince = null
-        skippedInStreak = 0L
-        skippedMinId = null
-        skippedMaxId = null
-        skipStreakReported = false
+    internal fun resetMarkAhead() {
+        lastPollMarkAhead = 0L
+        lastPollMarkAheadJustReported = false
+        markAheadReported = false
+        markAheadSince = null
     }
 
     /**
@@ -534,7 +539,7 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 segmentIndex = 0
                 totalBytes = 0L
                 retryCount = 0
-                resetSkipStreak()
+                resetMarkAhead()
                 previousNewSegmentId = null
                 lastPollGap = 0
                 circleCache.clear()   // a new file must re-download the init; media segments are skipped via the lastSegmentId threshold
@@ -567,11 +572,15 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                     lastProgressAt = Instant.now()
                     launch { component.downloader.tell(DoDownload(Download(roomId, unseen, segmentIndex, generation))) }
                 }
-                noteSkipOutcome(progressed = lastPollEnqueuedMedia)
-                // Mirror the skip to the metrics so the number in the log is verifiable there, and so
-                // "skips climbing while downloads stand still" is an alertable stall signal.
-                if (lastPollSkipped > 0) {
-                    launch { component.publish(SegmentsSkipped(roomId, lastPollSkipped)) }
+                // Report a resume mark that has run far ahead of the playlist. Only this reported
+                // case reaches the metric: the ordinary overlap of the window with the mark happens
+                // on every poll of every healthy room, so counting it would make the counter grow
+                // forever without ever meaning anything.
+                if (lastPollMarkAheadJustReported) {
+                    launch {
+                        component.publish(SegmentsSkipped(roomId, lastPollMarkAhead.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()))
+                    }
+                    lastPollMarkAheadJustReported = false
                 }
                 // A discontinuity is real data loss and nothing downstream can observe it: a segment
                 // that was never advertised never fails and never reaches the downloader.
@@ -850,12 +859,10 @@ internal fun SessionEntry.diagnoseJson(): JsonObject = buildJsonObject {
     put("lastPollGap", lastPollGap)
     put("previousNewSegmentId", previousNewSegmentId?.let { JsonPrimitive(it) } ?: JsonNull)
     put("lastPollEnqueuedMedia", lastPollEnqueuedMedia)
-    put("skipStreak", buildJsonObject {
-        put("since", skipStreakSince?.toString()?.let { JsonPrimitive(it) } ?: JsonNull)
-        put("skipped", skippedInStreak)
-        put("minId", skippedMinId?.let { JsonPrimitive(it) } ?: JsonNull)
-        put("maxId", skippedMaxId?.let { JsonPrimitive(it) } ?: JsonNull)
-        put("reported", skipStreakReported)
+    put("resumeMarkAhead", buildJsonObject {
+        put("ahead", lastPollMarkAhead)
+        put("reported", markAheadReported)
+        put("since", markAheadSince?.toString()?.let { JsonPrimitive(it) } ?: JsonNull)
     })
     put("fsm", fsm.diagnose())
 }

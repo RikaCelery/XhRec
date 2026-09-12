@@ -271,28 +271,29 @@ curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries
       "lastPollSkipped": 2,
       "lastPollEnqueuedMedia": false,
       "playlistLoopRunning": true,
-      "skipStreak": { "skipped": 987, "minId": 1002, "maxId": 1004, "reported": true },
+      "resumeMarkAhead": { "ahead": 746, "reported": true, "since": "2026-09-11T22:21:50.492Z" },
       "fsm": { "state": "Recording", "history": [ "…" ] }
     }
   ]
 }
 ```
 
-**怎么判断卡住的房间。** 下面几个字段能区分两种本来无法分辨的故障：
+**怎么判断卡住的房间。** 下面这些字段能区分几种本来无法分辨的故障：
 
 | 字段 | 含义 |
 | --- | --- |
 | `lastPollSegmentCount` | 最近一次播放列表实际提供了多少个媒体分片 |
 | `lastPollEnqueuedMedia` | 其中是否有分片被真正排入下载队列 |
-| `lastPollSkipped` | 其中有多少因已被续传标记覆盖而跳过（正常现象） |
+| `lastPollSkipped` | 其中有多少已被续传标记覆盖（正常重叠） |
+| `resumeMarkAhead.ahead` | 标记比最新分片超前多少；超过阈值即为积压 |
 | `lastPollGap` | 本次轮询播放列表跨过了多少个 id、从未展示给我们（已丢失） |
 | `previousNewSegmentId` | 本会话已排队的最大 id，也是缺失检测的基线 |
-| `lastSegmentId` | 续传标记；id 小于等于它的分片会被跳过 |
+| `lastSegmentId` | 续传标记 |
 | `noProgressMs` | 距离上一次排入或收到数据已经过了多久 |
 
-`lastPollSegmentCount > 0` 而 `lastPollEnqueuedMedia` 为 `false`，说明播放列表是正常的，但所有分片都落在
-续传标记之后——直播流还没追上标记。`lastPollSegmentCount = 0` 则说明播放列表本身就是空的。某个组件的
-`mailboxDepth` 持续增长，说明它的 actor 正在积压，而不是空闲。
+`resumeMarkAhead.reported: true` 就是卡住的情形：标记超前于播放列表，列表里的分片全都已录过，什么都下不了。
+`lastPollSegmentCount = 0` 则说明播放列表本身就是空的。某个组件的 `mailboxDepth` 持续增长，说明它的 actor
+正在积压，而不是空闲。
 
 `section=history` 展示房间是如何走到当前状态的，答案通常就在这里：
 
@@ -473,9 +474,21 @@ curl -k https://localhost:8090/mask/status     # 查看当前状态
 
 ### 排查卡住的录制
 
-**跳过（skipped）是正常稳态，不是故障。** 播放列表是滑动窗口，每次轮询都会重复列出刚写过的分片，所以任何
-健康录制都会跳过重叠部分、只下载新增的。这些跳过次数计入 `xhrec_segments_skipped_total{roomId=…}`，因此对
-**任何正在录制的房间**它都会持续增长。真正要看的信号是：这个计数器在涨、而 `xhrec_downloaded_total` 不动。
+**与续传标记重叠是正常现象，不是故障。** 播放列表是滑动窗口，每次轮询都会重复列出刚写过的分片，也就是窗口和
+标记"接上"了：健康的一轮只把新增的分片入队，其余静默忽略。这就是为什么
+`xhrec_segments_skipped_total{roomId=…}` 对健康房间**不会增长**——把这种正常重叠也计入，只会让它永远涨、
+却从不说明任何问题。
+
+真正值得报告的是**标记反过来超前于播放列表**：此时列表里的每个分片都已经录过，在流追上之前什么都下不了。
+会话每次这种情况只报告一次（`WARN`），也只有这一次会让计数器增长：
+
+```
+WARN v3.SessionEntry - roomId=206236901 the resume mark is 746 segment id(s) ahead of the playlist (mark=1750, newest advertised=1004); everything advertised is already recorded, so nothing can be recorded until the stream catches up
+INFO v3.SessionEntry - roomId=206236901 the stream caught up with the resume mark after 2154s (it was 746 id(s) ahead)
+```
+
+判据是 `resumeMarkAheadThreshold`（默认 10）：领先几个 id 属于正常抖动，而远远领先正是"上一场直播遗留的
+续传标记"的样子。
 
 相反方向的故障是 `xhrec_segment_missing_total{roomId=…}`：**流确实发布过、但播放列表从未告诉我们的 id**。
 比如上一次刷新停在 id 3，下一次直接是 7，那么 4、5、6 就丢了——播放列表跨过了它们。管线里其他环节都发现不了
@@ -488,7 +501,7 @@ DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1
 **会话接缝处不计入缺失**：时限切分、`Break`、重新激活之后，会话没有更早的观测可以对比；若把重启当作基线重置之外
 还去比较，就会把每一次正常的切分都误报成丢数据。
 
-每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认级别（`INFO`）的日志。
+每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认级别的日志。
 读法是"播放列表提供的 M 个 id 中有 N 个已被覆盖，随后标记从 A 推进到 B"：
 
 ```
@@ -499,15 +512,7 @@ TRACE v3.SessionEntry - roomId=152807806 skipped 1 of 3 advertised segment(s): i
 到这里它已经被本轮最新的 id 推进过了。所以上面这行表示：窗口是 `1063..1065`，进入本轮时标记是 `1063`，因此
 1063 已经写过被跳过，而 1064、1065 是新入队的并把标记推进到了 1065。
 
-当超过 `thresholdSkipLogDelay` 一直没有新分片时，会话会**报告一次**，并且说的是真正发生的事，而不是累计的
-跳过事件数（同一批 id 每次轮询都会被重复计数，累计值会严重夸大）：
-
-```
-WARN  v3.SessionEntry - roomId=170139817 no new segments for 32s: the playlist still advertises only id 1025..1027, all already covered by the resume mark (1027)
-INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 skip event(s) (id 1002..1789), recording resumed
-```
-
-普通切分后的短暂重叠是静默的，只有**持续**无新分片才会报告。另外两类值得留意的日志：
+另外两类值得留意的日志：
 
 ```
 WARN  v3.SessionEntry - Recording stalled roomId=…: no segment for 90s (playlist carries 0 media segment(s));

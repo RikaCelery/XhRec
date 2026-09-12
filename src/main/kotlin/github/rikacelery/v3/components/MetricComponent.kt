@@ -205,7 +205,7 @@ class MetricComponent(
         family("xhrec_success_proxied_total", "Proxied success count", "counter")
         family("xhrec_avg_latency_ms", "Average download latency ms", "gauge")
         family("xhrec_segment_missing_total", "Segments the playlist never advertised (a jump in segment ids)", "counter")
-        family("xhrec_segments_skipped_total", "Playlist entries already covered by the resume mark", "counter")
+        family("xhrec_segments_skipped_total", "Segment ids the resume mark was ahead of the playlist by, when a backlog was reported", "counter")
         family("xhrec_files_total", "Files produced", "counter")
         family("xhrec_refresh_latency_ms", "Playlist refresh latency ms", "gauge")
         family("xhrec_segment_id_current", "Current segment ID", "gauge")
