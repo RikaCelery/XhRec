@@ -485,25 +485,69 @@ class SchedulerEntry(
      * segments is a property of the live stream that changes second to second, so rejecting on it
      * here would refuse rooms that are about to be recordable. A stream that stops delivering is
      * caught by the session's own stall watchdog instead.
+     *
+     * A 403/404 is different from every other failure: the token was accepted by the platform, so
+     * the CDN refusing the playlist means the room itself moved on — the show ended, the room went
+     * offline, or the private show was replaced. The room is asked to re-read its status (see
+     * [refreshRoomStatus]) because the stale value in the dashboard and in this entry is exactly
+     * what keeps the loop retrying a stream that no longer exists.
      */
     private suspend fun playlistProbe(url: String): String? {
+        var rejected = false
         // The probe reports success as an *empty string*, not null: `withTimeoutOrNull` also yields
         // null, so a null-able "ok" would be indistinguishable from a probe that ran out of time.
         val reason: String? = try {
             withTimeoutOrNull(component.runtimeTuning.preconfigProbeTimeout) {
                 val client = component.httpClientProvider.proxied("preconfig_$roomId")
                 val response = withRetry(2) { client.get(url) }
-                if (response.status.value in 200..299) "" else "playlist unusable (HTTP ${response.status.value})"
+                if (response.status.value in 200..299) "" else {
+                    rejected = response.status.isRejection()
+                    "playlist unusable (HTTP ${response.status.value})"
+                }
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: ClientRequestException) {
+            // the client throws on 4xx, so this is the branch a 403/404 actually takes
+            rejected = e.response.status.isRejection()
+            "playlist unusable (HTTP ${e.response.status.value})"
         } catch (e: Exception) {
             "playlist unusable (${e.message ?: e::class.simpleName})"
         }
+        // Outside the watchdog on purpose: its budget bounds the CDN request, and a refresh that
+        // needs longer than that must not turn the 404 into a "probe timed out".
+        if (rejected) refreshRoomStatus()
         return when {
             reason == null -> "playlist unusable (probe timed out)"
             reason.isEmpty() -> null
             else -> reason
+        }
+    }
+
+    private fun HttpStatusCode.isRejection(): Boolean =
+        this == HttpStatusCode.NotFound || this == HttpStatusCode.Forbidden
+
+    /**
+     * Ask the RoomComponent to re-read this room's status, the same way a session does when a live
+     * playlist turns 403/404. The refresh only publishes [RoomStatusChanged] when the platform
+     * actually reports a different status, and the `Preconfiguring` state re-arms the room on that
+     * event once it is no longer recordable — which also stops this loop.
+     *
+     * The probe's failure is the answer the caller needs, so a refresh that fails is logged and
+     * swallowed: the loop retries on its own interval either way.
+     */
+    private suspend fun refreshRoomStatus() {
+        try {
+            // coalesce: a session whose playlist turned 403/404 just asked for the same room, and
+            // that refresh is still inside the RoomComponent's debounce window
+            component.requestBus.request<OkResponse>(RefreshRoomCmd(roomId, coalesce = true))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            schedulerLogger.warn(
+                "Preconfig playlist rejected and the room status refresh failed roomId={}: {}",
+                roomId, e.message
+            )
         }
     }
 }

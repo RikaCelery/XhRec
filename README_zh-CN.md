@@ -172,7 +172,6 @@ cookie_string_here
 | `/debug/stream` | 请求总线 / 数据通道 / 事件总线的实时 NDJSON 推送                      |
 | `/log/level`| 运行时读取（GET）或修改（POST）根日志等级                                |
 | `/metrics`  | Prometheus 指标接口                                 |
-
 | `/mask/toggle` | 切换日志脱敏开关      |
 | `/mask/status` | 获取当前脱敏状态（true/false） |
 
@@ -518,6 +517,12 @@ WARN  v3.SchedulerEntry - Preconfig failed room=…: playlist unusable (HTTP 404
 
 前者是看门狗在会话超过 `sessionStallTimeout` 没有任何进展时主动结束它，之后房间会重新执行 preconfig；
 后者是 preconfig 探测无法使用该清晰度播放列表——可能是 HTTP 状态码、探测超时，或请求失败。
+其中 403/404 还会让调度器请求 RoomComponent 重新读取房间状态：平台已经发放了 token，此时 CDN 拒绝播放列表
+说明直播已经发生变化，刷新后的状态会让已经不可录制的房间重新回到 `Armed`，而不是对着一个已经消失的流反复重试。
+失败往往紧接着前一个失败（会话刚失败、preconfig 又失败），所以一次失败请求不会变成两次平台请求：第一次失败
+立刻读取房间，随后同一房间在 `roomStatusRefreshWindow` 内的失败提示会合并成窗口末尾的一次补读——被 debounce，
+但不会被丢弃，因此第一次读取之后才发生的状态变化仍能被及时看到。手动激活属于命令而非提示，永远会真正读取，
+并为它之后的失败提示开启同一个窗口。
 
 当日志不够用时，`/diagnose` 可以交互式地看到同样的状态，见 [诊断与调试流](#诊断与调试流)。
 
