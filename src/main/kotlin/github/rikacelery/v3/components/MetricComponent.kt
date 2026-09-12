@@ -44,7 +44,15 @@ data class RoomMetrics(
     /** Cut and session-exit reasons, so "why did this recording end" is a label. */
     val cutReasons: ConcurrentHashMap<String, AtomicLong> = ConcurrentHashMap(),
     val stopReasons: ConcurrentHashMap<String, AtomicLong> = ConcurrentHashMap(),
-    val runningUrls: ConcurrentHashMap<String, RunningUrlInfo> = ConcurrentHashMap()
+    val runningUrls: ConcurrentHashMap<String, RunningUrlInfo> = ConcurrentHashMap(),
+    /**
+     * A recording session is running. Gates the session-scoped gauges (current file size, segment
+     * id, in-flight downloads, latency samples, quality) so a room that stopped recording stops
+     * exporting "what the current file looks like" — there is no current file.
+     *
+     * The same concept the `xhrec_recording` gauge reports; the two should be unified if both land.
+     */
+    @Volatile var sessionActive: Boolean = false
 )
 
 class MetricComponent(
@@ -183,7 +191,9 @@ class MetricComponent(
                 }
 
                 is RecordingStarted -> {
-                    metrics.getOrPut(e.roomId) { RoomMetrics() }.quality = e.quality
+                    val m = metrics.getOrPut(e.roomId) { RoomMetrics() }
+                    m.quality = e.quality
+                    m.sessionActive = true
                 }
 
                 is RecordingStopped -> {
@@ -191,6 +201,23 @@ class MetricComponent(
                     // cut restarts the room), so removing here reset every lifetime counter on each
                     // cut and erased the series before anyone could read it post-mortem. The entry is
                     // dropped only when the room itself is removed.
+                    //
+                    // The session-scoped state does go: it is cleared here so a later scrape cannot
+                    // resurrect a stale value even if the gauge filter is ever relaxed.
+                    metrics[e.roomId]?.let { m ->
+                        m.sessionActive = false
+                        m.segmentAttempted.set(0)
+                        m.segmentDownloaded.set(0)
+                        m.segmentFailed.set(0)
+                        m.segmentBytes.set(0)
+                        m.currentSegmentId.set(0)
+                        m.quality = ""
+                        m.runningUrls.clear()
+                        synchronized(m) {
+                            m.latencySamples.clear()
+                            m.refreshLatencySamples.clear()
+                        }
+                    }
                 }
 
                 is RoomRemoved -> metrics.remove(e.roomId)
@@ -246,32 +273,20 @@ class MetricComponent(
         family("xhrec_cdn_playlist_cooldown", "CDN host cooling down for playlists (1) or not (0)", "gauge")
 
         metrics.forEach { (roomId, m) ->
-            val avgLatency = synchronized(m) {
-                if (m.latencySamples.isNotEmpty()) m.latencySamples.average() else 0.0
-            }
             val total = m.proxyCount.get() + m.directCount.get()
             val proxyRatio = if (total > 0) m.proxyCount.get().toDouble() / total else 0.0
 
+            // Lifetime counters: kept for every room that ever recorded, so a finished session can
+            // still be looked at afterwards.
             sb.appendLine("xhrec_attempted_total{roomId=\"$roomId\"} ${m.lifetimeAttempted.get()}")
             sb.appendLine("xhrec_downloaded_total{roomId=\"$roomId\"} ${m.lifetimeDownloaded.get()}")
             sb.appendLine("xhrec_failed_total{roomId=\"$roomId\"} ${m.lifetimeFailed.get()}")
-            sb.appendLine("xhrec_bytes_write_total{roomId=\"$roomId\"} ${m.segmentBytes.get()}")
             sb.appendLine("xhrec_proxy_ratio{roomId=\"$roomId\"} $proxyRatio")
             sb.appendLine("xhrec_success_direct_total{roomId=\"$roomId\"} ${m.directCount.get()}")
             sb.appendLine("xhrec_success_proxied_total{roomId=\"$roomId\"} ${m.proxyCount.get()}")
-            sb.appendLine("xhrec_avg_latency_ms{roomId=\"$roomId\"} $avgLatency")
             sb.appendLine("xhrec_segment_missing_total{roomId=\"$roomId\"} ${m.segmentMissing.get()}")
             sb.appendLine("xhrec_segments_skipped_total{roomId=\"$roomId\"} ${m.segmentsSkipped.get()}")
             sb.appendLine("xhrec_files_total{roomId=\"$roomId\"} ${m.fileCount.get()}")
-
-            val avgRefreshLatency = synchronized(m) {
-                if (m.refreshLatencySamples.isNotEmpty()) m.refreshLatencySamples.average() else 0.0
-            }
-            sb.appendLine("xhrec_refresh_latency_ms{roomId=\"$roomId\"} $avgRefreshLatency")
-            sb.appendLine("xhrec_segment_id_current{roomId=\"$roomId\"} ${m.currentSegmentId.get()}")
-            sb.appendLine("xhrec_downloading_current{roomId=\"$roomId\"} ${m.runningUrls.size}")
-            sb.appendLine("xhrec_quality{roomId=\"$roomId\",quality=\"${m.quality}\"} 1")
-            sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
             sb.appendLine("xhrec_room_download_bytes_total{roomId=\"$roomId\"} ${m.lifetimeBytes.get()}")
             m.cutReasons.forEach { (reason, count) ->
                 sb.appendLine("xhrec_room_cut_total{roomId=\"$roomId\",reason=\"$reason\"} ${count.get()}")
@@ -279,6 +294,29 @@ class MetricComponent(
             m.stopReasons.forEach { (reason, count) ->
                 sb.appendLine("xhrec_room_recordings_stopped_total{roomId=\"$roomId\",reason=\"$reason\"} ${count.get()}")
             }
+
+            // Session-scoped gauges: exported only while a session is running. They describe "the
+            // file being written right now, and the segments feeding it", so once the session ends
+            // the series disappear instead of freezing at their last value — a frozen
+            // `xhrec_bytes_write_total` reads as a room that is still recording.
+            //
+            // Gated on the flag rather than on "the value is non-zero": `downloading_current` is
+            // legitimately zero between polls, and skipping it then would make the series flap.
+            if (!m.sessionActive) return@forEach
+
+            val avgLatency = synchronized(m) {
+                if (m.latencySamples.isNotEmpty()) m.latencySamples.average() else 0.0
+            }
+            val avgRefreshLatency = synchronized(m) {
+                if (m.refreshLatencySamples.isNotEmpty()) m.refreshLatencySamples.average() else 0.0
+            }
+            sb.appendLine("xhrec_bytes_write_total{roomId=\"$roomId\"} ${m.segmentBytes.get()}")
+            sb.appendLine("xhrec_avg_latency_ms{roomId=\"$roomId\"} $avgLatency")
+            sb.appendLine("xhrec_refresh_latency_ms{roomId=\"$roomId\"} $avgRefreshLatency")
+            sb.appendLine("xhrec_segment_id_current{roomId=\"$roomId\"} ${m.currentSegmentId.get()}")
+            sb.appendLine("xhrec_downloading_current{roomId=\"$roomId\"} ${m.runningUrls.size}")
+            sb.appendLine("xhrec_quality{roomId=\"$roomId\",quality=\"${m.quality}\"} 1")
+            sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
         }
 
         // CDN host duration metrics

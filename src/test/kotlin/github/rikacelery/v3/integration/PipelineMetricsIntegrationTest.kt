@@ -115,6 +115,37 @@ class PipelineMetricsIntegrationTest {
         }
     }
 
+    @Test
+    fun `session-scoped series disappear once a room stops recording`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        val during = fx.get("/metrics").bodyAsText()
+        assertTrue(
+            """xhrec_bytes_write_total{roomId="1001"}""" in during,
+            "the file being written is exported while the session runs"
+        )
+        assertTrue("""xhrec_segment_id_current{roomId="1001"}""" in during, "segment info is exported while the session runs")
+
+        fx.get("/deactivate?id=1001")
+
+        val gone = fx.await(10.seconds, "the session-scoped series to be withdrawn") {
+            val body = fx.get("/metrics").bodyAsText()
+            ("""xhrec_bytes_write_total{roomId="1001"}""" !in body
+                && """xhrec_segment_id_current{roomId="1001"}""" !in body
+                && """xhrec_downloading_current{roomId="1001"}""" !in body).takeIf { it }
+        }
+        assertTrue(gone, "a frozen \"current file\" reads as a room that is still recording")
+
+        // The lifetime counters stay, so a finished session is still worth looking at afterwards.
+        val after = fx.get("/metrics").bodyAsText()
+        assertTrue(
+            """xhrec_downloaded_total{roomId="1001"}""" in after,
+            "lifetime counters must survive the session"
+        )
+        assertTrue("""xhrec_room_download_bytes_total{roomId="1001"}""" in after, "cumulative bytes must survive too")
+    }
+
     private fun assertGrew(before: String, after: String, family: String, labels: String) {
         val start = sample(before, family, labels)
         val end = sample(after, family, labels)
