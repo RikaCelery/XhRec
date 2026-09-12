@@ -470,7 +470,8 @@ Sensitive information is replaced in log output by default. Static patterns (JWT
 proxy addresses) are masked with `***`. Dynamic strings (model names, usernames) are registered at startup and replaced
 with a stable CRC32-based hash that persists within a session but changes on restart, allowing log correlation without
 revealing identities. Room ids are masked with the **same hash as the room's model name**, so a `roomId=` and the name it
-belongs to read as one entity, and the id is only replaced inside a `roomId=...` pattern (never as a bare number).
+belongs to read as one entity. Ids are replaced in `roomId=...` keys and in the numeric path segments / file-name prefixes
+of http(s) URLs (`/hls/1001/master/1001_auto.m3u8`); a bare number elsewhere in the text is left untouched.
 
 Masking can be toggled at runtime via the eye icon in the WebUI toolbar, or through the API:
 
