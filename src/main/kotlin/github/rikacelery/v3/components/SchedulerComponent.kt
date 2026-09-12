@@ -884,7 +884,12 @@ class SchedulerComponent(
         when (msg) {
             is SchedulerBus -> onBus(msg.event)
             is SchedulerSignal -> driveFsm(msg)
-            is SchedulerHandleCommand -> handleCommand(msg.env)
+            // Activation makes several request-bus round trips, one of which refreshes a room over
+            // the network. Run it off the actor mailbox so a slow platform call cannot stall room
+            // events; handleCommand still replies with CommandAck when it finishes.
+            is SchedulerHandleCommand ->
+                if (msg.env.command is ActivateRecordingCmd) scope.launch { handleCommand(msg.env) }
+                else handleCommand(msg.env)
         }
     }
 
