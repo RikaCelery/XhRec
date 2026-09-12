@@ -76,6 +76,7 @@ https://stripchat.com/modelD q:highest nopublic nofreespy autopay:private
   "thumbHost": "img.doppiocdn.org",
   "streamAuthKey": "默认 psch 密钥，如果无法从 master playlist 中提取则使用此值",
   "maskSensitiveLogs": true,
+  "logLevel": "",
   "decryptKeys": {
     "psch 密钥 1": "解密密钥",
     "psch 密钥 2": "解密密钥"
@@ -94,6 +95,8 @@ https://stripchat.com/modelD q:highest nopublic nofreespy autopay:private
 | `thumbHost`         | WebUI 缩略图域名。默认 `img.doppiocdn.org`                                                                                                 |
 | `streamAuthKey`     | 用于流认证的默认 psch 密钥                                                                                                                   |
 | `maskSensitiveLogs` | 启用日志脱敏（主播名、cookie、token、代理地址）。可在 WebUI 中或通过 `/mask/toggle` 切换。默认 `true`                                         |
+| `logLevel`          | 根日志等级（`TRACE`\|`DEBUG`\|`INFO`\|`WARN`\|`ERROR`\|`OFF`）。可在 WebUI 中或通过 `/log/level` 运行时修改。留空则沿用 `logback.xml` 的配置        |
+| `apiToken`          | 设置后，除 `/` 外的所有接口都需要携带 `?token=` 或 `Authorization: Bearer …`                                                                  |
 | `decryptKeys`       | 解密密钥映射表（psch 密钥 → 解密密钥）                                                                                                         |
 
 所有域名也可以在运行时通过 WebUI（工具栏网络图标）或 `GET /config/hosts` / `POST /config/hosts` 管理，
@@ -165,6 +168,9 @@ cookie_string_here
 | `/status`   | 活跃房间状态（分段数、字节数、正在运行的下载任务）           |
 | `/list`     | 所有房间的状态、会话状态、画质                          |
 | `/dashboard`| 聚合数据: rooms, statuses, listv2, metrics，以及每个房间的 `hint`（解释已启用却未录制的原因: `public_filter_off`、`ticket_purchase_off`、`private_filter_off`、`no_free_spy`、`preconfig_failed`，可附带原始 `detail`） |
+| `/diagnose` | 每个组件的内部状态：状态机、最近的迁移历史、邮箱积压                        |
+| `/debug/stream` | 请求总线 / 数据通道 / 事件总线的实时 NDJSON 推送                      |
+| `/log/level`| 运行时读取（GET）或修改（POST）根日志等级                                |
 | `/metrics`  | Prometheus 指标接口                                 |
 
 | `/mask/toggle` | 切换日志脱敏开关      |
@@ -209,6 +215,161 @@ cookie_string_here
   }
 }
 ```
+
+## 诊断与调试流
+
+当某个房间看起来不对、日志却很安静时用这些接口——比如显示"录制中"却完全没有下载。它们都是只读的：
+播放列表 URL 只保留 path，密钥类信息（streamAuthKey、apiToken、解密密钥、推流 token）只报告"是否存在"，
+不会输出内容。
+
+> 如果 `xhrec.json` 中设置了 `apiToken`，除 `/` 外的所有接口都需要携带：追加 `?token=<apiToken>`，
+> 或发送 `Authorization: Bearer <apiToken>`。
+
+### `/diagnose` —— 查看每个组件的内部状态
+
+不带参数时列出当前存活的组件、各自支持的 section，以及是否有调试 tap 处于开启状态：
+
+```shell
+curl -sk https://localhost:8090/diagnose
+```
+
+```json
+{
+  "components": [
+    { "name": "SchedulerComponent", "sections": ["summary", "entries", "history"] },
+    { "name": "SessionComponent", "sections": ["summary", "entries", "history"] },
+    { "name": "DownloaderComponent", "sections": ["summary", "entries"] }
+  ],
+  "monitor": { "watched": [], "dropped": 0 }
+}
+```
+
+加上 `actor=` 返回该组件的视图。所有组件都支持 `summary`（身份、存活状态、`mailboxDepth`）；
+`section=entries` 增加逐房间 / 逐文件的细节；`section=history` 返回状态机最近的迁移记录；
+`room=<id>` 只保留指定房间。
+
+```shell
+curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries&room=206236901"
+```
+
+```json
+{
+  "actor": "SessionComponent",
+  "started": true,
+  "mailboxDepth": 0,
+  "sessionCount": 1,
+  "states": { "206236901": "Recording" },
+  "entries": [
+    {
+      "roomId": 206236901,
+      "roomName": "fox-yiyi",
+      "quality": "240p",
+      "playlistPath": "https://media-hls.doppiocdn.org/b-hls-22/206236901/206236901_240p_h264.m3u8",
+      "noProgressMs": 1932000,
+      "segmentIndex": 0,
+      "lastSegmentId": 1750,
+      "lastPollSegmentCount": 3,
+      "lastPollSkipped": 2,
+      "lastPollEnqueuedMedia": false,
+      "playlistLoopRunning": true,
+      "skipStreak": { "skipped": 987, "minId": 1002, "maxId": 1004, "reported": true },
+      "fsm": { "state": "Recording", "history": [ "…" ] }
+    }
+  ]
+}
+```
+
+**怎么判断卡住的房间。** 下面几个字段能区分两种本来无法分辨的故障：
+
+| 字段 | 含义 |
+| --- | --- |
+| `lastPollSegmentCount` | 最近一次播放列表实际提供了多少个媒体分片 |
+| `lastPollEnqueuedMedia` | 其中是否有分片被真正排入下载队列 |
+| `lastPollSkipped` | 其中有多少因已被续传标记覆盖而跳过（正常现象） |
+| `lastPollGap` | 本次轮询播放列表跨过了多少个 id、从未展示给我们（已丢失） |
+| `previousNewSegmentId` | 本会话已排队的最大 id，也是缺失检测的基线 |
+| `lastSegmentId` | 续传标记；id 小于等于它的分片会被跳过 |
+| `noProgressMs` | 距离上一次排入或收到数据已经过了多久 |
+
+`lastPollSegmentCount > 0` 而 `lastPollEnqueuedMedia` 为 `false`，说明播放列表是正常的，但所有分片都落在
+续传标记之后——直播流还没追上标记。`lastPollSegmentCount = 0` 则说明播放列表本身就是空的。某个组件的
+`mailboxDepth` 持续增长，说明它的 actor 正在积压，而不是空闲。
+
+`section=history` 展示房间是如何走到当前状态的，答案通常就在这里：
+
+```shell
+curl -sk "https://localhost:8090/diagnose?actor=SchedulerComponent&section=history&room=206236901"
+```
+
+```json
+{
+  "history": {
+    "206236901": [
+      { "at": "21:35:08.782", "from": "Preconfiguring", "event": "PreconfigFailed", "target": "KEEP", "data": "SchedulerDriveData(failReason=no free spy access, …)" },
+      { "at": "21:35:08.782", "from": "Preconfiguring", "event": "BackToArmed", "target": "-> Armed" },
+      { "at": "22:21:15.464", "from": "Armed", "event": "RoomStatusChanged", "target": "KEEP", "data": "SchedulerDriveData(roomStatus=public, …)" },
+      { "at": "22:21:15.464", "from": "Armed", "event": "BeginPreconfig", "target": "-> Preconfiguring" },
+      { "at": "22:21:49.002", "from": "Preconfiguring", "event": "PreconfigDone", "target": "-> Recording", "data": "SchedulerDriveData(quality=240p, …)" }
+    ]
+  }
+}
+```
+
+### `/debug/stream` —— 内部总线的实时推送
+
+把请求总线、数据通道、事件总线以 **一行一个 JSON**（NDJSON）推送给客户端。`types` 是
+`request`、`data`、`event` 的逗号分隔子集（默认 `request,data`）：
+
+```shell
+curl -skN "https://localhost:8090/debug/stream?types=request,data"
+```
+
+```
+{"kind":"hello","types":["request","data"],"dropped":0}
+{"seq":1,"ts":1789140029897,"kind":"request","id":7,"cmd":"GetRooms","ms":1,"result":"[]"}
+{"seq":2,"ts":1789140029898,"kind":"request","id":8,"cmd":"GetRecordingHints","ms":0,"result":"RecordingHintsResponse(count=0)"}
+{"seq":3,"ts":1789140029899,"kind":"data","msg":"StreamData","room":206236901,"bytes":131072}
+{"kind":"heartbeat","dropped":0}
+```
+
+| `kind` | 字段 |
+| --- | --- |
+| `hello` | 首行：已接受的 `types` 与 `dropped` 计数 |
+| `request` | `id`、`cmd`、`ms`（耗时）、`result`（或错误 / `TIMEOUT after Nms`） |
+| `data` | `msg`（`StreamStart`/`StreamData`/`StreamEnd`/`StreamEvent`）、`room`、`bytes` |
+| `event` | `event`（类型名）、`detail`（截断后的 `toString`） |
+| `heartbeat` | 空闲时写出；同时也是服务端感知客户端断开的唯一途径 |
+
+这些 tap **默认关闭，且无人订阅时零开销**：每个生产者会先检查是否有客户端需要该类目，再决定是否构造这一行。
+客户端消费慢只会丢掉最旧的行（计入 `dropped`），绝不会阻塞下载。断开连接会自动释放 tap ——
+`/diagnose` 的 `monitor.watched` 可以看到当前状态。
+
+配合 `jq` 使用是最常见的方式：
+
+```shell
+# 只看耗时较长的请求
+curl -skN "https://localhost:8090/debug/stream?types=request" | jq -c 'select(.kind=="request" and .ms > 100)'
+
+# 跟踪某个房间的数据流
+curl -skN "https://localhost:8090/debug/stream?types=data" | jq -c 'select(.room==206236901)'
+```
+
+### `/log/level` —— 运行时修改日志等级
+
+```shell
+curl -sk https://localhost:8090/log/level
+# {"level":"DEBUG","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
+
+curl -sk -X POST -d "level=TRACE" https://localhost:8090/log/level
+# TRACE
+
+curl -sk -X POST -d "level=LOUD" https://localhost:8090/log/level
+# HTTP 400: Unknown log level: LOUD
+```
+
+等级会立即作用于 root logger，并持久化到 `xhrec.json` 的 `logLevel` 字段，重启后依然生效。
+`logback.xml` 中单独固定等级的第三方库日志（netty、ktor、jetty）不受影响。WebUI 工具栏（虫子图标）
+提供同样的开关。
 
 ## 后处理
 
@@ -303,6 +464,62 @@ curl -k https://localhost:8090/mask/status     # 查看当前状态
 ```
 
 该设置持久化到 `xhrec.json` 的 `maskSensitiveLogs` 字段。
+
+### 日志等级
+
+根日志等级无需重启即可调整——WebUI 工具栏（虫子图标）或 `POST /log/level`，见
+[诊断与调试流](#诊断与调试流)。它会持久化到 `xhrec.json` 的 `logLevel` 字段；该字段留空则沿用
+`logback.xml` 的配置。排查某个具体房间时值得开到 `TRACE`/`DEBUG`，平时用 `INFO` 可以让日志文件小很多。
+`logback.xml` 中单独固定等级的第三方库（netty、ktor、jetty）不受影响。
+
+### 排查卡住的录制
+
+**跳过（skipped）是正常稳态，不是故障。** 播放列表是滑动窗口，每次轮询都会重复列出刚写过的分片，所以任何
+健康录制都会跳过重叠部分、只下载新增的。这些跳过次数计入 `xhrec_segments_skipped_total{roomId=…}`，因此对
+**任何正在录制的房间**它都会持续增长。真正要看的信号是：这个计数器在涨、而 `xhrec_downloaded_total` 不动。
+
+相反方向的故障是 `xhrec_segment_missing_total{roomId=…}`：**流确实发布过、但播放列表从未告诉我们的 id**。
+比如上一次刷新停在 id 3，下一次直接是 7，那么 4、5、6 就丢了——播放列表跨过了它们。管线里其他环节都发现不了
+（一个我们从没听说过的分片，既不会失败、也永远不会到达下载器），所以由会话自己统计，并把每次跳跃记到 `DEBUG`：
+
+```
+DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1028; 4 id(s) in between were never advertised
+```
+
+**会话接缝处不计入缺失**：时限切分、`Break`、重新激活之后，会话没有更早的观测可以对比；若把重启当作基线重置之外
+还去比较，就会把每一次正常的切分都误报成丢数据。
+
+每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认的 `DEBUG` 日志。
+读法是"播放列表提供的 M 个 id 中有 N 个已被覆盖，随后标记从 A 推进到 B"：
+
+```
+TRACE v3.SessionEntry - roomId=152807806 skipped 1 of 3 advertised segment(s): id 1063 already at or below the resume mark (mark 1063 -> 1065)
+```
+
+`id` 是**被跳过集合自身**的范围——只跳过一个时就是一个单值，不是播放列表窗口；而标记打印成 `A -> B`，是因为
+到这里它已经被本轮最新的 id 推进过了。所以上面这行表示：窗口是 `1063..1065`，进入本轮时标记是 `1063`，因此
+1063 已经写过被跳过，而 1064、1065 是新入队的并把标记推进到了 1065。
+
+当超过 `thresholdSkipLogDelay` 一直没有新分片时，会话会**报告一次**，并且说的是真正发生的事，而不是累计的
+跳过事件数（同一批 id 每次轮询都会被重复计数，累计值会严重夸大）：
+
+```
+WARN  v3.SessionEntry - roomId=170139817 no new segments for 32s: the playlist still advertises only id 1025..1027, all already covered by the resume mark (1027)
+INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 skip event(s) (id 1002..1789), recording resumed
+```
+
+普通切分后的短暂重叠是静默的，只有**持续**无新分片才会报告。另外两类值得留意的日志：
+
+```
+WARN  v3.SessionEntry - Recording stalled roomId=…: no segment for 90s (playlist carries 0 media segment(s));
+      ending the session so the room re-resolves its stream
+WARN  v3.SchedulerEntry - Preconfig failed room=…: playlist unusable (HTTP 404)
+```
+
+前者是看门狗在会话超过 `sessionStallTimeout` 没有任何进展时主动结束它，之后房间会重新执行 preconfig；
+后者是 preconfig 探测无法使用该清晰度播放列表——可能是 HTTP 状态码、探测超时，或请求失败。
+
+当日志不够用时，`/diagnose` 可以交互式地看到同样的状态，见 [诊断与调试流](#诊断与调试流)。
 
 Prometheus 指标暴露在 `/metrics`。Grafana 仪表盘示例：
 

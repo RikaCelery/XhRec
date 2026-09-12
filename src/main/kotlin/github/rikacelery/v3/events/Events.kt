@@ -87,6 +87,20 @@ data class SegmentGapDetected(
 ) {
     override fun toString() = "SegmentGapDetected(roomId=$roomId, gap=$gap)"
 }
+/**
+ * How many playlist entries a poll skipped because the resume mark already covered them.
+ *
+ * This is the ordinary steady state, not a fault: the media playlist is a sliding window that
+ * re-lists segments already written, so a healthy poll skips the overlap and enqueues only what is
+ * new. It is reported so the same number is visible in the metrics as in the logs — a rising skip
+ * counter while `downloaded_total` stands still is a stalled room.
+ */
+data class SegmentsSkipped(
+    val roomId: Long,
+    val count: Int
+) {
+    override fun toString() = "SegmentsSkipped(roomId=$roomId, count=$count)"
+}
 data class PlaylistRefreshed(
     val roomId: Long,
     val latencyMs: Long,

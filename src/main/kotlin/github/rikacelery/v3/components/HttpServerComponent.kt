@@ -1,5 +1,8 @@
 package github.rikacelery.v3.components
 
+import github.rikacelery.v3.core.BusMonitor
+import github.rikacelery.v3.core.Diagnosable
+import github.rikacelery.v3.core.Diagnostics
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.HostsConfig
@@ -9,6 +12,7 @@ import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.LogLevels
 import github.rikacelery.v3.utils.ModelSchedule
 import io.ktor.http.*
 import io.ktor.network.tls.certificates.*
@@ -23,6 +27,8 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.utils.io.ClosedWriteChannelException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -458,6 +464,132 @@ class HttpServerComponent(
                     } catch (e: Exception) {
                         logger.error("Failed to update hosts config", e)
                         call.respondText("Error: ${e.message}", status = HttpStatusCode.InternalServerError)
+                    }
+                }
+                // ── Dynamic log level ──────────────────────────────────────────────
+                get("/log/level") {
+                    val current = requestBus.request<ConfigResponse>(GetLogLevel).value as? String
+                    call.respond(buildJsonObject {
+                        put("level", current ?: LogLevels.DEFAULT)
+                        put("levels", buildJsonArray { LogLevels.LEVELS.forEach { add(it) } })
+                    })
+                }
+                post("/log/level") {
+                    val requested = call.receiveParameters()["level"].orEmpty()
+                    val applied = requestBus.request<ConfigResponse>(SetLogLevel(requested)).value as? String
+                    if (applied == null) {
+                        call.respondText(
+                            "Unknown log level: $requested",
+                            status = HttpStatusCode.BadRequest
+                        )
+                    } else {
+                        persistConfig()
+                        call.respondText(applied)
+                    }
+                }
+                // ── Introspection ──────────────────────────────────────────────────
+                // Internal state of every live component, with its state machines' current state
+                // and recent transitions. This is the endpoint to reach for when a room is stuck
+                // but the logs look healthy.
+                get("/diagnose") {
+                    val actor = call.request.queryParameters["actor"]
+                    if (actor.isNullOrBlank()) {
+                        call.respond(buildJsonObject {
+                            put("components", Diagnostics.index()["components"] ?: JsonArray(emptyList()))
+                            // Whether any debug tap is currently armed: the taps cost nothing while
+                            // this list is empty, so an operator can confirm they were released.
+                            put("monitor", buildJsonObject {
+                                put("watched", buildJsonArray {
+                                    BusMonitor.CATEGORIES.filter { BusMonitor.wants(it) }.forEach { add(JsonPrimitive(it)) }
+                                })
+                                put("dropped", BusMonitor.dropped.get())
+                            })
+                        })
+                        return@get
+                    }
+                    val component = Diagnostics.get(actor)
+                    if (component == null) {
+                        call.respondText(
+                            "Unknown actor: $actor; known: ${Diagnostics.names()}",
+                            status = HttpStatusCode.NotFound
+                        )
+                        return@get
+                    }
+                    val section = call.request.queryParameters["section"] ?: Diagnosable.SECTION_SUMMARY
+                    val args = call.request.queryParameters.entries().associate { it.key to it.value.first() }
+                    val body = try {
+                        component.diagnose(section, args)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        logger.error("diagnose failed actor={} section={}", actor, section, e)
+                        buildJsonObject { put("error", e.message ?: e::class.simpleName ?: "diagnose failed") }
+                    }
+                    call.respond(body)
+                }
+
+                // Live tap on the request bus / data channel / event bus: one JSON object per line.
+                // The taps are only armed while this connection is open, so nothing pays for them
+                // when nobody is watching. A slow client loses the oldest lines instead of stalling
+                // anything — the sink is a DROP_OLDEST shared flow.
+                get("/debug/stream") {
+                    val requested = (call.request.queryParameters["types"]
+                        ?: "${BusMonitor.REQUEST},${BusMonitor.DATA}")
+                        .split(',')
+                        .map { it.trim().lowercase() }
+                        .filter { it in BusMonitor.CATEGORIES }
+                        .distinct()
+                    if (requested.isEmpty()) {
+                        call.respondText(
+                            "No valid types; use a comma-separated subset of ${BusMonitor.CATEGORIES}",
+                            status = HttpStatusCode.BadRequest
+                        )
+                        return@get
+                    }
+                    call.respondTextWriter(contentType = ContentType.parse("application/x-ndjson")) {
+                        BusMonitor.watch(requested)
+                        try {
+                            coroutineScope {
+                                val out = Channel<JsonObject>(
+                                    capacity = 1024,
+                                    onBufferOverflow = BufferOverflow.DROP_OLDEST
+                                )
+                                val pump = launch {
+                                    BusMonitor.events.collect { line ->
+                                        val kind = line["kind"]?.jsonPrimitive?.content
+                                        if (kind != null && kind in requested) out.trySend(line)
+                                    }
+                                }
+                                try {
+                                    write(
+                                        buildJsonObject {
+                                            put("kind", "hello")
+                                            put("types", buildJsonArray { requested.forEach { add(JsonPrimitive(it)) } })
+                                            put("dropped", BusMonitor.dropped.get())
+                                        }.toString() + "\n"
+                                    )
+                                    flush()
+                                    while (true) {
+                                        // A heartbeat is not filler: writing is the only way to
+                                        // learn that the client went away, so an idle stream must
+                                        // still touch the socket or the taps would never be released.
+                                        val line = withTimeoutOrNull(runtimeTuning.debugStreamHeartbeat) {
+                                            out.receiveCatching().getOrNull()
+                                        }
+                                        val payload = line ?: buildJsonObject {
+                                            put("kind", "heartbeat")
+                                            put("dropped", BusMonitor.dropped.get())
+                                        }
+                                        write(payload.toString() + "\n")
+                                        flush()
+                                    }
+                                } finally {
+                                    pump.cancel()
+                                }
+                            }
+                        } finally {
+                            BusMonitor.unwatch(requested)
+                        }
                     }
                 }
                 // ── Favorites import ───────────────────────────────────────────────

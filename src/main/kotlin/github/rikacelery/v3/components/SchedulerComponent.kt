@@ -2,8 +2,11 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.Actor
+import github.rikacelery.v3.core.BusMonitor
+import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.core.diagnose
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.data.RoomHint
@@ -28,6 +31,13 @@ import github.rikacelery.v3.utils.PathSingleOrNull
 import github.rikacelery.v3.utils.asInt
 import github.rikacelery.v3.utils.asString
 import github.rikacelery.v3.utils.withRetry
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.*
 import io.ktor.client.statement.bodyAsText
@@ -40,7 +50,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
@@ -139,6 +148,20 @@ class SchedulerEntry(
     var configuredPkey: String = ""
 
     // —— Resume state ——
+    /**
+     * The last media segment id this room recorded, used as the resume mark for the *next*
+     * session of the *same* stream. It is passed to the session as `startIndex`, where anything
+     * with a segment id at or below it is skipped so a cut never re-downloads what was just
+     * written.
+     *
+     * The platform's segment ids restart with each broadcast, so this mark is only meaningful
+     * while one stream keeps running. Carrying it across a `BeginPreconfig` (the stream is
+     * resolved from scratch) or a `BackToArmed` would compare a fresh broadcast's low ids against
+     * a previous broadcast's high mark and silently skip *every* segment — the session then
+     * reports `Recording` while downloading nothing until the counter climbs past the stale mark.
+     * Every path that re-resolves the stream therefore clears it; only `RestartRecording`
+     * (a time/size limit cut inside one stream) keeps it.
+     */
     var lastIndex: Long? = null
     var lastFailReason: String? = null
     private var tokenFailure: TokenFailure? = null
@@ -259,8 +282,8 @@ class SchedulerEntry(
             val keyName = matchPkey(master)
             val variant = selectVariant(master, settings.quality)
             val url = resolveVariantUrl(variant, keyName, token)
-            if (!playlistUsable(url)) {
-                return SchedulerSignal(roomId, SchedulerEvent.PreconfigFailed, SchedulerDriveData(failReason = "playlist unusable"))
+            playlistProbe(url)?.let { reason ->
+                return SchedulerSignal(roomId, SchedulerEvent.PreconfigFailed, SchedulerDriveData(failReason = reason))
             }
             SchedulerSignal(
                 roomId, SchedulerEvent.PreconfigDone,
@@ -452,22 +475,35 @@ class SchedulerEntry(
      * Verify the resolved variant playlist is actually fetchable before handing it to the Session.
      *
      * A probe that outlives the watchdog is a *failed probe*, not a cancellation of the caller:
-     * [withTimeoutOrNull] consumes the timeout so the answer stays `false` and the preconfig loop
+     * [withTimeoutOrNull] consumes the timeout so the answer stays a reason and the preconfig loop
      * can retry. Letting the timeout escape as a `CancellationException` (which the catch below
      * rethrows, as [SchedulerEntry.preconfigSignal] does) silently cancelled that loop, leaving
      * the room stuck in `Preconfiguring` with no log, no hint and no retry.
+     *
+     * Returns `null` when the playlist is fetchable, or a human-readable reason when it is not.
+     * Note this deliberately checks *reachability only*: whether the playlist carries media
+     * segments is a property of the live stream that changes second to second, so rejecting on it
+     * here would refuse rooms that are about to be recordable. A stream that stops delivering is
+     * caught by the session's own stall watchdog instead.
      */
-    private suspend fun playlistUsable(url: String): Boolean {
-        return try {
+    private suspend fun playlistProbe(url: String): String? {
+        // The probe reports success as an *empty string*, not null: `withTimeoutOrNull` also yields
+        // null, so a null-able "ok" would be indistinguishable from a probe that ran out of time.
+        val reason: String? = try {
             withTimeoutOrNull(component.runtimeTuning.preconfigProbeTimeout) {
                 val client = component.httpClientProvider.proxied("preconfig_$roomId")
                 val response = withRetry(2) { client.get(url) }
-                response.status.value in 200..299
-            } ?: false
+                if (response.status.value in 200..299) "" else "playlist unusable (HTTP ${response.status.value})"
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            false
+            "playlist unusable (${e.message ?: e::class.simpleName})"
+        }
+        return when {
+            reason == null -> "playlist unusable (probe timed out)"
+            reason.isEmpty() -> null
+            else -> reason
         }
     }
 }
@@ -495,9 +531,14 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 if (d?.newQuality != null) settings = settings.copy(quality = d.newQuality)
             }
             on(SchedulerEvent.SessionExit) to KEEP
-            on(SchedulerEvent.BeginPreconfig) to SchedulerState.Preconfiguring action { startPreconfigLoop() }
+            // Entering preconfig means the stream is (re)resolved from scratch, so a resume mark
+            // from an earlier recording is meaningless here — see the note on `lastIndex`.
+            on(SchedulerEvent.BeginPreconfig) to SchedulerState.Preconfiguring action {
+                lastIndex = null
+                startPreconfigLoop()
+            }
             on(SchedulerEvent.RestartRecording) to KEEP
-            on(SchedulerEvent.BackToArmed) to KEEP
+            on(SchedulerEvent.BackToArmed) to KEEP action { lastIndex = null }
             on(SchedulerEvent.StopAndWait) to KEEP
             // A preconfig attempt runs off the actor loop, so its answer can already be in the
             // mailbox when BackToArmed cancels the loop. The room is armed because it is no longer
@@ -565,8 +606,11 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
             on(SchedulerEvent.ChangeQuality) to KEEP action { d ->
                 if (d?.newQuality != null) settings = settings.copy(quality = d.newQuality)
             }
-            on(SchedulerEvent.BeginPreconfig) to KEEP
-            on(SchedulerEvent.BackToArmed) to SchedulerState.Armed action { stopPreconfigLoop() }
+            on(SchedulerEvent.BeginPreconfig) to KEEP action { lastIndex = null }
+            on(SchedulerEvent.BackToArmed) to SchedulerState.Armed action {
+                lastIndex = null
+                stopPreconfigLoop()
+            }
             on(SchedulerEvent.RestartRecording) to KEEP
             on(SchedulerEvent.StopAndWait) to KEEP
             // No session of this entry is running yet — recording only starts on PreconfigDone — so
@@ -629,7 +673,10 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 }
             }
             on(SchedulerEvent.RestartRecording) to KEEP action { restartRecording() }
-            on(SchedulerEvent.BeginPreconfig) to SchedulerState.Preconfiguring action { startPreconfigLoop() }
+            on(SchedulerEvent.BeginPreconfig) to SchedulerState.Preconfiguring action {
+                lastIndex = null
+                startPreconfigLoop()
+            }
             on(SchedulerEvent.BackToArmed) to SchedulerState.Armed action {
                 currentKind = ""
                 lastIndex = null
@@ -668,7 +715,10 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 }
             }
             on(SchedulerEvent.RestartRecording) to SchedulerState.Recording action { restartRecording() }
-            on(SchedulerEvent.BeginPreconfig) to SchedulerState.Preconfiguring action { startPreconfigLoop() }
+            on(SchedulerEvent.BeginPreconfig) to SchedulerState.Preconfiguring action {
+                lastIndex = null
+                startPreconfigLoop()
+            }
             on(SchedulerEvent.BackToArmed) to SchedulerState.Armed action {
                 currentKind = ""
                 lastIndex = null
@@ -888,4 +938,63 @@ class SchedulerComponent(
         }
         eventBus.publish(CommandAck(env.id, ack))
     }
+
+    // —— Diagnostics ——
+
+    override val diagnoseSections: List<String>
+        get() = listOf(Diagnosable.SECTION_SUMMARY, Diagnosable.SECTION_ENTRIES, Diagnosable.SECTION_HISTORY)
+
+    /**
+     * `/diagnose?actor=SchedulerComponent[&section=entries|history][&room=<id>]`
+     *
+     * A room stuck mid-pipeline is usually explained by its transition history — e.g. a resume
+     * mark (`lastIndex`) carried across a stream change — so that is reported next to the state.
+     */
+    override suspend fun diagnose(section: String, args: Map<String, String>): JsonObject {
+        val roomFilter = args["room"]?.toLongOrNull()
+        val selected = entries.values
+            .filter { roomFilter == null || it.roomId == roomFilter }
+            .sortedBy { it.roomId }
+        return baseDiagnose(buildJsonObject {
+            put("gracefulStop", gracefulStop)
+            put("roomCount", entries.size)
+            put("states", buildJsonObject {
+                entries.forEach { (id, e) -> put(id.toString(), JsonPrimitive(e.fsm.currentState.toString())) }
+            })
+            if (section == Diagnosable.SECTION_HISTORY) {
+                put("history", buildJsonObject {
+                    selected.forEach { put(it.roomId.toString(), it.fsm.diagnose()["history"] ?: JsonArray(emptyList())) }
+                })
+            } else {
+                put("entries", buildJsonArray { selected.forEach { add(it.diagnoseJson()) } })
+            }
+        })
+    }
+}
+
+/**
+ * One scheduler entry as an operator needs to see it. URLs are reduced to their path and the
+ * configured token is never emitted: this view is served over HTTP and must not leak credentials.
+ */
+internal fun SchedulerEntry.diagnoseJson(): JsonObject = buildJsonObject {
+    put("roomId", roomId)
+    put("roomName", roomName)
+    put("roomStatus", roomStatus)
+    put("streamStatus", streamStatus)
+    put("kind", currentKind)
+    put("freeSpyExhausted", freeSpyExhausted)
+    put("lastIndex", lastIndex?.let { JsonPrimitive(it) } ?: JsonNull)
+    put("lastFailReason", lastFailReason?.let { JsonPrimitive(it) } ?: JsonNull)
+    put("playlistPath", JsonPrimitive(playlistUrl.substringBefore('?')))
+    put("configuredQuality", configuredQuality)
+    put("configuredPkey", configuredPkey)
+    put("preconfigLoopRunning", preconfigLoop.isRunning)
+    put("settings", buildJsonObject {
+        put("quality", settings.quality)
+        put("recordPublic", settings.recordPublic)
+        put("recordFreeSpy", settings.recordFreeSpy)
+        put("autoPayTicket", settings.autoPayTicket)
+        put("autoPaySpy", settings.autoPaySpy)
+    })
+    put("fsm", fsm.diagnose())
 }

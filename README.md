@@ -78,6 +78,7 @@ Platform domains and stream decryption key store. Created with defaults on first
   "thumbHost": "img.doppiocdn.org",
   "streamAuthKey": "default psch key, if failed to extract from master playlist",
   "maskSensitiveLogs": true,
+  "logLevel": "",
   "decryptKeys": {
     "psch key 1": "decrypt key",
     "psch key 2": "decrypt key"
@@ -96,6 +97,8 @@ Platform domains and stream decryption key store. Created with defaults on first
 | `thumbHost`        | Host used by the WebUI for thumbnail images. Default `img.doppiocdn.org`                                                                                |
 | `streamAuthKey`    | Default psch key for stream auth                                                                                                                        |
 | `maskSensitiveLogs`| Enable log masking (model names, cookies, tokens, proxy URLs). Toggle in WebUI or via `/mask/toggle`. Default `true`                                      |
+| `logLevel`         | Root log level (`TRACE`\|`DEBUG`\|`INFO`\|`WARN`\|`ERROR`\|`OFF`). Change it at runtime in the WebUI or via `/log/level`. Empty keeps whatever `logback.xml` configures                              |
+| `apiToken`         | When set, every endpoint except `/` requires it as `?token=` or `Authorization: Bearer …`                                                                 |
 | `decryptKeys`      | Key-value map of decryption keys (psch key → key)                                                                                                        |
 
 All domains can also be managed at runtime from the WebUI (network icon in the toolbar) or via
@@ -171,6 +174,9 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
 | `/status`    | Active room status (segments, bytes, running downloads) |
 | `/list`      | All rooms with status, session state, quality           |
 | `/dashboard` | Consolidated payload: rooms, statuses, listv2, metrics, and a per-room `hint` explaining why an armed room is not recording (`public_filter_off`, `ticket_purchase_off`, `private_filter_off`, `no_free_spy`, `preconfig_failed` plus an optional raw `detail`) |
+| `/diagnose`  | Internal state of every component: state machines, recent transitions, mailbox backlog |
+| `/debug/stream` | Live NDJSON tap on the request bus, the data channel and the event bus             |
+| `/log/level` | Read (GET) or change (POST) the root log level at runtime                          |
 | `/metrics`   | Prometheus metrics endpoint                             |
 
 | `/mask/toggle` | Toggle log masking on/off |
@@ -215,6 +221,167 @@ All endpoints return JSON unless noted. Parameters are passed as query strings.
   }
 }
 ```
+
+### Diagnostics & Debug Stream
+
+Use these when a room looks wrong but the logs are quiet — for example a room that reports
+`Recording` while nothing is being downloaded. They are read-only: playlist URLs are reduced to
+their path, and secrets (auth key, API token, decrypt keys, stream tokens) are only ever reported
+as present/absent, never by value.
+
+> If `apiToken` is set in `xhrec.json`, every endpoint except `/` requires it: append
+> `?token=<apiToken>` or send `Authorization: Bearer <apiToken>`.
+
+#### `/diagnose` — internal state of every component
+
+Without parameters it lists the live components, the sections each understands, and whether any
+debug tap is currently armed:
+
+```shell
+curl -sk https://localhost:8090/diagnose
+```
+
+```json
+{
+  "components": [
+    { "name": "SchedulerComponent", "sections": ["summary", "entries", "history"] },
+    { "name": "SessionComponent", "sections": ["summary", "entries", "history"] },
+    { "name": "DownloaderComponent", "sections": ["summary", "entries"] }
+  ],
+  "monitor": { "watched": [], "dropped": 0 }
+}
+```
+
+With `actor=` you get that component's view. Every component answers `summary` (identity, liveness,
+`mailboxDepth`); `section=entries` adds per-room or per-file detail; `section=history` returns the
+recent state-machine transitions. `room=<id>` narrows it to one room.
+
+```shell
+curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries&room=206236901"
+```
+
+```json
+{
+  "actor": "SessionComponent",
+  "started": true,
+  "mailboxDepth": 0,
+  "sessionCount": 1,
+  "states": { "206236901": "Recording" },
+  "entries": [
+    {
+      "roomId": 206236901,
+      "roomName": "fox-yiyi",
+      "quality": "240p",
+      "playlistPath": "https://media-hls.doppiocdn.org/b-hls-22/206236901/206236901_240p_h264.m3u8",
+      "noProgressMs": 1932000,
+      "segmentIndex": 0,
+      "lastSegmentId": 1750,
+      "lastPollSegmentCount": 3,
+      "lastPollSkipped": 2,
+      "lastPollEnqueuedMedia": false,
+      "playlistLoopRunning": true,
+      "skipStreak": { "skipped": 987, "minId": 1002, "maxId": 1004, "reported": true },
+      "fsm": { "state": "Recording", "history": [ "…" ] }
+    }
+  ]
+}
+```
+
+**How to read a stuck room.** The three fields below tell the two failure modes apart, which is
+otherwise invisible:
+
+| Field | Meaning |
+| --- | --- |
+| `lastPollSegmentCount` | media segments the last playlist actually advertised |
+| `lastPollEnqueuedMedia` | whether any of them was queued for download |
+| `lastPollSkipped` | how many were skipped as already covered by the resume mark (normal) |
+| `lastPollGap` | how many ids the playlist jumped over this poll and never showed us (lost) |
+| `previousNewSegmentId` | the highest id this session has queued; the baseline for the gap check |
+| `lastSegmentId` | the resume mark; segments with an id at or below it are skipped |
+| `noProgressMs` | how long since the session last queued or received anything |
+
+`lastPollSegmentCount > 0` with `lastPollEnqueuedMedia: false` means the playlist is healthy but
+every segment sits behind the resume mark — the stream has not caught up yet. `lastPollSegmentCount
+= 0` means the playlist itself is empty. A growing `mailboxDepth` on a component means its actor is
+falling behind rather than idle.
+
+`section=history` shows how a room reached its current state, which is usually where the answer is:
+
+```shell
+curl -sk "https://localhost:8090/diagnose?actor=SchedulerComponent&section=history&room=206236901"
+```
+
+```json
+{
+  "history": {
+    "206236901": [
+      { "at": "21:35:08.782", "from": "Preconfiguring", "event": "PreconfigFailed", "target": "KEEP", "data": "SchedulerDriveData(failReason=no free spy access, …)" },
+      { "at": "21:35:08.782", "from": "Preconfiguring", "event": "BackToArmed", "target": "-> Armed" },
+      { "at": "22:21:15.464", "from": "Armed", "event": "RoomStatusChanged", "target": "KEEP", "data": "SchedulerDriveData(roomStatus=public, …)" },
+      { "at": "22:21:15.464", "from": "Armed", "event": "BeginPreconfig", "target": "-> Preconfiguring" },
+      { "at": "22:21:49.002", "from": "Preconfiguring", "event": "PreconfigDone", "target": "-> Recording", "data": "SchedulerDriveData(quality=240p, …)" }
+    ]
+  }
+}
+```
+
+#### `/debug/stream` — live tap on the internal buses
+
+Streams the request bus, the data channel and the event bus as **one JSON object per line**
+(NDJSON). `types` is a comma-separated subset of `request`, `data`, `event` (default
+`request,data`):
+
+```shell
+curl -skN "https://localhost:8090/debug/stream?types=request,data"
+```
+
+```
+{"kind":"hello","types":["request","data"],"dropped":0}
+{"seq":1,"ts":1789140029897,"kind":"request","id":7,"cmd":"GetRooms","ms":1,"result":"[]"}
+{"seq":2,"ts":1789140029898,"kind":"request","id":8,"cmd":"GetRecordingHints","ms":0,"result":"RecordingHintsResponse(count=0)"}
+{"seq":3,"ts":1789140029899,"kind":"data","msg":"StreamData","room":206236901,"bytes":131072}
+{"kind":"heartbeat","dropped":0}
+```
+
+| `kind` | Fields |
+| --- | --- |
+| `hello` | first line: the accepted `types` and the `dropped` counter |
+| `request` | `id`, `cmd`, `ms` (latency), `result` (or the error / `TIMEOUT after Nms`) |
+| `data` | `msg` (`StreamStart`/`StreamData`/`StreamEnd`/`StreamEvent`), `room`, `bytes` |
+| `event` | `event` (type name), `detail` (shortened `toString`) |
+| `heartbeat` | written when idle; also how the server notices a dropped client |
+
+The taps are **opt-in and cost nothing while nobody is watching**: every producer checks whether a
+client wants that category before it builds a line. A slow client loses the oldest lines (they are
+counted in `dropped`) rather than stalling a download. Closing the connection releases the taps —
+`/diagnose` shows them under `monitor.watched`.
+
+Piping through `jq` is the usual way to use it:
+
+```shell
+# only slow round trips
+curl -skN "https://localhost:8090/debug/stream?types=request" | jq -c 'select(.kind=="request" and .ms > 100)'
+
+# follow one room's data flow
+curl -skN "https://localhost:8090/debug/stream?types=data" | jq -c 'select(.room==206236901)'
+```
+
+#### `/log/level` — change the log level at runtime
+
+```shell
+curl -sk https://localhost:8090/log/level
+# {"level":"DEBUG","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
+
+curl -sk -X POST -d "level=TRACE" https://localhost:8090/log/level
+# TRACE
+
+curl -sk -X POST -d "level=LOUD" https://localhost:8090/log/level
+# HTTP 400: Unknown log level: LOUD
+```
+
+The level is applied to the root logger immediately and persisted to `xhrec.json` (`logLevel`), so
+it survives a restart. The noisy third-party loggers pinned in `logback.xml` (netty, ktor, jetty)
+keep their own level. The same control is in the WebUI toolbar (the bug icon).
 
 ## Post Processing
 
@@ -312,6 +479,75 @@ curl -k https://localhost:8090/mask/status     # current state
 ```
 
 The setting persists to `xhrec.json` (`maskSensitiveLogs` field).
+
+### Log Level
+
+The root log level can be changed without a restart — from the WebUI toolbar (the bug icon) or via
+`POST /log/level`, see [Diagnostics & Debug Stream](#diagnostics--debug-stream). It is persisted in
+`xhrec.json` (`logLevel`); leave that field empty to keep whatever `logback.xml` configures.
+`TRACE`/`DEBUG` are worth turning on while chasing a specific room; `INFO` keeps the file small the
+rest of the time. The noisy libraries pinned in `logback.xml` (netty, ktor, jetty) keep their own
+level regardless.
+
+### Diagnosing a stalled recording
+
+**Skipping is the normal steady state, not a fault.** The media playlist is a sliding window that
+re-lists segments already written, so every healthy poll skips the overlap and enqueues only what is
+new. Those skips are counted in `xhrec_segments_skipped_total{roomId=…}`, which therefore rises
+steadily for *any* room that is recording. The signal to watch is that counter climbing while
+`xhrec_downloaded_total` stands still.
+
+The opposite failure is `xhrec_segment_missing_total{roomId=…}`: ids the stream published that the
+playlist never showed us. If one refresh ends at id 3 and the next already starts at 7, then 4, 5
+and 6 are gone — the playlist jumped over them. Nothing else in the pipeline can notice that (a
+segment we never hear about never fails and never reaches the downloader), so the session counts it
+itself and logs each jump at `DEBUG`:
+
+```
+DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1028; 4 id(s) in between were never advertised
+```
+
+A gap at a session seam is deliberately not counted: after a limit cut, a `Break` or a re-arm the
+session has no earlier observation to compare against, so restarting the comparison would otherwise
+flag every ordinary cut as lost data.
+
+Per-poll detail is at `TRACE` — opt-in from the WebUI toolbar or `POST /log/level` — so it does not
+clutter the default `DEBUG` log. Read it as "N of the M ids this playlist advertised were already
+covered, and the mark then moved from A to B":
+
+```
+TRACE v3.SessionEntry - roomId=152807806 skipped 1 of 3 advertised segment(s): id 1063 already at or below the resume mark (mark 1063 -> 1065)
+```
+
+`id` is the skipped set's own range — a single id when one entry was skipped, not the playlist's
+window — and the mark is printed as a transition because by then it has already advanced to this
+poll's newest id. So the line above means the window was `1063..1065`, the mark stood at `1063`, so
+1063 was already written and skipped while 1064 and 1065 were queued and moved the mark to 1065.
+
+When nothing new has arrived for `thresholdSkipLogDelay`, the session says so **once**, and says what
+actually happened rather than a count of skip events (the same ids repeat on every poll, so a running
+total would overstate it badly):
+
+```
+WARN  v3.SessionEntry - roomId=170139817 no new segments for 32s: the playlist still advertises only id 1025..1027, all already covered by the resume mark (1027)
+INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 skip event(s) (id 1002..1789), recording resumed
+```
+
+Short overlaps after an ordinary cut stay silent; only a *persistent* streak is reported. Two further
+lines are worth recognising:
+
+```
+WARN  v3.SessionEntry - Recording stalled roomId=…: no segment for 90s (playlist carries 0 media segment(s));
+      ending the session so the room re-resolves its stream
+WARN  v3.SchedulerEntry - Preconfig failed room=…: playlist unusable (HTTP 404)
+```
+
+The first is the stall watchdog ending a session that made no progress for `sessionStallTimeout`,
+after which the room re-runs preconfiguration. The second is a preconfig probe that could not use
+the variant playlist — an HTTP status, a probe timeout, or a request failure.
+
+When the log alone is not enough, `/diagnose` exposes the same state interactively; see
+[Diagnostics & Debug Stream](#diagnostics--debug-stream).
 
 Prometheus metrics are exposed at `/metrics`. Example Grafana dashboard:
 

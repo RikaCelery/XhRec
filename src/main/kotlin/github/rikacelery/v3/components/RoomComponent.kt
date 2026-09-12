@@ -19,6 +19,10 @@ import github.rikacelery.v3.utils.asString
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration
@@ -445,6 +449,35 @@ class RoomComponent(
         bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)}Mi"
         bytes >= 1024 -> "${bytes / 1024}Ki"
         else -> "${bytes}Bi"
+    }
+
+    // —— Diagnostics ——
+
+    /** `/diagnose?actor=RoomComponent[&room=<id>]` — the room registry the rest of the system reads. */
+    override suspend fun diagnose(section: String, args: Map<String, String>): JsonObject {
+        val roomFilter = args["room"]?.toLongOrNull()
+        val selected = rooms.values.filter { roomFilter == null || it.id == roomFilter }.sortedBy { it.id }
+        return baseDiagnose(buildJsonObject {
+            put("ready", ready)
+            put("roomCount", rooms.size)
+            put("listConfPath", listConfPath)
+            put("entries", buildJsonArray {
+                selected.forEach { room ->
+                    add(buildJsonObject {
+                        put("id", room.id)
+                        put("name", room.name)
+                        put("status", room.status)
+                        put("quality", room.quality)
+                        put("recordPublic", room.recordPublic)
+                        put("recordFreeSpy", room.recordFreeSpy)
+                        put("autoPayTicket", room.autoPayTicket)
+                        put("autoPaySpy", room.autoPaySpy)
+                        put("timeLimitSec", if (room.timeLimit == Duration.INFINITE) 0L else room.timeLimit.inWholeSeconds)
+                        put("sizeLimitBytes", room.sizeLimitBytes)
+                    })
+                }
+            })
+        })
     }
 }
 

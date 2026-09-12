@@ -2,6 +2,7 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.DataChannel
+import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.OrderedEmitter
 import github.rikacelery.v3.data.DownloadMeta
@@ -22,6 +23,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -438,5 +443,33 @@ class DownloaderComponent(
                 logger.debug("Probe failed for host={}", host)
             }
         }
+    }
+
+    // —— Diagnostics ——
+
+    override val diagnoseSections: List<String>
+        get() = listOf(Diagnosable.SECTION_SUMMARY, Diagnosable.SECTION_ENTRIES)
+
+    /** `/diagnose?actor=DownloaderComponent[&room=<id>]` — per-room queue depth and in-flight work. */
+    override suspend fun diagnose(section: String, args: Map<String, String>): JsonObject {
+        val roomFilter = args["room"]?.toLongOrNull()
+        val selected = rooms.entries
+            .filter { roomFilter == null || it.key == roomFilter }
+            .sortedBy { it.key }
+        return baseDiagnose(buildJsonObject {
+            put("roomCount", rooms.size)
+            put("initialConcurrency", initialConcurrency)
+            put("entries", buildJsonArray {
+                selected.forEach { (roomId, active) ->
+                    add(buildJsonObject {
+                        put("roomId", roomId)
+                        put("active", active.active)
+                        put("generation", active.generation)
+                        put("nextIndex", active.idx.get() + 1)
+                        put("inFlight", active.runningJobs.size)
+                    })
+                }
+            })
+        })
     }
 }

@@ -2,6 +2,7 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.DataChannel
+import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.data.StreamData
 import github.rikacelery.v3.data.StreamEnd
@@ -12,6 +13,10 @@ import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.WriterFatal
 import github.rikacelery.v3.hooks.WriterHook
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.FileOutputStream
@@ -212,5 +217,33 @@ class WriterComponent(
         val m = (ms % 3600_000) / 60_000
         val s = (ms % 60_000) / 1000
         return if (h > 0) "${h}h${m}m${s}s" else if (m > 0) "${m}m${s}s" else "${s}s"
+    }
+
+    // —— Diagnostics ——
+
+    override val diagnoseSections: List<String>
+        get() = listOf(Diagnosable.SECTION_SUMMARY, Diagnosable.SECTION_ENTRIES)
+
+    /** `/diagnose?actor=WriterComponent` — open files and their byte counts. */
+    override suspend fun diagnose(section: String, args: Map<String, String>): JsonObject {
+        val now = Instant.now()
+        return baseDiagnose(buildJsonObject {
+            put("openFiles", files.size)
+            put("minOutputBytes", minOutputBytes)
+            put("tmpDir", tmpDir.absolutePath)
+            put("entries", buildJsonArray {
+                files.values.sortedBy { it.roomId }.forEach { active ->
+                    add(buildJsonObject {
+                        put("roomId", active.roomId)
+                        put("roomName", active.roomName)
+                        put("quality", active.quality)
+                        put("bytesWritten", active.bytesWritten)
+                        put("willKeep", active.bytesWritten >= minOutputBytes)
+                        put("openMs", java.time.Duration.between(active.startTime, now).toMillis())
+                        put("file", active.file.absolutePath)
+                    })
+                }
+            })
+        })
     }
 }

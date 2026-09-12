@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import kotlin.reflect.KClass
 
@@ -39,13 +41,21 @@ class EventBus {
             e = hook.intercept(e ?: return)
         }
         if (e == null) return
+        val published = e
 
-        if (_events.tryEmit(e)) {
+        if (BusMonitor.wants(BusMonitor.EVENT)) {
+            BusMonitor.record(BusMonitor.EVENT, buildJsonObject {
+                put("event", published::class.simpleName ?: "")
+                put("detail", BusMonitor.shorten(published, 200))
+            })
+        }
+
+        if (_events.tryEmit(published)) {
             checkBacklogCleared()
         } else {
             // Bus is saturated: log and drop the message. Subscribers are designed
             // to be fast; a saturated buffer indicates a stalled/blocked subscriber.
-            recordBacklog(e)
+            recordBacklog(published)
         }
     }
 

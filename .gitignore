@@ -67,3 +67,6 @@ xhrec.keystore
 
 /tmp/
 /doc/
+
+### local build cache used when ~/.gradle is unavailable
+.gradle-home/
