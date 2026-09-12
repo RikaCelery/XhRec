@@ -12,6 +12,7 @@ import github.rikacelery.v3.events.*
 import github.rikacelery.v3.fsm.KEEP
 import github.rikacelery.v3.fsm.LoopTimer
 import github.rikacelery.v3.fsm.StateMachine
+import github.rikacelery.v3.fsm.Timer
 import github.rikacelery.v3.fsm.buildFsm
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.m3u8.ParsedPlaylist
@@ -60,7 +61,7 @@ enum class RecordingEvent {
     StartRecording, StopRecording,
     PlaylistFetched, PlaylistFetchFailed, PlaylistUnusable,
     PlaylistRetryExhausted,
-    SegmentDownloaded, CutPointDone, LimitReached, InitChanged,
+    SegmentDownloaded, CutPointDone, CutPointTimedOut, LimitReached, InitChanged,
 }
 
 data class RecordingDriveData(
@@ -135,6 +136,12 @@ class SessionEntry(
     // —— Preconfigured fields from StartRecording ——
     var playlistUrl: String = ""
     var pkey: String = ""
+    /**
+     * Decrypt key for [pkey], resolved once per session. It was looked up over the request bus on
+     * every playlist poll — once per 3 s per recording room for a value that cannot change while
+     * the session's `pkey` is fixed.
+     */
+    var decryptKey: String? = null
     var quality: String = ""
     var startIndex: Long? = null
     var timeLimit: Duration = Duration.INFINITE
@@ -220,6 +227,14 @@ class SessionEntry(
     )
     val playlistLoop = LoopTimer<Unit>(scope)
 
+    /**
+     * Fires when a cut point never comes back. `CutPointDone` travels over the event bus, which
+     * drops events under load, and the downloader can stall up to its own deadline; the watchdog
+     * bounds that wait so a session always leaves Closing and the scheduler always leaves Stopping
+     * instead of hanging on a signal that will never arrive.
+     */
+    val cutWatchdog = Timer<Unit>(scope)
+
     // —— fsm ——
     val fsm: StateMachine<RecordingState, RecordingEvent, RecordingDriveData, SessionEntry> =
         buildSessionFsm(this)
@@ -247,6 +262,17 @@ class SessionEntry(
         launch {
             component.downloader.tell(
                 DoCutPoint(CutPoint(roomId, segmentIndex - 1, roomName, Instant.now(), reason, quality, generation))
+            )
+        }
+        // CutPointDone returns over the event bus, which may drop it; bound the wait so the session
+        // still leaves Closing (and the scheduler Stopping) when it never arrives.
+        cutWatchdog.start(component.runtimeTuning.sessionCutTimeout) {
+            sessionLogger.warn(
+                "Cut point timed out roomId={}, reason={}: ending the session without CutPointDone",
+                roomId, reason
+            )
+            component.tell(
+                SessionSignal(roomId, RecordingEvent.CutPointTimedOut, RecordingDriveData(stopReason = reason))
             )
         }
     }
@@ -408,11 +434,14 @@ class SessionEntry(
                     }
                 }
                 val text = response.bodyAsText()
-                val key = (component.requestBus.request<ConfigResponse>(GetDecryptKey(pkey)).value as? String)
-                    ?: return@withTimeout SessionSignal(
-                        roomId, RecordingEvent.PlaylistFetchFailed,
-                        RecordingDriveData(failReason = "no decrypt key")
-                    )
+                val key = decryptKey ?: run {
+                    val fetched = component.requestBus.request<ConfigResponse>(GetDecryptKey(pkey)).value as? String
+                    if (fetched != null) decryptKey = fetched
+                    fetched
+                } ?: return@withTimeout SessionSignal(
+                    roomId, RecordingEvent.PlaylistFetchFailed,
+                    RecordingDriveData(failReason = "no decrypt key")
+                )
                 val parsed = component.m3u8Parser.parse(text, key)
                 CdnSelector.recordPlaylistSuccess(CdnSelector.hostOf(playlistUrl))
                 SessionSignal(roomId, RecordingEvent.PlaylistFetched, RecordingDriveData(playlist = parsed))
@@ -512,6 +541,7 @@ private fun buildSessionFsm(ctx: SessionEntry) =
             on(RecordingEvent.StopRecording) to KEEP
             on(RecordingEvent.SegmentDownloaded) to KEEP
             on(RecordingEvent.CutPointDone) to KEEP
+            on(RecordingEvent.CutPointTimedOut) to KEEP
         }
 
         state(RecordingState.Recording) {
@@ -598,6 +628,15 @@ private fun buildSessionFsm(ctx: SessionEntry) =
 
         state(RecordingState.Closing) {
             on(RecordingEvent.CutPointDone) to RecordingState.Idle action { d ->
+                cutWatchdog.cancel()
+                launch {
+                    component.publish(SessionExit(roomId, lastSegmentId, d?.stopReason ?: EndReason.UserStop))
+                    component.publish(RecordingStopped(roomId))
+                }
+            }
+            // The cut point never came back: its event was dropped, or the downloader stalled past
+            // its deadline. End the session anyway so the room cannot stay in Stopping forever.
+            on(RecordingEvent.CutPointTimedOut) to RecordingState.Idle action { d ->
                 launch {
                     component.publish(SessionExit(roomId, lastSegmentId, d?.stopReason ?: EndReason.UserStop))
                     component.publish(RecordingStopped(roomId))
@@ -693,6 +732,7 @@ class SessionComponent(
         e.roomName = msg.roomName
         e.playlistUrl = msg.playlistUrl
         e.pkey = msg.pkey
+        e.decryptKey = null
         e.quality = msg.quality
         e.startIndex = msg.startIndex
         e.timeLimit = msg.timeLimit
