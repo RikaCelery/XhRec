@@ -5,6 +5,7 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -120,6 +121,35 @@ class DiagnosticsEndpointTest {
         }
         assertTrue(skipped > 0, "skips must be counted, got $skipped")
     }
+
+    @Test
+    fun `segments the stream skipped over are counted as missing`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        // `startRecording` is satisfied by the init download, which the mock serves from an empty
+        // window, so wait until the session has actually queued media segments — otherwise the jump
+        // below only moves the baseline and no discontinuity is ever observable.
+        fx.await(5.seconds, "the session to queue media segments") { baselineSet(fx) }
+
+        // the stream publishes several segments at once, so the next playlist jumps past them
+        fx.mock.skipSegments(1001L, 5)
+
+        val missing = fx.await(10.seconds, "the missing-segment counter to move") {
+            val body = fx.get("/metrics").bodyAsText()
+            Regex("""xhrec_segment_missing_total\{roomId="1001"\} (\d+)""")
+                .find(body)?.groupValues?.get(1)?.toLong()?.takeIf { it > 0 }
+        }
+        assertTrue(missing > 0, "a discontinuity in segment ids must be counted, got $missing")
+    }
+
+    /** Non-null once the session has queued at least one media segment. */
+    private suspend fun baselineSet(fx: XhrecIntegrationFixture): Boolean? =
+        fx.get("/diagnose?actor=SessionComponent&section=entries&room=1001")
+            .bodyAsJson().jsonObject["entries"]!!.jsonArray.firstOrNull()
+            ?.jsonObject?.get("previousNewSegmentId")
+            ?.takeIf { it !is JsonNull }
+            ?.let { true }
 
     @Test
     fun `an unknown actor is reported as not found`() = withFixture { fx ->

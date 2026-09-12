@@ -130,7 +130,9 @@ class MetricComponent(
                 }
 
                 is SegmentGapDetected -> {
-                    metrics.getOrPut(e.roomId) { RoomMetrics() }.segmentMissing.set(e.gap.toLong())
+                    // accumulate: the metric is declared a counter and named _total, and one gap
+                    // event carries only that event's missing count
+                    metrics.getOrPut(e.roomId) { RoomMetrics() }.segmentMissing.addAndGet(e.gap.toLong())
                 }
 
                 is SegmentsSkipped -> {
@@ -213,7 +215,7 @@ class MetricComponent(
             sb.appendLine("# HELP xhrec_avg_latency_ms Average download latency ms")
             sb.appendLine("# TYPE xhrec_avg_latency_ms gauge")
             sb.appendLine("xhrec_avg_latency_ms{roomId=\"$roomId\"} $avgLatency")
-            sb.appendLine("# HELP xhrec_segment_missing_total Missing segments")
+            sb.appendLine("# HELP xhrec_segment_missing_total Segments the playlist never advertised (a jump in segment ids)")
             sb.appendLine("# TYPE xhrec_segment_missing_total counter")
             sb.appendLine("xhrec_segment_missing_total{roomId=\"$roomId\"} ${m.segmentMissing.get()}")
             sb.appendLine("# HELP xhrec_segments_skipped_total Playlist entries already covered by the resume mark")

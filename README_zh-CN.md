@@ -286,6 +286,8 @@ curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries
 | `lastPollSegmentCount` | 最近一次播放列表实际提供了多少个媒体分片 |
 | `lastPollEnqueuedMedia` | 其中是否有分片被真正排入下载队列 |
 | `lastPollSkipped` | 其中有多少因已被续传标记覆盖而跳过（正常现象） |
+| `lastPollGap` | 本次轮询播放列表跨过了多少个 id、从未展示给我们（已丢失） |
+| `previousNewSegmentId` | 本会话已排队的最大 id，也是缺失检测的基线 |
 | `lastSegmentId` | 续传标记；id 小于等于它的分片会被跳过 |
 | `noProgressMs` | 距离上一次排入或收到数据已经过了多久 |
 
@@ -475,6 +477,17 @@ curl -k https://localhost:8090/mask/status     # 查看当前状态
 **跳过（skipped）是正常稳态，不是故障。** 播放列表是滑动窗口，每次轮询都会重复列出刚写过的分片，所以任何
 健康录制都会跳过重叠部分、只下载新增的。这些跳过次数计入 `xhrec_segments_skipped_total{roomId=…}`，因此对
 **任何正在录制的房间**它都会持续增长。真正要看的信号是：这个计数器在涨、而 `xhrec_downloaded_total` 不动。
+
+相反方向的故障是 `xhrec_segment_missing_total{roomId=…}`：**流确实发布过、但播放列表从未告诉我们的 id**。
+比如上一次刷新停在 id 3，下一次直接是 7，那么 4、5、6 就丢了——播放列表跨过了它们。管线里其他环节都发现不了
+（一个我们从没听说过的分片，既不会失败、也永远不会到达下载器），所以由会话自己统计，并把每次跳跃记到 `DEBUG`：
+
+```
+DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1028; 4 id(s) in between were never advertised
+```
+
+**会话接缝处不计入缺失**：时限切分、`Break`、重新激活之后，会话没有更早的观测可以对比；若把重启当作基线重置之外
+还去比较，就会把每一次正常的切分都误报成丢数据。
 
 每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认的 `DEBUG` 日志：
 

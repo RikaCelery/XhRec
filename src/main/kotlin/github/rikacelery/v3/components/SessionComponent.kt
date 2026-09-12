@@ -172,6 +172,20 @@ class SessionEntry(
 
     /** Playlist entries the most recent poll skipped because the resume mark already covered them. */
     var lastPollSkipped: Int = 0
+
+    /**
+     * Highest segment id this session has already queued, used to notice a *discontinuity*: if the
+     * playlist advances from id N to id M > N + 1 between two polls, the ids in between were
+     * published by the stream but never advertised to us, so they are lost.
+     *
+     * Deliberately session-local (reset on every `StartRecording`), unlike the resume mark: a room
+     * that was restarted, or was not being polled at all, has an expected gap at the seam, and
+     * counting that as data loss would flag every limit cut.
+     */
+    var previousNewSegmentId: Long? = null
+
+    /** Missing segments detected by the most recent poll (a discontinuity in the segment ids). */
+    var lastPollGap: Int = 0
     val circleCache = CircleCache(100)
 
     // —— scope / loop timer ——
@@ -231,6 +245,7 @@ class SessionEntry(
         var skipped = 0L
         var skippedMin = Long.MAX_VALUE
         var skippedMax = Long.MIN_VALUE
+        val newIds = mutableListOf<Long>()
         for (seg in parsed.segments) {
             val segId = component.m3u8Parser.segmentIDFromUrl(seg.url)?.toLong()
             if (segId != null) {
@@ -245,9 +260,11 @@ class SessionEntry(
             if (circleCache.add(seg.url)) {
                 unseen.add(seg)
                 lastPollEnqueuedMedia = true
-                if (segId != null) lastSegmentId = segId
+                if (segId != null) newIds += segId
             }
         }
+        if (newIds.isNotEmpty()) lastSegmentId = newIds.max()
+        noteSegmentGap(newIds)
         lastPollSkipped = skipped.toInt()
         if (skipped > 0) {
             if (skipStreakSince == null) skipStreakSince = Instant.now()
@@ -300,6 +317,39 @@ class SessionEntry(
         skippedMinId = null
         skippedMaxId = null
         skipStreakReported = false
+    }
+
+    /**
+     * Compares this poll's newly queued segment ids with the previous poll's to detect a
+     * discontinuity. Ids the stream published but never advertised to us — because the playlist
+     * advanced past them between two polls, or because the window itself carries a hole — are lost,
+     * and nothing else in the pipeline can see that: a segment we never hear about never fails and
+     * never reaches the downloader.
+     *
+     * Every id from `previous + 1` up to the newest id is expected exactly once, so the count is
+     * simply how many of those are absent. The first poll that queues anything only establishes the
+     * baseline: the session has no earlier observation to compare against, and after a restart the
+     * seam is expected rather than lost.
+     */
+    private fun noteSegmentGap(newIds: List<Long>) {
+        lastPollGap = 0
+        if (newIds.isEmpty()) return
+        val previous = previousNewSegmentId
+        previousNewSegmentId = if (previous == null) newIds.max() else maxOf(previous, newIds.max())
+        if (previous == null) return
+
+        var expected = previous + 1
+        var missing = 0L
+        for (id in newIds.sorted()) {
+            if (id >= expected) missing += id - expected
+            expected = maxOf(expected, id + 1)
+        }
+        if (missing <= 0) return
+        lastPollGap = missing.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        sessionLogger.debug(
+            "roomId={} playlist went from segment id {} to {}; {} id(s) in between were never advertised",
+            roomId, previous, newIds.max(), missing
+        )
     }
 
     internal suspend fun fetchPlaylistSignal(): SessionMsg {
@@ -360,6 +410,8 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 totalBytes = 0L
                 retryCount = 0
                 resetSkipStreak()
+                previousNewSegmentId = null
+                lastPollGap = 0
                 circleCache.clear()   // a new file must re-download the init; media segments are skipped via the lastSegmentId threshold
                 launch { component.dataChannel.send(StreamStart(roomId, roomName, startTime, quality)) }
                 // LiveEventSource expands the WebSocket channel set and metrics start counting on this
@@ -392,6 +444,11 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 // "skips climbing while downloads stand still" is an alertable stall signal.
                 if (lastPollSkipped > 0) {
                     launch { component.publish(SegmentsSkipped(roomId, lastPollSkipped)) }
+                }
+                // A discontinuity is real data loss and nothing downstream can observe it: a segment
+                // that was never advertised never fails and never reaches the downloader.
+                if (lastPollGap > 0) {
+                    launch { component.publish(SegmentGapDetected(roomId, lastPollGap)) }
                 }
                 // An init-only (or segment-less) playlist is a stream that is not delivering:
                 // without this the session reports Recording forever and writes nothing.
@@ -645,6 +702,8 @@ internal fun SessionEntry.diagnoseJson(): JsonObject = buildJsonObject {
     put("playlistLoopRunning", playlistLoop.isRunning)
     put("lastPollSegmentCount", lastPollSegmentCount)
     put("lastPollSkipped", lastPollSkipped)
+    put("lastPollGap", lastPollGap)
+    put("previousNewSegmentId", previousNewSegmentId?.let { JsonPrimitive(it) } ?: JsonNull)
     put("lastPollEnqueuedMedia", lastPollEnqueuedMedia)
     put("skipStreak", buildJsonObject {
         put("since", skipStreakSince?.toString()?.let { JsonPrimitive(it) } ?: JsonNull)

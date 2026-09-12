@@ -295,6 +295,8 @@ otherwise invisible:
 | `lastPollSegmentCount` | media segments the last playlist actually advertised |
 | `lastPollEnqueuedMedia` | whether any of them was queued for download |
 | `lastPollSkipped` | how many were skipped as already covered by the resume mark (normal) |
+| `lastPollGap` | how many ids the playlist jumped over this poll and never showed us (lost) |
+| `previousNewSegmentId` | the highest id this session has queued; the baseline for the gap check |
 | `lastSegmentId` | the resume mark; segments with an id at or below it are skipped |
 | `noProgressMs` | how long since the session last queued or received anything |
 
@@ -494,6 +496,20 @@ re-lists segments already written, so every healthy poll skips the overlap and e
 new. Those skips are counted in `xhrec_segments_skipped_total{roomId=…}`, which therefore rises
 steadily for *any* room that is recording. The signal to watch is that counter climbing while
 `xhrec_downloaded_total` stands still.
+
+The opposite failure is `xhrec_segment_missing_total{roomId=…}`: ids the stream published that the
+playlist never showed us. If one refresh ends at id 3 and the next already starts at 7, then 4, 5
+and 6 are gone — the playlist jumped over them. Nothing else in the pipeline can notice that (a
+segment we never hear about never fails and never reaches the downloader), so the session counts it
+itself and logs each jump at `DEBUG`:
+
+```
+DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1028; 4 id(s) in between were never advertised
+```
+
+A gap at a session seam is deliberately not counted: after a limit cut, a `Break` or a re-arm the
+session has no earlier observation to compare against, so restarting the comparison would otherwise
+flag every ordinary cut as lost data.
 
 Per-poll detail is at `TRACE` — opt-in from the WebUI toolbar or `POST /log/level` — so it does not
 clutter the default `DEBUG` log:

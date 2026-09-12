@@ -204,6 +204,16 @@ class MockPlatformServer(
         }
     }.also { ownedJobs += it }
 
+    /**
+     * Advances the room's newest segment id by [count] at once, leaving a hole in the ids the
+     * playlist advertises. Models a stream that published segments faster than the recorder polled
+     * (or a poll that was delayed), which is what the missing-segment metric counts.
+     */
+    fun skipSegments(id: Long, count: Int) {
+        val room = room(id)
+        room.availableSegments += count
+    }
+
     /** Applies [statuses] in order (first immediately), then loops every [period]. */
     fun rotateStatuses(id: Long, statuses: List<String>, period: Duration): Job {
         require(statuses.isNotEmpty())
