@@ -48,7 +48,6 @@ class MetricComponent(
 ) : Actor<MetricMsg>("MetricComponent", eventBus, parentScope) {
 
     private val metrics = ConcurrentHashMap<Long, RoomMetrics>()
-    private val recording = ConcurrentHashMap.newKeySet<Long>()
 
     override suspend fun onStart(scope: CoroutineScope) {
         // One collector preserves ordering across event types, including immediate
@@ -68,6 +67,7 @@ class MetricComponent(
         is RecordingStarted -> OnMetricEvent(event)
         is RecordingStopped -> OnMetricEvent(event)
         is RoomStatusChanged -> OnMetricEvent(event)
+        is RoomRemoved -> OnMetricEvent(event)
         is CommandEnvelope -> HandleMetricCommand(event)
         else -> null
     }
@@ -162,13 +162,16 @@ class MetricComponent(
 
                 is RecordingStarted -> {
                     metrics.getOrPut(e.roomId) { RoomMetrics() }.quality = e.quality
-                    recording.add(e.roomId)
                 }
 
                 is RecordingStopped -> {
-                    recording.remove(e.roomId)
-                    metrics.remove(e.roomId)
+                    // Deliberately keep the counters. RecordingStopped fires per session (a limit
+                    // cut restarts the room), so removing here reset every lifetime counter on each
+                    // cut and erased the series before anyone could read it post-mortem. The entry is
+                    // dropped only when the room itself is removed.
                 }
+
+                is RoomRemoved -> metrics.remove(e.roomId)
 
                 is RoomStatusChanged -> {
                     // Record model schedule when room goes live (not offline)
@@ -217,7 +220,6 @@ class MetricComponent(
         family("xhrec_cdn_playlist_cooldown", "CDN host cooling down for playlists (1) or not (0)", "gauge")
 
         metrics.forEach { (roomId, m) ->
-            if (roomId !in recording) return@forEach
             val avgLatency = synchronized(m) {
                 if (m.latencySamples.isNotEmpty()) m.latencySamples.average() else 0.0
             }
