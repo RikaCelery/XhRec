@@ -30,6 +30,19 @@
     </root>
     <logger name="org.eclipse.jetty" level="INFO"/>
     <logger name="io.netty" level="OFF"/>
+    <!--
+      Noisy per-connection Netty loggers that Ktor's engine trips on ordinary client behaviour.
+      Pinned off on their own, independently of the io.netty level above, so raising io.netty to
+      DEBUG/TRACE to inspect other Netty internals cannot bring the flood back:
+        - DefaultChannelPipeline: WARN whenever an exception reaches the tail of the pipeline
+          (aborted requests, dropped SSE / keep-alive connections).
+        - ApplicationProtocolNegotiationHandler: WARN "TLS handshake failed" / "Failed to select
+          the application-level protocol" (Ktor 3 enables HTTP/2 + ALPN by default) for clients
+          that do not speak ALPN — plain-HTTP probes, scanners, health checks. Client noise, not
+          a server fault.
+    -->
+    <logger name="io.netty.channel.DefaultChannelPipeline" level="OFF"/>
+    <logger name="io.netty.handler.ssl.ApplicationProtocolNegotiationHandler" level="OFF"/>
     <logger name="ch.qos.logback" level="WARN"/>
     <logger name="io.ktor" level="OFF"/>
 </configuration>
