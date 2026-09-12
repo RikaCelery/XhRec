@@ -248,13 +248,13 @@ object ModelSchedule {
     fun getAllRoomIds(): Set<Long> = rooms.keys.toSet()
 
     /**
-     * Remove old samples to free memory.
-     * Should be called periodically.
+     * Drop rooms that have not gone live within [maxAgeMs]. Their histograms can no longer inform a
+     * prediction, and without this the map retained every room ever seen (and re-serialized all of
+     * them on every save).
      */
     fun cleanup(maxAgeMs: Long = MAX_SAMPLE_AGE_MS) {
         val cutoff = System.currentTimeMillis() - maxAgeMs
-        // Note: For simplicity, we don't actually remove old histogram data
-        // In a production system, you'd want to decay old counts
+        rooms.entries.removeIf { (_, stat) -> stat.lastStartTime < cutoff }
     }
 
     fun reset() {

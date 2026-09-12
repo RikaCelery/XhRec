@@ -1,5 +1,6 @@
 package github.rikacelery.v3.utils
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -36,5 +37,29 @@ class RetryTest {
         }
         assertEquals(null, result)
         assertEquals(3, calls)
+    }
+
+    @Test
+    fun withRetry_propagates_cancellation_without_retrying() = runTest {
+        var calls = 0
+        assertFailsWith<CancellationException> {
+            withRetry(3, stopIf = { false }) {
+                calls++
+                throw CancellationException("cancelled")
+            }
+        }
+        assertEquals(1, calls, "a cancelled coroutine must stop, not be retried")
+    }
+
+    @Test
+    fun withRetryOrNull_propagates_cancellation_without_retrying() = runTest {
+        var calls = 0
+        assertFailsWith<CancellationException> {
+            withRetryOrNull(3, stopIf = { false }) {
+                calls++
+                throw CancellationException("cancelled")
+            }
+        }
+        assertEquals(1, calls)
     }
 }

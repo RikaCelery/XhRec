@@ -38,6 +38,9 @@ sealed interface DownloaderMsg
 data class DoDownload(val cmd: Download) : DownloaderMsg
 data class DoCutPoint(val cut: CutPoint) : DownloaderMsg
 
+/** A session has fully ended; drop this room's emitter and any lingering workers. */
+data class ReleaseRoom(val roomId: Long) : DownloaderMsg
+
 data class ActiveDownload(
     val emitter: OrderedEmitter,
     val semaphore: Semaphore,
@@ -67,8 +70,43 @@ class DownloaderComponent(
         when (msg) {
             is DoDownload -> handleDownload(msg.cmd)
             is DoCutPoint -> handleCutPoint(msg.cut)
-
+            is ReleaseRoom -> releaseRoom(msg.roomId)
         }
+    }
+
+    override suspend fun onStart(scope: CoroutineScope) {
+        // A finished session leaves no more work for its room, so the emitter and any workers can go.
+        subscribe(RecordingStopped::class)
+    }
+
+    override suspend fun wrapEvent(event: Any): DownloaderMsg? = when (event) {
+        is RecordingStopped -> ReleaseRoom(event.roomId)
+        else -> null
+    }
+
+    /**
+     * Drop a room's ordered emitter and cancel any worker still holding it.
+     *
+     * The per-room entry used to live for the whole process, so every room ever recorded leaked an
+     * `ActiveDownload` (emitter + semaphore + running-job set). `CutPointDone` guarantees all
+     * earlier indices finished, so by the time the session reports `RecordingStopped` there is
+     * nothing left to order.
+     */
+    private fun releaseRoom(roomId: Long) {
+        val active = rooms.remove(roomId) ?: return
+        active.active = false
+        active.runningJobs.forEach { it.cancel() }
+        active.runningJobs.clear()
+    }
+
+    override fun stop() {
+        super.stop()
+        rooms.values.forEach { active ->
+            active.active = false
+            active.runningJobs.forEach { it.cancel() }
+        }
+        rooms.clear()
+        workerScope.cancel()
     }
 
     private suspend fun handleDownload(cmd: Download) {
@@ -179,9 +217,14 @@ class DownloaderComponent(
         }
         val idx = active.idx.incrementAndGet().toLong()
         logger.info("CutPoint roomId={}, index={}, reason={}", cut.roomId, cut.index, cut.reason)
-        // once this returns, StreamEnd is in the DataChannel FIFO; Session restart is safe only after that
-        active.emitter.completeAndAwait(idx, DownloadResult.CutPoint(cut))
-        eventBus.publish(CutPointDone(cut.roomId, cut.generation, cut.reason))
+        // The ordering guarantee is kept, but the wait is moved off the actor mailbox: the emitter
+        // still emits in index order, so CutPointDone is published only once StreamEnd has entered
+        // the DataChannel FIFO. Waiting inline here held the whole downloader mailbox until every
+        // earlier segment finished (up to downloaderDeadline), stalling other rooms' work.
+        workerScope.launch {
+            active.emitter.completeAndAwait(idx, DownloadResult.CutPoint(cut))
+            eventBus.publish(CutPointDone(cut.roomId, cut.generation, cut.reason))
+        }
     }
 
     /** Thrown when a download stalls; treated as transport error. */

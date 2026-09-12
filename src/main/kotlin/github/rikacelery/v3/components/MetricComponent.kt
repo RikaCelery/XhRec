@@ -48,7 +48,6 @@ class MetricComponent(
 ) : Actor<MetricMsg>("MetricComponent", eventBus, parentScope) {
 
     private val metrics = ConcurrentHashMap<Long, RoomMetrics>()
-    private val recording = ConcurrentHashMap.newKeySet<Long>()
 
     override suspend fun onStart(scope: CoroutineScope) {
         // One collector preserves ordering across event types, including immediate
@@ -68,6 +67,7 @@ class MetricComponent(
         is RecordingStarted -> OnMetricEvent(event)
         is RecordingStopped -> OnMetricEvent(event)
         is RoomStatusChanged -> OnMetricEvent(event)
+        is RoomRemoved -> OnMetricEvent(event)
         is CommandEnvelope -> HandleMetricCommand(event)
         else -> null
     }
@@ -162,13 +162,16 @@ class MetricComponent(
 
                 is RecordingStarted -> {
                     metrics.getOrPut(e.roomId) { RoomMetrics() }.quality = e.quality
-                    recording.add(e.roomId)
                 }
 
                 is RecordingStopped -> {
-                    recording.remove(e.roomId)
-                    metrics.remove(e.roomId)
+                    // Deliberately keep the counters. RecordingStopped fires per session (a limit
+                    // cut restarts the room), so removing here reset every lifetime counter on each
+                    // cut and erased the series before anyone could read it post-mortem. The entry is
+                    // dropped only when the room itself is removed.
                 }
+
+                is RoomRemoved -> metrics.remove(e.roomId)
 
                 is RoomStatusChanged -> {
                     // Record model schedule when room goes live (not offline)
@@ -184,92 +187,77 @@ class MetricComponent(
 
     fun prometheusText(): String {
         val sb = StringBuilder()
+
+        // Prometheus allows one HELP/TYPE block per metric family, so metadata is emitted once per
+        // scrape — not repeated inside the per-room (and per-host) loops. Repeated HELP lines make
+        // strict scrapers reject the whole payload.
+        fun family(name: String, help: String, type: String) {
+            sb.appendLine("# HELP $name $help")
+            sb.appendLine("# TYPE $name $type")
+        }
+
+        family("xhrec_attempted_total", "Total attempted segments", "counter")
+        family("xhrec_downloaded_total", "Successfully downloaded segments", "counter")
+        family("xhrec_failed_total", "Failed segments", "counter")
+        family("xhrec_bytes_write_total", "Bytes written", "gauge")
+        family("xhrec_proxy_ratio", "Proxy download ratio", "gauge")
+        family("xhrec_success_direct_total", "Direct success count", "counter")
+        family("xhrec_success_proxied_total", "Proxied success count", "counter")
+        family("xhrec_avg_latency_ms", "Average download latency ms", "gauge")
+        family("xhrec_segment_missing_total", "Segments the playlist never advertised (a jump in segment ids)", "counter")
+        family("xhrec_segments_skipped_total", "Playlist entries already covered by the resume mark", "counter")
+        family("xhrec_files_total", "Files produced", "counter")
+        family("xhrec_refresh_latency_ms", "Playlist refresh latency ms", "gauge")
+        family("xhrec_segment_id_current", "Current segment ID", "gauge")
+        family("xhrec_downloading_current", "Currently downloading segments", "gauge")
+        family("xhrec_quality", "Recording quality", "gauge")
+        family("xhrec_segment_downloaded_current", "Downloaded in current segment", "gauge")
+        family("xhrec_cdn_estimated_duration_ms", "CDN host estimated duration at current time", "gauge")
+        family("xhrec_cdn_confidence", "CDN host prediction confidence (0-1)", "gauge")
+        family("xhrec_cdn_total_successes", "CDN host total successful downloads", "counter")
+        family("xhrec_cdn_total_errors", "CDN host total errors", "counter")
+        family("xhrec_cdn_playlist_failures", "CDN host consecutive playlist fetch failures", "gauge")
+        family("xhrec_cdn_playlist_cooldown", "CDN host cooling down for playlists (1) or not (0)", "gauge")
+
         metrics.forEach { (roomId, m) ->
-            if (roomId !in recording) return@forEach
             val avgLatency = synchronized(m) {
                 if (m.latencySamples.isNotEmpty()) m.latencySamples.average() else 0.0
             }
             val total = m.proxyCount.get() + m.directCount.get()
             val proxyRatio = if (total > 0) m.proxyCount.get().toDouble() / total else 0.0
 
-            sb.appendLine("# HELP xhrec_attempted_total Total attempted segments")
-            sb.appendLine("# TYPE xhrec_attempted_total counter")
             sb.appendLine("xhrec_attempted_total{roomId=\"$roomId\"} ${m.lifetimeAttempted.get()}")
-            sb.appendLine("# HELP xhrec_downloaded_total Successfully downloaded segments")
-            sb.appendLine("# TYPE xhrec_downloaded_total counter")
             sb.appendLine("xhrec_downloaded_total{roomId=\"$roomId\"} ${m.lifetimeDownloaded.get()}")
-            sb.appendLine("# HELP xhrec_failed_total Failed segments")
-            sb.appendLine("# TYPE xhrec_failed_total counter")
             sb.appendLine("xhrec_failed_total{roomId=\"$roomId\"} ${m.lifetimeFailed.get()}")
-            sb.appendLine("# HELP xhrec_bytes_write_total Bytes written")
-            sb.appendLine("# TYPE xhrec_bytes_write_total gauge")
             sb.appendLine("xhrec_bytes_write_total{roomId=\"$roomId\"} ${m.segmentBytes.get()}")
-            sb.appendLine("# HELP xhrec_proxy_ratio Proxy download ratio")
-            sb.appendLine("# TYPE xhrec_proxy_ratio gauge")
             sb.appendLine("xhrec_proxy_ratio{roomId=\"$roomId\"} $proxyRatio")
-            sb.appendLine("# HELP xhrec_success_direct_total Direct success count")
-            sb.appendLine("# TYPE xhrec_success_direct_total counter")
             sb.appendLine("xhrec_success_direct_total{roomId=\"$roomId\"} ${m.directCount.get()}")
-            sb.appendLine("# HELP xhrec_success_proxied_total Proxied success count")
-            sb.appendLine("# TYPE xhrec_success_proxied_total counter")
             sb.appendLine("xhrec_success_proxied_total{roomId=\"$roomId\"} ${m.proxyCount.get()}")
-            sb.appendLine("# HELP xhrec_avg_latency_ms Average download latency ms")
-            sb.appendLine("# TYPE xhrec_avg_latency_ms gauge")
             sb.appendLine("xhrec_avg_latency_ms{roomId=\"$roomId\"} $avgLatency")
-            sb.appendLine("# HELP xhrec_segment_missing_total Segments the playlist never advertised (a jump in segment ids)")
-            sb.appendLine("# TYPE xhrec_segment_missing_total counter")
             sb.appendLine("xhrec_segment_missing_total{roomId=\"$roomId\"} ${m.segmentMissing.get()}")
-            sb.appendLine("# HELP xhrec_segments_skipped_total Playlist entries already covered by the resume mark")
-            sb.appendLine("# TYPE xhrec_segments_skipped_total counter")
             sb.appendLine("xhrec_segments_skipped_total{roomId=\"$roomId\"} ${m.segmentsSkipped.get()}")
-            sb.appendLine("# HELP xhrec_files_total Files produced")
-            sb.appendLine("# TYPE xhrec_files_total counter")
             sb.appendLine("xhrec_files_total{roomId=\"$roomId\"} ${m.fileCount.get()}")
 
             val avgRefreshLatency = synchronized(m) {
                 if (m.refreshLatencySamples.isNotEmpty()) m.refreshLatencySamples.average() else 0.0
             }
-
-            sb.appendLine("# HELP xhrec_refresh_latency_ms Playlist refresh latency ms")
-            sb.appendLine("# TYPE xhrec_refresh_latency_ms gauge")
             sb.appendLine("xhrec_refresh_latency_ms{roomId=\"$roomId\"} $avgRefreshLatency")
-            sb.appendLine("# HELP xhrec_segment_id_current Current segment ID")
-            sb.appendLine("# TYPE xhrec_segment_id_current gauge")
             sb.appendLine("xhrec_segment_id_current{roomId=\"$roomId\"} ${m.currentSegmentId.get()}")
-            sb.appendLine("# HELP xhrec_downloading_current Currently downloading segments")
-            sb.appendLine("# TYPE xhrec_downloading_current gauge")
             sb.appendLine("xhrec_downloading_current{roomId=\"$roomId\"} ${m.runningUrls.size}")
-            sb.appendLine("# HELP xhrec_quality Recording quality")
-            sb.appendLine("# TYPE xhrec_quality gauge")
             sb.appendLine("xhrec_quality{roomId=\"$roomId\",quality=\"${m.quality}\"} 1")
-
-            // per-segment gauges
-            sb.appendLine("# HELP xhrec_segment_downloaded_current Downloaded in current segment")
-            sb.appendLine("# TYPE xhrec_segment_downloaded_current gauge")
             sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
         }
+
         // CDN host duration metrics
         val now = System.currentTimeMillis()
         val cdnStats = CdnSelector.snapshot()
         cdnStats.forEach { (host, stat) ->
             val durLabel = if (stat.estimatedDurationMs.isNaN()) "-1" else stat.estimatedDurationMs.toLong().toString()
-            sb.appendLine("# HELP xhrec_cdn_estimated_duration_ms CDN host estimated duration at current time")
-            sb.appendLine("# TYPE xhrec_cdn_estimated_duration_ms gauge")
             sb.appendLine("xhrec_cdn_estimated_duration_ms{host=\"$host\",source=\"${stat.estimateSource}\"} $durLabel")
-            sb.appendLine("# HELP xhrec_cdn_confidence CDN host prediction confidence (0-1)")
-            sb.appendLine("# TYPE xhrec_cdn_confidence gauge")
             sb.appendLine("xhrec_cdn_confidence{host=\"$host\"} ${stat.confidence}")
-            sb.appendLine("# HELP xhrec_cdn_total_successes CDN host total successful downloads")
-            sb.appendLine("# TYPE xhrec_cdn_total_successes counter")
             sb.appendLine("xhrec_cdn_total_successes{host=\"$host\"} ${stat.totalSuccesses}")
-            sb.appendLine("# HELP xhrec_cdn_total_errors CDN host total errors")
-            sb.appendLine("# TYPE xhrec_cdn_total_errors counter")
             sb.appendLine("xhrec_cdn_total_errors{host=\"$host\"} ${stat.totalErrors}")
-            sb.appendLine("# HELP xhrec_cdn_playlist_failures CDN host consecutive playlist fetch failures")
-            sb.appendLine("# TYPE xhrec_cdn_playlist_failures gauge")
             sb.appendLine("xhrec_cdn_playlist_failures{host=\"$host\"} ${stat.playlistFailures}")
-            sb.appendLine("# HELP xhrec_cdn_playlist_cooldown CDN host cooling down for playlists (1) or not (0)")
-            sb.appendLine("# TYPE xhrec_cdn_playlist_cooldown gauge")
             sb.appendLine("xhrec_cdn_playlist_cooldown{host=\"$host\"} ${if (stat.playlistCooldownUntil > now) 1 else 0}")
         }
 

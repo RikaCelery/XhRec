@@ -3,6 +3,7 @@ package github.rikacelery.v3.bootstrap
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.components.*
 import github.rikacelery.v3.data.RoomSettings
+import github.rikacelery.v3.data.SizeStrSerializer
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.postprocessors.*
@@ -186,13 +187,13 @@ class Bootstrap(
                     try {
                         val (id, name) = apiClient.getRoomFromUrlOrSlug(parsed.url)
                         addRoomFromParsed(id, name, parsed)
-                        logger.info("Add room {} {}/{}",name,idx.getAndIncrement(),lines.size)
+                        logger.info("roomId={} roomName={} added {}/{}", id, name, idx.getAndIncrement(), lines.size)
                     } catch (e: RenameException) {
                         logger.error("Room renamed during load: $line -> ${e.newName}", e)
                         try {
                             val (id, name) = apiClient.getRoomFromUrlOrSlug(e.newName)
                             addRoomFromParsed(id, name, parsed)
-                            logger.info("Add room {} {}/{}",name,idx.getAndIncrement(),lines.size)
+                            logger.info("roomId={} roomName={} added {}/{}", id, name, idx.getAndIncrement(), lines.size)
                         } catch (ex: Exception) {
                             logger.error("Failed to load room from '$line' after rename: ${ex.message}", ex)
                         }
@@ -206,7 +207,7 @@ class Bootstrap(
     }
 
     private suspend fun addRoomFromParsed(id: Long, name: String, parsed: ListConfLine) {
-        SensitiveStringRegistry.mask(name)
+        SensitiveStringRegistry.maskRoom(id, name)
         val settings = parsed.toSettings()
         roomComponent.internalAdd(id, name, settings)
         if (parsed.armed) {
@@ -255,25 +256,8 @@ class Bootstrap(
         )
     }
 
-    private fun parseSize(s: String): Long {
-        val regex = Regex("(\\d+(?:\\.\\d+)?)(Ti|Gi|Mi|Ki|Bi|T|G|M|K|B)")
-        var total = 0L
-        regex.findAll(s).forEach {
-            val v = it.groupValues[1].toDouble()
-            total += when (it.groupValues[2]) {
-                "Ti" -> v * 1024 * 1024 * 1024 * 1024
-                "Gi" -> v * 1024 * 1024 * 1024
-                "Mi" -> v * 1024 * 1024
-                "Ki" -> v * 1024
-                "Bi" -> v
-                "T" -> v * 1000_000_000_000
-                "G" -> v * 1000_000_000
-                "M" -> v * 1000_000
-                "K" -> v * 1000
-                "B" -> v
-                else -> 0L
-            }.toLong()
-        }
-        return total
-    }
+    private fun parseSize(s: String): Long =
+        // Reuse the canonical parser so list.conf, xhrec.json and the API agree. Stay lenient here:
+        // a malformed `size:` entry must not abort the whole list.conf load.
+        runCatching { SizeStrSerializer.parseSizeString(s) }.getOrDefault(0L)
 }

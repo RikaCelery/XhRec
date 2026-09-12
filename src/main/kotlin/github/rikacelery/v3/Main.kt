@@ -14,6 +14,7 @@ import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.ClientManager
 import github.rikacelery.v3.utils.DefaultHttpClientProvider
 import github.rikacelery.v3.utils.LogLevels
 import github.rikacelery.v3.utils.PredictionStore
@@ -243,6 +244,7 @@ fun main(vararg args: String) {
             predictionStore.stop()
             PredictionEngine.stop() // suspend: persist final state before scope is cancelled
             dataChannel.close()
+            ClientManager.close()
             appScope.cancel()
             println("XhRec v3 shut down")
         }

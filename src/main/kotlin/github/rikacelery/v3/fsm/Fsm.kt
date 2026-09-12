@@ -11,6 +11,12 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.time.Duration
 
+/**
+ * History timestamps. Built once: transitions are recorded for every actor message, and
+ * `DateTimeFormatter.ofPattern` allocates an entire formatter per call.
+ */
+private val HISTORY_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+
 // ==========================================
 // 1. Exceptions
 // ==========================================
@@ -127,7 +133,7 @@ class StateMachine<S, E, D, C>(
     }
 
     private fun recordTransition(from: S, event: E, data: Any?, target: Target<S>) {
-        val time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))
+        val time = LocalDateTime.now().format(HISTORY_TIME_FORMAT)
         synchronized(historyLock) {
             if (_history.size >= maxHistorySize) {
                 _history.removeFirst()

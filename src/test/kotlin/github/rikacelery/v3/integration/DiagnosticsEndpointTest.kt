@@ -91,8 +91,15 @@ class DiagnosticsEndpointTest {
         fx.ready()
         fx.startRecording()
 
-        val body = fx.get("/diagnose?actor=SchedulerComponent&section=history&room=1001")
-            .bodyAsJson().jsonObject
+        // Wait for the scheduler to have recorded the transition: startRecording() is satisfied by
+        // the session becoming Recording, which can be observed a moment before the scheduler's own
+        // history write, so reading immediately would race under load.
+        val body = fx.await(10.seconds, "the scheduler history to record PreconfigDone") {
+            val snapshot = fx.get("/diagnose?actor=SchedulerComponent&section=history&room=1001")
+                .bodyAsJson().jsonObject
+            val recorded = snapshot["history"]?.jsonObject?.get("1001")?.jsonArray?.map { it.jsonObject }
+            snapshot.takeIf { recorded?.any { e -> e["event"]?.jsonPrimitive?.content == "PreconfigDone" } == true }
+        }
         val history = body["history"]!!.jsonObject["1001"]!!.jsonArray.map { it.jsonObject }
 
         assertTrue(history.isNotEmpty(), "a room that went armed -> preconfig -> recording has history")

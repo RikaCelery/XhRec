@@ -34,7 +34,7 @@ class DataChannel(capacity: Int = 256) {
         }
         val result = channel.trySend(msg)
         if (result.isFailure) {
-            logger.warn("DataChannel full, dropping {} (room={})", msg::class.simpleName, roomOf(msg))
+            logger.warn("DataChannel full, dropping {} (roomId={})", msg::class.simpleName, roomOf(msg))
         }
     }
 

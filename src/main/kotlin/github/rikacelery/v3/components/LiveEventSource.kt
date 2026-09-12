@@ -309,7 +309,7 @@ class LiveEventSource(
             try {
                 send(Frame.Text(subscribeFrame("$channel@$roomId")))
             } catch (e: Exception) {
-                logger.error("Failed to send subscribe frame for channel=$channel@$roomId: ${e.message}", e)
+                logger.error("roomId=$roomId failed to send subscribe frame for channel=$channel: ${e.message}", e)
             }
         }
     }
@@ -322,7 +322,7 @@ class LiveEventSource(
             try {
                 send(Frame.Text(unsubscribeFrame("$channel@$roomId")))
             } catch (e: Exception) {
-                logger.error("Failed to send unsubscribe frame for channel=$channel@$roomId: ${e.message}", e)
+                logger.error("roomId=$roomId failed to send unsubscribe frame for channel=$channel: ${e.message}", e)
             }
         }
     }
@@ -332,7 +332,7 @@ class LiveEventSource(
             try {
                 send(Frame.Text(unsubscribeFrame("$channel@$roomId")))
             } catch (e: Exception) {
-                logger.error("Failed to send unsubscribe frame for channel=$channel@$roomId: ${e.message}", e)
+                logger.error("roomId=$roomId failed to send unsubscribe frame for channel=$channel: ${e.message}", e)
             }
         }
     }

@@ -186,4 +186,45 @@ class PostProcessorComponentTest {
         )
         comp.stop()
     }
+
+    /**
+     * RecordingStopped used to `join()` the room's consumer, which held the actor mailbox for the
+     * whole drain (minutes with ffmpeg). A room stopping must not stop the actor from routing other
+     * rooms' file-ready events.
+     */
+    @Test
+    fun `RecordingStopped does not hold the actor while the room drains`() = runTest(UnconfinedTestDispatcher()) {
+        val bus = EventBus()
+        val comp = PostProcessorComponent(bus, backgroundScope, maxConcurrency = 1)
+        val aStarted = CompletableDeferred<Unit>()
+        val aCanFinish = CompletableDeferred<Unit>()
+
+        val processor = object : Processor() {
+            override suspend fun process(input: File, ctx: ProcessorCtx): List<File> {
+                if (ctx.roomId == 1L) {
+                    aStarted.complete(Unit)
+                    aCanFinish.await()
+                }
+                return listOf(input)
+            }
+        }
+        comp.setProcessors(listOf(processor))
+        comp.start()
+
+        bus.publish(fileReady(1, "roomA", "a.mp4"))
+        aStarted.await() // roomA holds the only permit and is mid-process
+
+        bus.publish(RecordingStopped(1))
+        bus.publish(fileReady(2, "roomB", "b.mp4"))
+        advanceUntilIdle()
+
+        assertTrue(
+            comp.jobs.keys.any { it.endsWith("b.mp4") },
+            "roomB must be routed while roomA is still draining"
+        )
+
+        aCanFinish.complete(Unit)
+        advanceUntilIdle()
+        comp.stop()
+    }
 }

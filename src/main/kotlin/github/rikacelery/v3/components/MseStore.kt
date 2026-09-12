@@ -16,6 +16,9 @@ import kotlin.collections.isNotEmpty
 import kotlin.collections.mutableListOf
 import kotlin.collections.toList
 
+/** Retain live-preview state for at most this many rooms; the least recently active are dropped. */
+private const val MAX_RETAINED_ROOMS = 64
+
 class MseStore : DataHook {
 
     data class SegmentEntry(
@@ -56,11 +59,28 @@ class MseStore : DataHook {
 
     private fun onStreamStart(roomId: Long) {
         val state = rooms.computeIfAbsent(roomId) { RoomState() }
+        evictStale()
         state.generation++
         state.latestSegment = null
         state.segCounter.set(0)
         state.latestIdx = -1
         state.lastAccess = System.currentTimeMillis()
+    }
+
+    /**
+     * Bound retained preview state. Each entry holds the init segment plus the latest media segment,
+     * so leaving one behind per room ever recorded is the leak; actively-recording rooms refresh
+     * [RoomState.lastAccess] on every segment, so the oldest entries are the finished ones.
+     */
+    private fun evictStale() {
+        if (rooms.size <= MAX_RETAINED_ROOMS) return
+        rooms.entries
+            .sortedBy { it.value.lastAccess }
+            .take(rooms.size - MAX_RETAINED_ROOMS)
+            .forEach { (id, state) ->
+                // Never evict a room someone is currently watching.
+                if (state.sseChannels.isEmpty()) rooms.remove(id, state)
+            }
     }
 
     private fun onStreamData(msg: StreamData) {

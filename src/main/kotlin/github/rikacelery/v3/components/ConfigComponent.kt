@@ -13,6 +13,7 @@ import github.rikacelery.v3.utils.SensitiveStringRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -27,13 +28,6 @@ class ConfigComponent(
     eventBus: EventBus,
     parentScope: CoroutineScope
 ) : Actor<ConfigMsg>("ConfigComponent", eventBus, parentScope) {
-    companion object {
-        var instance: ConfigComponent? = null
-    }
-
-    init {
-        instance = this
-    }
 
     private val configFile = File(config.configPath)
     private var persistedStreamAuthKey: String = config.streamAuthKey
@@ -97,6 +91,16 @@ class ConfigComponent(
                 }
             }
         }
+    }
+
+    /**
+     * Wait for an in-flight [saveConfig] to finish before tearing the scope down. The save writes on
+     * [Dispatchers.IO]; cancelling it mid-write leaves a truncated xhrec.json and races callers that
+     * delete the working directory (the integration tests' temp dirs).
+     */
+    override fun stop() {
+        runBlocking { saveLock.withLock { } }
+        super.stop()
     }
 
     /** Re-apply the persisted log level; a blank value leaves logback.xml in charge. */

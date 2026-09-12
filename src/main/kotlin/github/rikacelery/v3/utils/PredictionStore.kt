@@ -61,15 +61,17 @@ class PredictionStore(
      */
     suspend fun save() {
         try {
-            val payload = buildString {
-                append("{\"cdn\":")
-                append(CdnSelector.exportState())
-                append(",\"modelSchedule\":")
-                append(ModelSchedule.exportState())
-                append("}")
-            }
-            val file = File(filePath)
+            // Drop rooms whose history aged out before serializing, so the map cannot grow forever.
+            ModelSchedule.cleanup()
             withContext(Dispatchers.IO) {
+                val payload = buildString {
+                    append("{\"cdn\":")
+                    append(CdnSelector.exportState())
+                    append(",\"modelSchedule\":")
+                    append(ModelSchedule.exportState())
+                    append("}")
+                }
+                val file = File(filePath)
                 val tmp = File(file.path + ".tmp")
                 tmp.writeText(payload)
                 if (file.exists()) file.delete()

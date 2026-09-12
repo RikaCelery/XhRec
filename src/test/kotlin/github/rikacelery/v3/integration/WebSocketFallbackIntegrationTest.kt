@@ -179,7 +179,12 @@ class WebSocketFallbackIntegrationTest {
             fx.get("/add?name=model").expectOk("Room added: model")
             fx.get("/activate?id=1001").expectOk("Activated")
             fx.mock.startSegments(1001, 40.milliseconds)
-            delay(300)
+
+            // With WebSockets rejected, HTTP status polling is the only way the room can learn about
+            // the status change below. Wait for a poll *after* activation (its own refresh already
+            // completed before this snapshot) instead of sleeping a fixed interval.
+            val pollsBefore = fx.mock.requests().count { it.path.contains("broadcasts") }
+            fx.awaitRequestCount("broadcasts", pollsBefore + 1)
 
             // HTTP status changes without any WebSocket push
             fx.mock.setRoomStatus(1001, "public", push = false)

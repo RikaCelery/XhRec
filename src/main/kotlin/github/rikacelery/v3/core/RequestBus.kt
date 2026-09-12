@@ -64,6 +64,11 @@ class RequestBus(
             pending.remove(id)?.cancel()
             monitor(id, cmd, startedAt, "TIMEOUT after ${timeoutMs}ms (no component answered)")
             throw RequestTimeoutException(cmd, timeoutMs)
+        } finally {
+            // A caller cancelled before its reply arrived never reaches the timeout branch, so the
+            // pending slot was left behind. Drop it (and the deferred) on every exit; on success and
+            // timeout the ack collector/the catch above already removed it, making this a no-op.
+            pending.remove(id)?.cancel()
         }
     }
 

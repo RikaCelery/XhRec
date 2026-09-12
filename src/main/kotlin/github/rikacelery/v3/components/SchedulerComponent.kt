@@ -137,6 +137,15 @@ class SchedulerEntry(
      */
     var freeSpyExhausted: Boolean = false
 
+    /**
+     * Set once the paid group-show ticket has been bought for the current episode. The purchase is
+     * a paid, non-idempotent platform call and the preconfig loop retries every
+     * [RuntimeTuning.preconfigRetryInterval], so without this marker a show whose model token
+     * lagged was bought — and the account charged — again on every tick. Cleared when the room
+     * leaves the group-show status.
+     */
+    var groupShowPurchased: Boolean = false
+
     // —— Status ——
     var roomStatus: String = ""
     var streamStatus: String = ""
@@ -329,9 +338,21 @@ class SchedulerEntry(
             return null
         }
         var token = component.apiClient.roomFetchModelToken(roomId, u)
+        if (token == null && !groupShowPurchased) {
+            // Buy the ticket at most once per group-show episode. roomRequestGroupShow is a paid,
+            // non-idempotent platform call and the preconfig loop runs again every
+            // preconfigRetryInterval, so re-buying here charged the account once per tick.
+            if (component.apiClient.roomRequestGroupShow(roomId, u)) {
+                component.requestBus.request<OkResponse>(DeductCoins(u.userId, price.toLong()))
+                groupShowPurchased = true
+                schedulerLogger.info("roomId={} bought group-show ticket (user {}), charged {}", roomId, u.userId, price)
+            } else {
+                schedulerLogger.warn("roomId={} group-show purchase rejected, retrying on the next preconfig", roomId)
+            }
+        }
         if (token == null) {
-            component.apiClient.roomRequestGroupShow(roomId, u)
-            component.requestBus.request<OkResponse>(DeductCoins(u.userId, price.toLong()))
+            // We just bought the ticket, or an earlier tick did: poll once more for the model token
+            // without paying again.
             delay(1.seconds)
             token = component.apiClient.roomFetchModelToken(roomId, u)
         }
@@ -655,14 +676,14 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 if (d?.tokenFailure == TokenFailure.NoFreeSpy && !settings.autoPaySpy) {
                     freeSpyExhausted = true
                     schedulerLogger.info(
-                        "Room {}: no free spy access, waiting for the next private show", roomId
+                        "roomId={} no free spy access, waiting for the next private show", roomId
                     )
                     self(SchedulerEvent.BackToArmed)
                     return@action
                 }
                 // stay in Preconfiguring; the ticker retries automatically
                 if (lastFailReason != d?.failReason) {
-                    schedulerLogger.warn("Preconfig failed room={}: {}", roomId, d?.failReason)
+                    schedulerLogger.warn("roomId={} preconfig failed: {}", roomId, d?.failReason)
                     lastFailReason = d?.failReason
                 }
             }
@@ -863,7 +884,12 @@ class SchedulerComponent(
         when (msg) {
             is SchedulerBus -> onBus(msg.event)
             is SchedulerSignal -> driveFsm(msg)
-            is SchedulerHandleCommand -> handleCommand(msg.env)
+            // Activation makes several request-bus round trips, one of which refreshes a room over
+            // the network. Run it off the actor mailbox so a slow platform call cannot stall room
+            // events; handleCommand still replies with CommandAck when it finishes.
+            is SchedulerHandleCommand ->
+                if (msg.env.command is ActivateRecordingCmd) scope.launch { handleCommand(msg.env) }
+                else handleCommand(msg.env)
         }
     }
 
@@ -873,6 +899,9 @@ class SchedulerComponent(
                 // the free spy privilege is probed once per private show, so anything that ends
                 // the show (offline, public, group show) re-arms the probe for the next one
                 if (!RoomStatus.isPrivate(event.newStatus)) entries[event.roomId]?.freeSpyExhausted = false
+                // the paid ticket is bought once per group show, so leaving the group-show status
+                // re-arms the purchase for the next one
+                if (!RoomStatus.isGroupShow(event.newStatus)) entries[event.roomId]?.groupShowPurchased = false
                 driveFsm(event.roomId, SchedulerEvent.RoomStatusChanged, SchedulerDriveData(roomStatus = event.newStatus))
             }
             is StreamStatusChanged -> driveFsm(event.roomId, SchedulerEvent.StreamStatusChanged, SchedulerDriveData(streamStatus = event.newStatus))
@@ -897,9 +926,13 @@ class SchedulerComponent(
                 }
             }
             is WriterFatal -> {
-                logger.error("Writer fatal room {}: {}", event.roomId, event.error)
+                logger.error("roomId={} writer fatal: {}", event.roomId, event.error)
                 entries.remove(event.roomId)?.scope?.cancel()
                 evictRoomClients(event.roomId)
+                // The writer has already closed and deleted the partial file, so a session left
+                // running would keep downloading bytes into nothing. Stop it for the same reason
+                // RoomRemoved does; with the entry gone the resulting SessionExit is just ignored.
+                sessionComponent.tell(StopRecording(event.roomId, EndReason.WriterError))
             }
             // A room removed from the list while armed/recording must be disarmed and its
             // recording stopped, otherwise the session keeps writing and the UI shows a
@@ -908,7 +941,7 @@ class SchedulerComponent(
                 entries.remove(event.roomId)?.scope?.cancel()
                 evictRoomClients(event.roomId)
                 sessionComponent.tell(StopRecording(event.roomId, EndReason.UserStop))
-                logger.info("Room {} removed: disarmed and recording stopped", event.roomId)
+                logger.info("roomId={} removed, disarmed and recording stopped", event.roomId)
             }
             is AuthExpired -> logger.warn("Auth expired user {}", event.userId)
             is StopEvent -> {
@@ -954,7 +987,7 @@ class SchedulerComponent(
                 this.settings = settings.copy(pkey = settings.pkey.ifBlank { streamAuthKey })
             }
         }
-        logger.info("Room {} ({}) armed and waiting", name, room)
+        logger.info("roomId={} ({}) armed and waiting", room, name)
         return entry
     }
 
@@ -971,7 +1004,7 @@ class SchedulerComponent(
                             )
                         }
                     }
-                    logger.info("Room {} ({}) activated (armed)", name, cmd.roomId)
+                    logger.info("roomId={} ({}) activated (armed)", cmd.roomId, name)
                     requestBus.request<OkResponse>(RefreshRoomCmd(cmd.roomId))
                     // Arming a room that is already recordable must not wait for the next
                     // status event: the refresh above only publishes RoomStatusChanged when
@@ -986,16 +1019,22 @@ class SchedulerComponent(
                             SchedulerDriveData(roomStatus = currentStatus)
                         )
                     }
-                } catch (_: Exception) {
+                    OkResponse
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The room is not armed when any of the requests above fail, so answering
+                    // OkResponse here left the dashboard showing an active room that never records.
+                    logger.error("roomId={} activation failed: {}", cmd.roomId, e.message, e)
+                    ErrorResponse("Failed to activate room ${cmd.roomId}: ${e.message}")
                 }
-                OkResponse
             }
 
             is DeactivateCmd -> {
                 entries.remove(cmd.roomId)?.scope?.cancel()
                 evictRoomClients(cmd.roomId)
                 sessionComponent.tell(StopRecording(cmd.roomId, EndReason.UserStop))
-                logger.info("Room {} deactivated", cmd.roomId)
+                logger.info("roomId={} deactivated", cmd.roomId)
                 OkResponse
             }
 

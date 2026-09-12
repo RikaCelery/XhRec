@@ -35,7 +35,6 @@ dependencies {
 
     implementation("io.github.nomisrev:kotlinx-serialization-jsonpath:1.0.0")
     implementation("org.jsoup:jsoup:1.22.1")
-    implementation("org.jline:jline:4.4.2")
     implementation("commons-cli:commons-cli:1.11.0")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
@@ -48,4 +47,18 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+
+    // Suites run in separate JVMs, not one shared one: the component graph is built on
+    // process-wide singletons (Diagnostics keys actors by name, plus CdnSelector, Hosts,
+    // SensitiveStringRegistry, PredictionSampleStore), so two fixtures in the same JVM would
+    // collide. Every fixture binds ephemeral ports (port 0) and its own temp directory, and the
+    // test logback config keeps them off the shared logs/xhrec.log, so forks are independent.
+    //
+    // Measured on an 8-core box (whole suite, 308 tests): 1 fork 107s, 2 → 81s, 3 → 41s,
+    // 4 → 46s, 6 → 35-45s, 8 → 42-45s; wall time plateaus from ~6 forks on. Default to one fork
+    // per CPU capped at 8, overridable with -PtestForks=N.
+    maxParallelForks = providers.gradleProperty("testForks").map { it.toInt() }.getOrElse(
+        Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+    )
+    maxHeapSize = "768m"
 }

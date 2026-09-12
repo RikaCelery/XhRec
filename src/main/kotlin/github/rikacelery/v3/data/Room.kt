@@ -106,15 +106,17 @@ object SizeStrSerializer : KSerializer<Long> {
         return total
     }
 
+    /** Compact binary size (e.g. 1536 -> "1Ki"), shared by serialization and the dashboard. */
+    fun format(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 * 1024 -> "${bytes / (1024L * 1024 * 1024 * 1024)}Ti"
+        bytes >= 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024 * 1024)}Gi"
+        bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)}Mi"
+        bytes >= 1024 -> "${bytes / 1024}Ki"
+        else -> "${bytes}Bi"
+    }
+
     override fun serialize(encoder: Encoder, value: Long): Unit {
-        val s = when {
-            value >= 1024L*1024*1024*1024 -> "${value / (1024L*1024*1024*1024)}Ti"
-            value >= 1024*1024*1024 -> "${value / (1024*1024*1024)}Gi"
-            value >= 1024*1024 -> "${value / (1024*1024)}Mi"
-            value >= 1024 -> "${value / 1024}Ki"
-            else -> "${value}Bi"
-        }
-        encoder.encodeString(s)
+        encoder.encodeString(format(value))
     }
     override fun deserialize(decoder: Decoder): Long = parseSizeString(decoder.decodeString())
 }

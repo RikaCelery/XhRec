@@ -357,7 +357,7 @@ curl -skN "https://localhost:8090/debug/stream?types=data" | jq -c 'select(.room
 
 ```shell
 curl -sk https://localhost:8090/log/level
-# {"level":"DEBUG","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
+# {"level":"INFO","levels":["TRACE","DEBUG","INFO","WARN","ERROR","OFF"]}
 
 curl -sk -X POST -d "level=TRACE" https://localhost:8090/log/level
 # TRACE
@@ -453,7 +453,7 @@ curl -sk -X POST -d "level=LOUD" https://localhost:8090/log/level
 
 ### 日志脱敏
 
-默认开启，敏感信息在日志输出中被替换。静态模式（JWT token、cookie、认证 URL 参数、代理地址）替换为 `***`。动态字符串（主播名、用户名）在启动时注册，替换为基于 CRC32 的稳定哈希值——同一会话内保持不变，重启后更新，便于日志关联分析同时保护隐私。
+默认开启，敏感信息在日志输出中被替换。静态模式（JWT token、cookie、认证 URL 参数、代理地址）替换为 `***`。动态字符串（主播名、用户名）在启动时注册，替换为基于 CRC32 的稳定哈希值——同一会话内保持不变，重启后更新，便于日志关联分析同时保护隐私。房间 id 与该房间的主播名**共用同一个哈希值**，所以 `roomId=` 和它对应的名字在日志里是同一个标识。id 会在 `roomId=...` 键以及 http(s) URL 的数字路径段/文件名前缀里替换（`/hls/1001/master/1001_auto.m3u8`）；正文里其它裸数字不动。
 
 脱敏功能可通过 WebUI 工具栏中的眼睛图标实时切换，或通过 API 控制：
 
@@ -488,7 +488,7 @@ DEBUG v3.SessionEntry - roomId=206236901 playlist went from segment id 1023 to 1
 **会话接缝处不计入缺失**：时限切分、`Break`、重新激活之后，会话没有更早的观测可以对比；若把重启当作基线重置之外
 还去比较，就会把每一次正常的切分都误报成丢数据。
 
-每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认的 `DEBUG` 日志。
+每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认级别（`INFO`）的日志。
 读法是"播放列表提供的 M 个 id 中有 N 个已被覆盖，随后标记从 A 推进到 B"：
 
 ```

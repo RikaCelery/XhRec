@@ -41,6 +41,12 @@ data class RuntimeTuning(
      */
     val sessionStallTimeout: Duration = 90.seconds,
     /**
+     * Upper bound on a cut point. `CutPointDone` is delivered over the event bus, which may drop
+     * it, and the downloader may take up to [downloaderDeadline] to settle in-flight segments;
+     * past this the session ends on its own so a room can never be stranded in Stopping.
+     */
+    val sessionCutTimeout: Duration = 3.minutes,
+    /**
      * How long segments may keep being skipped by the resume mark (`lastSegmentId`) before the
      * session says so once at WARN. Short skips are normal after a cut and must stay silent; a
      * long one means the stream is behind the resume mark and nothing is being recorded.
