@@ -27,8 +27,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 
-sealed interface WriterMsg
-
 data class ActiveFile(
     val file: File,
     val eventFile: File,
@@ -67,7 +65,7 @@ class WriterComponent(
     private val minOutputBytes: Long = 1024,
     eventBus: EventBus,
     parentScope: CoroutineScope
-) : Actor<WriterMsg>("WriterComponent", eventBus, parentScope) {
+) : Actor<Unit>("WriterComponent", eventBus, parentScope) {
 
     private val files = ConcurrentHashMap<Long, ActiveFile>()
     private val timeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")
@@ -86,7 +84,7 @@ class WriterComponent(
         }
     }
 
-    override suspend fun handle(msg: WriterMsg) {}
+    override suspend fun handle(msg: Unit) {}
 
     private suspend fun handleStreamStart(msg: StreamStart) {
         val existing = files.remove(msg.roomId)

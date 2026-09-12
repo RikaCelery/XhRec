@@ -27,13 +27,6 @@ class ConfigComponent(
     eventBus: EventBus,
     parentScope: CoroutineScope
 ) : Actor<ConfigMsg>("ConfigComponent", eventBus, parentScope) {
-    companion object {
-        var instance: ConfigComponent? = null
-    }
-
-    init {
-        instance = this
-    }
 
     private val configFile = File(config.configPath)
     private var persistedStreamAuthKey: String = config.streamAuthKey
