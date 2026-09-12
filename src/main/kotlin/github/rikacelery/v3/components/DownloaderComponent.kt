@@ -217,9 +217,14 @@ class DownloaderComponent(
         }
         val idx = active.idx.incrementAndGet().toLong()
         logger.info("CutPoint roomId={}, index={}, reason={}", cut.roomId, cut.index, cut.reason)
-        // once this returns, StreamEnd is in the DataChannel FIFO; Session restart is safe only after that
-        active.emitter.completeAndAwait(idx, DownloadResult.CutPoint(cut))
-        eventBus.publish(CutPointDone(cut.roomId, cut.generation, cut.reason))
+        // The ordering guarantee is kept, but the wait is moved off the actor mailbox: the emitter
+        // still emits in index order, so CutPointDone is published only once StreamEnd has entered
+        // the DataChannel FIFO. Waiting inline here held the whole downloader mailbox until every
+        // earlier segment finished (up to downloaderDeadline), stalling other rooms' work.
+        workerScope.launch {
+            active.emitter.completeAndAwait(idx, DownloadResult.CutPoint(cut))
+            eventBus.publish(CutPointDone(cut.roomId, cut.generation, cut.reason))
+        }
     }
 
     /** Thrown when a download stalls; treated as transport error. */
