@@ -148,6 +148,16 @@ object GetSessions : Request {
 object GetArmedRoomIds : Request {
     override fun toString() = "GetArmedRoomIds"
 }
+/**
+ * Rooms whose scheduler is resolving the stream right now — token, quality and playlist URL.
+ *
+ * Recording only starts once that succeeds, so the dashboard must not report these rooms as
+ * recording: a session from an earlier incarnation can still be closing while the scheduler has
+ * already moved on to preconfiguration, and that stale session would otherwise read as `Recording`.
+ */
+object GetPreconfiguringRoomIds : Request {
+    override fun toString() = "GetPreconfiguringRoomIds"
+}
 object GetRoomDetailedStatus : Request {
     override fun toString() = "GetRoomDetailedStatus"
 }
@@ -164,8 +174,17 @@ data class DeductCoins(val userId: Long, val amount: Long) : Request {
 object ShutdownCmd : Request {
     override fun toString() = "ShutdownCmd"
 }
-data class RefreshRoomCmd(val roomId: Long) : Request {
-    override fun toString() = "RefreshRoomCmd(roomId=$roomId)"
+/**
+ * Re-read one room's status from the platform.
+ *
+ * [coalesce] marks a refresh that is a *hint* rather than a command: a session or a preconfig probe
+ * that saw a 403/404 wants a fresh status, but a room whose status was read moments ago (see
+ * `RuntimeTuning.roomStatusRefreshWindow`) is not read again until the tail of that window at the
+ * earliest. Activation leaves it `false`: the user asked for this room, so it always goes to the
+ * platform.
+ */
+data class RefreshRoomCmd(val roomId: Long, val coalesce: Boolean = false) : Request {
+    override fun toString() = "RefreshRoomCmd(roomId=$roomId, coalesce=$coalesce)"
 }
 
 // ── RequestBus responses ──

@@ -345,6 +345,7 @@ class HttpServerComponent(
                     val statuses = requestBus.request<Map<Long, Map<String, Any>>>(GetRoomDetailedStatus)
                     val sessions = requestBus.request<List<RoomSession>>(GetSessions)
                     val armedIds = requestBus.request<List<Long>>(GetArmedRoomIds).toSet()
+                    val preconfiguringIds = requestBus.request<List<Long>>(GetPreconfiguringRoomIds).toSet()
                     val metrics = metricComponent.prometheusText()
 
                     val json = Json { encodeDefaults = true }
@@ -361,7 +362,13 @@ class HttpServerComponent(
                             rooms.forEach { r ->
                                 val s = sessions.find { it.roomId == r.id }
                                 val isArmed = r.id in armedIds
-                                val isActive = s?.state == SessionState.Fetching || s?.state == SessionState.Recording
+                                // Preconfiguration is not recording. A session from an earlier
+                                // incarnation can still be closing while the scheduler has already
+                                // moved on — deactivate followed by re-activate — and reporting that
+                                // stale session as Recording would claim a recording that is not
+                                // running. Recording is only ever reported once preconfig succeeded.
+                                val isActive = r.id !in preconfiguringIds &&
+                                    (s?.state == SessionState.Fetching || s?.state == SessionState.Recording)
                                 add(buildJsonObject {
                                     put("session", buildJsonObject {
                                         put("status", when {
@@ -369,7 +376,7 @@ class HttpServerComponent(
                                             isArmed -> "Listening"
                                             else -> s?.state?.name ?: ""
                                         })
-                                        put("active", s?.state == SessionState.Recording)
+                                        put("active", isActive && s.state == SessionState.Recording)
                                         put("quality", s?.quality ?: "")
                                         put("startTime", if (isActive) s.startTime.toEpochMilli() else 0L)
                                     })

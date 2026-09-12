@@ -399,7 +399,9 @@ class SessionEntry(
 
     private suspend fun refreshRoomStatus() {
         try {
-            component.requestBus.request<OkResponse>(RefreshRoomCmd(roomId))
+            // coalesce: the room may fail preconfig right after this session, and that second
+            // failure means the same thing as this one
+            component.requestBus.request<OkResponse>(RefreshRoomCmd(roomId, coalesce = true))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

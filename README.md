@@ -544,7 +544,15 @@ WARN  v3.SchedulerEntry - Preconfig failed room=…: playlist unusable (HTTP 404
 
 The first is the stall watchdog ending a session that made no progress for `sessionStallTimeout`,
 after which the room re-runs preconfiguration. The second is a preconfig probe that could not use
-the variant playlist — an HTTP status, a probe timeout, or a request failure.
+the variant playlist — an HTTP status, a probe timeout, or a request failure. A 403 or 404
+additionally makes the scheduler ask the RoomComponent to re-read the room: the platform already
+handed out a token, so the CDN refusing the playlist means the show moved on, and the refreshed
+status re-arms a room that stopped being recordable instead of retrying a stream that is gone. A
+session that fails just before preconfig asks for the same room, so a hint does not become a second
+platform request: the first failure reads the room immediately, and the hints that follow inside
+`roomStatusRefreshWindow` collapse into a single catch-up read at the end of that window — debounced,
+but never dropped, so a status that moved just after the first read is still noticed. Activation is
+a command rather than a hint, so it always reads, and it arms the same window for the hints after it.
 
 When the log alone is not enough, `/diagnose` exposes the same state interactively; see
 [Diagnostics & Debug Stream](#diagnostics--debug-stream).

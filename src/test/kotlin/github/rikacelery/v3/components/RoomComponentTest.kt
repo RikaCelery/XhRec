@@ -28,15 +28,18 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 class RoomComponentTest {
 
@@ -92,6 +95,72 @@ class RoomComponentTest {
         )
         component.stop()
         mockServer.close()
+    }
+
+    /**
+     * A session whose playlist turns 403/404 and, a moment later, the preconfig probe that does the
+     * same are two reports of one event. The first reads the room; the second is a hint, so it must
+     * not become a second platform request *and* must not be thrown away either: it queues exactly
+     * one catch-up read for the tail of the window, which is what notices a status that moved after
+     * the first read. Activation is a command, not a hint: it always reads, and it arms the window
+     * that absorbs the hints after it.
+     */
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `a burst of failure-driven refreshes reads one room once per window`() = runTest(UnconfinedTestDispatcher()) {
+        val reads = AtomicInteger()
+        val eventBus = EventBus()
+        val requestBus = RequestBus(eventBus, backgroundScope)
+        val component = RoomComponent(
+            apiClient = ApiClient(),
+            listConfPath = Files.createTempFile("xhrec-room-coalesce", ".conf").toString(),
+            requestBus = requestBus,
+            eventBus = eventBus,
+            parentScope = backgroundScope,
+            runtimeTuning = RuntimeTuning(
+                roomPollInterval = Duration.INFINITE,
+                roomStatusRefreshWindow = 1.seconds
+            ),
+            roomStatusFetcher = {
+                reads.incrementAndGet()
+                "public"
+            }
+        )
+        component.start()
+        advanceUntilIdle()
+        component.internalAdd(1, "model", RoomSettings())
+
+        suspend fun hint(id: Long) {
+            component.handle(HandleRoomCommand(CommandEnvelope(id, RefreshRoomCmd(1, coalesce = true))))
+        }
+
+        hint(1)
+        hint(2)
+        hint(3)
+        runCurrent()
+        assertEquals(1, reads.get(), "only the first hint reads immediately")
+
+        advanceTimeBy(1001)
+        runCurrent()
+        assertEquals(2, reads.get(), "the hints inside the window still cause one catch-up read")
+
+        advanceTimeBy(1001)
+        runCurrent()
+        assertEquals(2, reads.get(), "a window with no further hint reads nothing more")
+
+        component.handle(HandleRoomCommand(CommandEnvelope(4, RefreshRoomCmd(1))))
+        runCurrent()
+        assertEquals(3, reads.get(), "activation is a command: it reads even inside the window")
+
+        hint(5)
+        runCurrent()
+        assertEquals(3, reads.get(), "a hint right after a forced read is coalesced too")
+
+        advanceTimeBy(1001)
+        runCurrent()
+        assertEquals(4, reads.get(), "and its catch-up read still happens")
+
+        component.stop()
     }
 
     @Test

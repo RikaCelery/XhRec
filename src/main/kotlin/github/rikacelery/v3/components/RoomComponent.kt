@@ -49,6 +49,21 @@ class RoomComponent(
     private var ready = false
     private var saveDebounceJob: Job? = null
     private var refreshDebounceJob: Job? = null
+
+    /**
+     * Rooms whose status was read within the last [RuntimeTuning.roomStatusRefreshWindow], so a
+     * burst of failure-driven refreshes (see [RefreshRoomCmd.coalesce]) cannot become a burst of
+     * platform requests. Each entry is removed once its window job completes.
+     */
+    private val refreshWindows = ConcurrentHashMap<Long, Job>()
+
+    /**
+     * Rooms that saw a coalesced hint during their window. One catch-up read at the window's tail
+     * is enough no matter how many hints landed, and it is what keeps the debounce from *losing* a
+     * status change: the first read happens immediately, the catch-up covers whatever moved after
+     * it, so the room does not have to wait for the next failure or the poll to notice.
+     */
+    private val catchUpRefreshes = ConcurrentHashMap<Long, Boolean>()
     private val saveLock = Mutex()
 
     @Volatile
@@ -233,7 +248,7 @@ class RoomComponent(
             is RefreshRoomCmd -> {
                 val room = rooms[cmd.roomId]
                     ?: throw NoSuchElementException("room ${cmd.roomId} not found")
-                refreshRoomStatus(room)
+                refreshRoomStatus(room, cmd.coalesce)
                 OkResponse
             }
 
@@ -263,7 +278,39 @@ class RoomComponent(
         }
     }
 
-    private suspend fun refreshRoomStatus(room: Room) {
+    /**
+     * Reads one room's status now, unless it was just read.
+     *
+     * A `coalesce` refresh is the failure-driven hint a session or a preconfig probe sends when its
+     * playlist turns 403/404: the two failures usually land within a second of each other for the
+     * same room and mean the same thing, so only the first one reads. The hint is not thrown away,
+     * though — it queues one catch-up read for the tail of [RuntimeTuning.roomStatusRefreshWindow],
+     * so a status that moved just after the first read is still noticed promptly. A forced refresh
+     * (activation) always reads, and it arms the same window for the hints that follow it.
+     */
+    private suspend fun refreshRoomStatus(room: Room, coalesce: Boolean) {
+        if (coalesce && refreshWindows[room.id]?.isActive == true) {
+            if (catchUpRefreshes.putIfAbsent(room.id, true) == null) {
+                logger.debug("refreshRoom: room {} was just read, deferring one catch-up read", room.id)
+            }
+            return
+        }
+        readRoomStatus(room)
+    }
+
+    private suspend fun readRoomStatus(room: Room) {
+        catchUpRefreshes.remove(room.id)
+        // Arm before the request so two hints that arrive back to back cannot both reach the
+        // platform: the second one sees this window even while the first read is in flight.
+        val window = scope.launch {
+            delay(runtimeTuning.roomStatusRefreshWindow)
+            if (catchUpRefreshes.remove(room.id) != null) {
+                logger.debug("refreshRoom: catch-up read for room {} after the debounce window", room.id)
+                readRoomStatus(room)
+            }
+        }
+        refreshWindows[room.id] = window
+        window.invokeOnCompletion { refreshWindows.remove(room.id, window) }
         val status = roomStatusFetcher(room.name)
         val current = rooms[room.id] ?: return
         if (status != current.status) {
