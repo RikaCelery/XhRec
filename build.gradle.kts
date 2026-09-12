@@ -53,7 +53,12 @@ tasks.test {
     // SensitiveStringRegistry, PredictionSampleStore), so two fixtures in the same JVM would
     // collide. Every fixture binds ephemeral ports (port 0) and its own temp directory, and the
     // test logback config keeps them off the shared logs/xhrec.log, so forks are independent.
-    // Kept modest: each fork loads Netty/Ktor and the recorder, and CI runners are small.
-    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 3)
+    //
+    // Measured on an 8-core box (whole suite, 308 tests): 1 fork 107s, 2 → 81s, 3 → 41s,
+    // 4 → 46s, 6 → 35-45s, 8 → 42-45s; wall time plateaus from ~6 forks on. Default to one fork
+    // per CPU capped at 8, overridable with -PtestForks=N.
+    maxParallelForks = providers.gradleProperty("testForks").map { it.toInt() }.getOrElse(
+        Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+    )
     maxHeapSize = "768m"
 }
