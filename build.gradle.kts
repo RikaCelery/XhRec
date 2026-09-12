@@ -34,7 +34,7 @@ dependencies {
     implementation("io.ktor:ktor-client-content-negotiation-jvm:3.5.2")
 
     implementation("io.github.nomisrev:kotlinx-serialization-jsonpath:1.0.0")
-    implementation("org.jsoup:jsoup:1.22.1")
+    implementation("org.jsoup:jsoup:1.23.2")
     implementation("commons-cli:commons-cli:1.11.0")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
