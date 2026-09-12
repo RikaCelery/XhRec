@@ -277,6 +277,7 @@ curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries
       "segmentIndex": 0,
       "lastSegmentId": 1750,
       "lastPollSegmentCount": 3,
+      "lastPollSkipped": 2,
       "lastPollEnqueuedMedia": false,
       "playlistLoopRunning": true,
       "skipStreak": { "skipped": 987, "minId": 1002, "maxId": 1004, "reported": true },
@@ -293,6 +294,7 @@ otherwise invisible:
 | --- | --- |
 | `lastPollSegmentCount` | media segments the last playlist actually advertised |
 | `lastPollEnqueuedMedia` | whether any of them was queued for download |
+| `lastPollSkipped` | how many were skipped as already covered by the resume mark (normal) |
 | `lastSegmentId` | the resume mark; segments with an id at or below it are skipped |
 | `noProgressMs` | how long since the session last queued or received anything |
 
@@ -487,26 +489,30 @@ level regardless.
 
 ### Diagnosing a stalled recording
 
-A session that keeps polling a healthy playlist without downloading anything now says so — once —
-instead of looking like a normal recording:
+**Skipping is the normal steady state, not a fault.** The media playlist is a sliding window that
+re-lists segments already written, so every healthy poll skips the overlap and enqueues only what is
+new. Those skips are counted in `xhrec_segments_skipped_total{roomId=…}`, which therefore rises
+steadily for *any* room that is recording. The signal to watch is that counter climbing while
+`xhrec_downloaded_total` stands still.
+
+Per-poll detail is at `TRACE` — opt-in from the WebUI toolbar or `POST /log/level` — so it does not
+clutter the default `DEBUG` log:
 
 ```
-WARN  v3.SessionEntry - roomId=206236901 recording stalled behind the resume mark: every advertised
-      segment id (1002..1004) is <= lastSegmentId=1750; 987 segment(s) skipped over 1932s and nothing downloaded
-INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 segment(s)
-      (id 1002..1789) were skipped, recording resumed
+TRACE v3.SessionEntry - roomId=206236901 skipped 3 segment(s) at or below the resume mark (id 1002..1004, lastSegmentId=1750)
 ```
 
-The resume mark (`lastSegmentId`) exists so a cut inside one stream does not re-download what was
-just written, so short overlaps after an ordinary cut stay silent; only a *persistent* streak is
-reported. At `DEBUG` you also get one aggregated line per poll, which shows *which* ids were dropped
-without logging per segment:
+When nothing new has arrived for `thresholdSkipLogDelay`, the session says so **once**, and says what
+actually happened rather than a count of skip events (the same ids repeat on every poll, so a running
+total would overstate it badly):
 
 ```
-DEBUG v3.SessionEntry - roomId=206236901 skipped 3 segment(s) at or below the resume mark (range 1002..1004, lastSegmentId=1750)
+WARN  v3.SessionEntry - roomId=170139817 no new segments for 32s: the playlist still advertises only id 1025..1027, all already covered by the resume mark (1027)
+INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 skip event(s) (id 1002..1789), recording resumed
 ```
 
-Two further lines are worth recognising:
+Short overlaps after an ordinary cut stay silent; only a *persistent* streak is reported. Two further
+lines are worth recognising:
 
 ```
 WARN  v3.SessionEntry - Recording stalled roomId=…: no segment for 90s (playlist carries 0 media segment(s));

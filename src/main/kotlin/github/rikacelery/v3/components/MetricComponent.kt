@@ -36,6 +36,8 @@ data class RoomMetrics(
     val totalLatencyMs: AtomicLong = AtomicLong(0),
     val fileCount: AtomicLong = AtomicLong(0),
     val segmentMissing: AtomicLong = AtomicLong(0),
+    /** Playlist entries skipped because the resume mark already covered them (never reset). */
+    val segmentsSkipped: AtomicLong = AtomicLong(0),
     val runningUrls: ConcurrentHashMap<String, RunningUrlInfo> = ConcurrentHashMap()
 )
 
@@ -58,6 +60,7 @@ class MetricComponent(
         is DownloadError -> OnMetricEvent(event)
         is DownloadStarted -> OnMetricEvent(event)
         is SegmentGapDetected -> OnMetricEvent(event)
+        is SegmentsSkipped -> OnMetricEvent(event)
         is FileReady -> OnMetricEvent(event)
         is FileProcessed -> OnMetricEvent(event)
         is PlaylistRefreshed -> OnMetricEvent(event)
@@ -128,6 +131,10 @@ class MetricComponent(
 
                 is SegmentGapDetected -> {
                     metrics.getOrPut(e.roomId) { RoomMetrics() }.segmentMissing.set(e.gap.toLong())
+                }
+
+                is SegmentsSkipped -> {
+                    metrics.getOrPut(e.roomId) { RoomMetrics() }.segmentsSkipped.addAndGet(e.count.toLong())
                 }
 
                 is FileReady -> {
@@ -209,6 +216,9 @@ class MetricComponent(
             sb.appendLine("# HELP xhrec_segment_missing_total Missing segments")
             sb.appendLine("# TYPE xhrec_segment_missing_total counter")
             sb.appendLine("xhrec_segment_missing_total{roomId=\"$roomId\"} ${m.segmentMissing.get()}")
+            sb.appendLine("# HELP xhrec_segments_skipped_total Playlist entries already covered by the resume mark")
+            sb.appendLine("# TYPE xhrec_segments_skipped_total counter")
+            sb.appendLine("xhrec_segments_skipped_total{roomId=\"$roomId\"} ${m.segmentsSkipped.get()}")
             sb.appendLine("# HELP xhrec_files_total Files produced")
             sb.appendLine("# TYPE xhrec_files_total counter")
             sb.appendLine("xhrec_files_total{roomId=\"$roomId\"} ${m.fileCount.get()}")

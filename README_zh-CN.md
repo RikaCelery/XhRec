@@ -269,6 +269,7 @@ curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries
       "segmentIndex": 0,
       "lastSegmentId": 1750,
       "lastPollSegmentCount": 3,
+      "lastPollSkipped": 2,
       "lastPollEnqueuedMedia": false,
       "playlistLoopRunning": true,
       "skipStreak": { "skipped": 987, "minId": 1002, "maxId": 1004, "reported": true },
@@ -284,6 +285,7 @@ curl -sk "https://localhost:8090/diagnose?actor=SessionComponent&section=entries
 | --- | --- |
 | `lastPollSegmentCount` | 最近一次播放列表实际提供了多少个媒体分片 |
 | `lastPollEnqueuedMedia` | 其中是否有分片被真正排入下载队列 |
+| `lastPollSkipped` | 其中有多少因已被续传标记覆盖而跳过（正常现象） |
 | `lastSegmentId` | 续传标记；id 小于等于它的分片会被跳过 |
 | `noProgressMs` | 距离上一次排入或收到数据已经过了多久 |
 
@@ -470,24 +472,25 @@ curl -k https://localhost:8090/mask/status     # 查看当前状态
 
 ### 排查卡住的录制
 
-如果会话一直在轮询、播放列表也正常，却什么都没下载，现在会**明确报出来**（只报一次），而不是看起来一切正常：
+**跳过（skipped）是正常稳态，不是故障。** 播放列表是滑动窗口，每次轮询都会重复列出刚写过的分片，所以任何
+健康录制都会跳过重叠部分、只下载新增的。这些跳过次数计入 `xhrec_segments_skipped_total{roomId=…}`，因此对
+**任何正在录制的房间**它都会持续增长。真正要看的信号是：这个计数器在涨、而 `xhrec_downloaded_total` 不动。
+
+每次轮询的明细在 `TRACE`（可在 WebUI 工具栏或 `POST /log/level` 打开），所以不会污染默认的 `DEBUG` 日志：
 
 ```
-WARN  v3.SessionEntry - roomId=206236901 recording stalled behind the resume mark: every advertised
-      segment id (1002..1004) is <= lastSegmentId=1750; 987 segment(s) skipped over 1932s and nothing downloaded
-INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 segment(s)
-      (id 1002..1789) were skipped, recording resumed
+TRACE v3.SessionEntry - roomId=206236901 skipped 3 segment(s) at or below the resume mark (id 1002..1004, lastSegmentId=1750)
 ```
 
-续传标记（`lastSegmentId`）的作用是让同一条流内的切分不必重复下载已经写入的分片，所以普通切分后的短暂重叠
-是静默的；只有**持续**追不上才会报告。把等级调到 `DEBUG` 还能看到每次轮询的聚合行——它会告诉你被丢掉的
-具体是哪些 id，而不会为每个分片打一行日志：
+当超过 `thresholdSkipLogDelay` 一直没有新分片时，会话会**报告一次**，并且说的是真正发生的事，而不是累计的
+跳过事件数（同一批 id 每次轮询都会被重复计数，累计值会严重夸大）：
 
 ```
-DEBUG v3.SessionEntry - roomId=206236901 skipped 3 segment(s) at or below the resume mark (range 1002..1004, lastSegmentId=1750)
+WARN  v3.SessionEntry - roomId=170139817 no new segments for 32s: the playlist still advertises only id 1025..1027, all already covered by the resume mark (1027)
+INFO  v3.SessionEntry - roomId=206236901 caught up with the resume mark after 2154s; 1102 skip event(s) (id 1002..1789), recording resumed
 ```
 
-另外两类值得留意的日志：
+普通切分后的短暂重叠是静默的，只有**持续**无新分片才会报告。另外两类值得留意的日志：
 
 ```
 WARN  v3.SessionEntry - Recording stalled roomId=…: no segment for 90s (playlist carries 0 media segment(s));

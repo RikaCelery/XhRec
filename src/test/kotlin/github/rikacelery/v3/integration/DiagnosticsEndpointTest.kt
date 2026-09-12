@@ -107,6 +107,21 @@ class DiagnosticsEndpointTest {
     }
 
     @Test
+    fun `skips behind the resume mark are visible in the metrics too`() = withFixture { fx ->
+        fx.ready()
+        fx.startRecording()
+
+        // A recording re-lists segments it already wrote, so its skip counter must move. Without
+        // this the log and the metrics disagree, which reads as a false alarm.
+        val skipped = fx.await(10.seconds, "the segments-skipped counter to move") {
+            val body = fx.get("/metrics").bodyAsText()
+            Regex("""xhrec_segments_skipped_total\{roomId="1001"\} (\d+)""")
+                .find(body)?.groupValues?.get(1)?.toLong()?.takeIf { it > 0 }
+        }
+        assertTrue(skipped > 0, "skips must be counted, got $skipped")
+    }
+
+    @Test
     fun `an unknown actor is reported as not found`() = withFixture { fx ->
         val response = fx.get("/diagnose?actor=NoSuchComponent")
         assertEquals(HttpStatusCode.NotFound, response.status)

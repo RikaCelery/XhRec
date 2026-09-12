@@ -50,6 +50,7 @@ class SessionSkipAccountingTest {
                 assertEquals(2L, entry.skippedInStreak)
                 assertEquals(100L, entry.skippedMinId)
                 assertEquals(150L, entry.skippedMaxId)
+                assertEquals(2, entry.lastPollSkipped, "the poll's skip count is what reaches the metrics")
                 assertNotNull(entry.skipStreakSince)
             } finally {
                 entry.scope.cancel()
