@@ -6,7 +6,7 @@ import github.rikacelery.v3.data.User
 import github.rikacelery.v3.events.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -41,12 +41,17 @@ class AuthComponent(
         is OnAuthEvent -> when (msg.event) {
             is AuthExpired -> { users.remove(msg.event.userId); logger.info("User ${msg.event.userId} expired, removed") }
             is PersistConfig -> {
-                try {
-                    val content = users.values.joinToString("\n") { it.cookie }
-                    withContext(Dispatchers.IO) { File(usersPath).writeText(content) }
-                } catch (e: Exception) {
-                    logger.error("Failed to save users.txt: ${e.message}", e)
+                // Disk IO belongs off the actor mailbox: a slow write must not delay auth commands.
+                // Same pattern as ConfigComponent's saves.
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val content = users.values.joinToString("\n") { it.cookie }
+                        File(usersPath).writeText(content)
+                    } catch (e: Exception) {
+                        logger.error("Failed to save users.txt: ${e.message}", e)
+                    }
                 }
+                Unit
             }
             else -> {}
         }
