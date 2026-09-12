@@ -82,6 +82,10 @@ class PipelineMetricsIntegrationTest {
             Regex("""xhrec_room_last_progress_seconds\{roomId="1001"\} [\d.]+""").containsMatchIn(metrics),
             "the progress clock is what makes a stalled room alertable without a window function"
         )
+        assertTrue(
+            Regex("""xhrec_room_resume_mark_ahead\{roomId="1001"\} \d+""").containsMatchIn(metrics),
+            "a continuous gauge for the resume-mark backlog beats alerting on a sparse counter"
+        )
     }
 
     @Test

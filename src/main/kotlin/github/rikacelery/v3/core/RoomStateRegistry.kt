@@ -27,6 +27,7 @@ object RoomStateRegistry {
         @Volatile var hintCode: String? = null
         @Volatile var sessionState: String = ""
         @Volatile var lastProgressAtMs: Long = 0L
+        @Volatile var resumeMarkAhead: Long = 0L
     }
 
     private val rooms = ConcurrentHashMap<Long, RoomState>()
@@ -84,6 +85,9 @@ object RoomStateRegistry {
                 sb.appendLine("xhrec_room_last_progress_seconds{roomId=\"$id\"} $ageSeconds")
             }
         }
+
+        family(sb, "xhrec_room_resume_mark_ahead", "How far the resume mark leads the newest advertised segment id", "gauge")
+        rooms.forEach { (id, room) -> sb.appendLine("xhrec_room_resume_mark_ahead{roomId=\"$id\"} ${room.resumeMarkAhead}") }
     }
 
     private fun family(sb: StringBuilder, name: String, help: String, type: String) {

@@ -774,6 +774,7 @@ class SessionComponent(
         RoomStateRegistry.update(sig.roomId) {
             sessionState = e.fsm.currentState.name
             lastProgressAtMs = e.lastProgressAt.toEpochMilli()
+            resumeMarkAhead = e.lastPollMarkAhead
         }
     }
 
