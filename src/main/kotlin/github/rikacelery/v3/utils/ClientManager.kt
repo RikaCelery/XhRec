@@ -19,12 +19,47 @@ object ClientManager {
     private val logger = LoggerFactory.getLogger(ClientManager::class.java)
 
     /**
+     * The human-paced clients: a playlist, master or preconfig request every few seconds. They are
+     * the ones where a pooled connection can sit idle long enough for the peer (or a proxy) to drop
+     * it silently, so they get a shorter idle policy, HTTP/2 keep-alive pings and connection
+     * telemetry. The bulk segment clients (`dl_`/`px_`) keep the default pool and stay untouched:
+     * an [okhttp3.EventListener] and a ping timer on a path doing hundreds of requests per second
+     * is pure overhead, and their own stall watchdog already abandons dead connections.
+     */
+    private fun isStreamKey(key: String): Boolean =
+        key.startsWith("m3u8_") || key.startsWith("master_") || key.startsWith("preconfig_")
+
+    /** Role label for [HttpConnectionStats]; keep the set small, it labels metrics. */
+    private fun roleOf(key: String): String = when {
+        key.startsWith("m3u8_") -> "playlist"
+        key.startsWith("master_") -> "master"
+        key.startsWith("preconfig_") -> "preconfig"
+        key.startsWith("dl_") -> "download"
+        key.startsWith("px_") -> "proxy"
+        else -> "other"
+    }
+
+    /**
+     * A stream client polls every few seconds, so a connection idle for more than 30s is not doing
+     * useful work — but it can still be a socket the peer quietly dropped, and handing that to the
+     * next poll costs a full timeout. Dropping it early costs one handshake that would have to
+     * happen anyway. Bulk clients keep the default 5 minutes.
+     */
+    private fun newPool(stream: Boolean): ConnectionPool =
+        if (stream) ConnectionPool(4, 30, TimeUnit.SECONDS)
+        else ConnectionPool(16, 5, TimeUnit.MINUTES)
+
+    /**
      * http1=true forces HTTP/1.1 — required for the stripchat.com WAF: its HTTP/2
      * fingerprint check rejects OkHttp (non-browser h2), while HTTP/1.1 + browser
      * navigation headers passes. CDN clients (doppiocdn.org) keep HTTP/2.
      */
     private fun clientDirect(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient {
-        val pool = ConnectionPool(16, 5, TimeUnit.MINUTES)
+        val stream = isStreamKey(key)
+        // Created once and captured: Ktor derives a separate OkHttpClient per request-timeout
+        // profile, and they must share this pool or connection reuse would be lost per profile.
+        val pool = newPool(stream)
+        val listener = if (stream) ConnectionStatsListener(roleOf(key)) else null
         logger.debug("create direct client key={} http1={} expectSuccess={}", key, http1, expectSuccess)
         return HttpClient(OkHttp) {
             configureClient()
@@ -35,13 +70,21 @@ object ClientManager {
                     followSslRedirects(true)
                     followRedirects(true)
                     if (http1) protocols(listOf(Protocol.HTTP_1_1))
+                    if (listener != null) {
+                        // PINGs notice a connection the peer dropped without a GOAWAY/RST; ignored
+                        // on HTTP/1.1.
+                        pingInterval(20, TimeUnit.SECONDS)
+                        eventListener(listener)
+                    }
                 }
             }
         }
     }
 
     private fun clientProxied(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient {
-        val pool = ConnectionPool(16, 5, TimeUnit.MINUTES)
+        val stream = isStreamKey(key)
+        val pool = newPool(stream)
+        val listener = if (stream) ConnectionStatsListener(roleOf(key)) else null
         val proxyEnv = System.getenv("http_proxy") ?: System.getenv("HTTP_PROXY")
         logger.info("create proxied client key={} proxy={} http1={} expectSuccess={}", key, proxyEnv, http1, expectSuccess)
         return HttpClient(OkHttp) {
@@ -64,6 +107,10 @@ object ClientManager {
                     followSslRedirects(true)
                     followRedirects(true)
                     if (http1) protocols(listOf(Protocol.HTTP_1_1))
+                    if (listener != null) {
+                        pingInterval(20, TimeUnit.SECONDS)
+                        eventListener(listener)
+                    }
                 }
             }
         }
@@ -136,15 +183,30 @@ object ClientManager {
         }
     }
 
-    /** Close and remove the per-room clients created for a recording session. */
-    fun removeRoomClients(roomId: Long) {
+    /**
+     * Close and forget a client, so its pooled connections die with it and the next request dials
+     * fresh. Called when a request failed on a connection that may itself be the problem, and when
+     * a room's streams end: a client kept across sessions would keep handing the same dead pooled
+     * connection to every retry.
+     */
+    fun removeClient(key: String) {
         synchronized(lock) {
-            listOf("m3u8_$roomId", "master_$roomId").forEach { key ->
-                clientsProxied.remove(key)?.let { client ->
-                    runCatching { client.close() }
-                    logger.info("Closed per-room client {}", key)
-                }
+            clientsProxied.remove(key)?.let { client ->
+                runCatching { client.close() }
+                logger.debug("Evicted proxied client {}", key)
             }
+            clientsDirect.remove(key)?.let { client ->
+                runCatching { client.close() }
+                logger.debug("Evicted direct client {}", key)
+            }
+        }
+    }
+
+    /** Close and remove every client a room's recording may have created. */
+    fun removeRoomClients(roomId: Long) {
+        listOf("m3u8_$roomId", "master_$roomId", "preconfig_$roomId").forEach { key ->
+            synchronized(lock) { if (clientsProxied.containsKey(key)) logger.info("Closed per-room client {}", key) }
+            removeClient(key)
         }
     }
 

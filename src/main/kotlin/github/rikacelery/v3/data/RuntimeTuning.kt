@@ -24,6 +24,16 @@ data class RuntimeTuning(
     val playlistPollInterval: Duration = 3.seconds,
     val playlistFetchTimeout: Duration = 10.seconds,
     /**
+     * Per-attempt read/connect timeout for a playlist request, applied as an HTTP-engine timeout.
+     *
+     * Deliberately smaller than [playlistFetchTimeout]: a pooled connection that stopped answering
+     * must be aborted by the engine (which drops it and lets the retry dial a fresh one) instead of
+     * consuming the whole fetch budget as one coroutine cancellation that no retry can observe.
+     * Size it against the real warm latency (a reused connection answers in well under a second) —
+     * too small turns a merely slow CDN into a host rotation.
+     */
+    val playlistAttemptTimeout: Duration = 4.seconds,
+    /**
      * How long a recording session may go without a single new media segment before it is
      * considered stalled. A playlist that only advertises `#EXT-X-MAP` (init) and no
      * `#EXT-X-MOUFLON` segments keeps the session in `Recording` while nothing is downloaded, so

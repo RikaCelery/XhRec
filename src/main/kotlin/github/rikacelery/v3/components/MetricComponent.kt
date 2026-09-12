@@ -4,6 +4,7 @@ import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.HttpConnectionStats
 import github.rikacelery.v3.utils.ModelSchedule
 import kotlinx.coroutines.CoroutineScope
 import java.util.concurrent.ConcurrentHashMap
@@ -248,6 +249,7 @@ class MetricComponent(
             sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
         }
         // CDN host duration metrics
+        val now = System.currentTimeMillis()
         val cdnStats = CdnSelector.snapshot()
         cdnStats.forEach { (host, stat) ->
             val durLabel = if (stat.estimatedDurationMs.isNaN()) "-1" else stat.estimatedDurationMs.toLong().toString()
@@ -263,6 +265,48 @@ class MetricComponent(
             sb.appendLine("# HELP xhrec_cdn_total_errors CDN host total errors")
             sb.appendLine("# TYPE xhrec_cdn_total_errors counter")
             sb.appendLine("xhrec_cdn_total_errors{host=\"$host\"} ${stat.totalErrors}")
+            sb.appendLine("# HELP xhrec_cdn_playlist_failures CDN host consecutive playlist fetch failures")
+            sb.appendLine("# TYPE xhrec_cdn_playlist_failures gauge")
+            sb.appendLine("xhrec_cdn_playlist_failures{host=\"$host\"} ${stat.playlistFailures}")
+            sb.appendLine("# HELP xhrec_cdn_playlist_cooldown CDN host cooling down for playlists (1) or not (0)")
+            sb.appendLine("# TYPE xhrec_cdn_playlist_cooldown gauge")
+            sb.appendLine("xhrec_cdn_playlist_cooldown{host=\"$host\"} ${if (stat.playlistCooldownUntil > now) 1 else 0}")
+        }
+
+        // Connection-level telemetry for the human-paced clients (playlist / master / preconfig),
+        // which is what separates the two causes of a playlist timeout:
+        //   reused climbing and waitHeadersAvg ≈ the per-attempt timeout -> dead pooled connection
+        //   newConnections climbing and connectAvg high                 -> host/edge is slow to dial
+        // The first is answered by the client eviction, the second by rotating the host.
+        val connStats = HttpConnectionStats.snapshot()
+        if (connStats.isNotEmpty()) {
+            sb.appendLine("# HELP xhrec_http_requests_total Requests observed on a human-paced HTTP client")
+            sb.appendLine("# TYPE xhrec_http_requests_total counter")
+            sb.appendLine("# HELP xhrec_http_new_connections_total Connections dialed for those requests")
+            sb.appendLine("# TYPE xhrec_http_new_connections_total counter")
+            sb.appendLine("# HELP xhrec_http_reused_connections_total Requests served from a pooled connection")
+            sb.appendLine("# TYPE xhrec_http_reused_connections_total counter")
+            sb.appendLine("# HELP xhrec_http_connect_seconds_total Time spent dialing those connections")
+            sb.appendLine("# TYPE xhrec_http_connect_seconds_total counter")
+            sb.appendLine("# HELP xhrec_http_wait_headers_seconds_total Time from request headers to response headers")
+            sb.appendLine("# TYPE xhrec_http_wait_headers_seconds_total counter")
+            sb.appendLine("# HELP xhrec_http_failures_total Failed calls, by failure phase")
+            sb.appendLine("# TYPE xhrec_http_failures_total counter")
+            sb.appendLine("# HELP xhrec_http_timeouts_total Failed calls that were timeouts")
+            sb.appendLine("# TYPE xhrec_http_timeouts_total counter")
+            sb.appendLine("# HELP xhrec_http_cancelled_total Calls cancelled before completion")
+            sb.appendLine("# TYPE xhrec_http_cancelled_total counter")
+            connStats.forEach { s ->
+                val labels = "role=\"${s.role}\",host=\"${s.host}\""
+                sb.appendLine("xhrec_http_requests_total{$labels} ${s.requests}")
+                sb.appendLine("xhrec_http_new_connections_total{$labels} ${s.newConnections}")
+                sb.appendLine("xhrec_http_reused_connections_total{$labels} ${s.reusedConnections}")
+                sb.appendLine("xhrec_http_connect_seconds_total{$labels} ${s.connectMsTotal / 1000.0}")
+                sb.appendLine("xhrec_http_wait_headers_seconds_total{$labels} ${s.waitHeadersMsTotal / 1000.0}")
+                sb.appendLine("xhrec_http_failures_total{$labels} ${s.failures}")
+                sb.appendLine("xhrec_http_timeouts_total{$labels} ${s.timeouts}")
+                sb.appendLine("xhrec_http_cancelled_total{$labels} ${s.cancelled}")
+            }
         }
 
         return sb.toString()

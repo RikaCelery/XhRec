@@ -20,6 +20,8 @@ class RuntimeTuningTest {
         assertEquals(15.seconds, tuning.preconfigRetryInterval)
         assertEquals(3.seconds, tuning.playlistPollInterval)
         assertEquals(10.seconds, tuning.playlistFetchTimeout)
+        // per-attempt engine timeout must stay below the whole-fetch watchdog
+        assertEquals(4.seconds, tuning.playlistAttemptTimeout)
         assertEquals(500.milliseconds, tuning.httpRestartDelay)
         assertEquals(8.seconds, tuning.downloaderRaceDelay)
         assertEquals(25.seconds, tuning.downloaderAttemptTimeout)

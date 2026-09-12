@@ -103,6 +103,15 @@ object CdnSelector {
         @Volatile var cooldownUntil: Long = 0L,
         @Volatile var lastDurationMs: Long = 0L,
 
+        /**
+         * Playlist-specific failure state, kept out of [failures]/[cooldownUntil] on purpose:
+         * [record] clears those on *any* success, and the bulk segment traffic of the other rooms
+         * would wipe a playlist penalty within milliseconds. Only a playlist success clears these.
+         */
+        @Volatile var playlistFailures: Int = 0,
+        @Volatile var playlistErrors: Int = 0,
+        @Volatile var playlistCooldownUntil: Long = 0L,
+
         /** Recent samples for anomaly detection (ring buffer, last 20). */
         @Volatile var recentDurations: LongArray = LongArray(20),
         @Volatile var recentIdx: Int = 0,
@@ -262,6 +271,45 @@ object CdnSelector {
         }
         try { PredictionEngine.onCdnFailure(host, now) } catch (_: Exception) { }
     }
+
+    /**
+     * Record a failed *playlist* fetch (variant or master playlist: transport error, timeout).
+     *
+     * Counted apart from [recordFailure] because a playlist and a segment exercise a host
+     * differently, and because the segment successes of every other room would otherwise clear the
+     * playlist penalty before it could ever trigger. Only [recordPlaylistSuccess] clears it.
+     *
+     * Business rejections (403/404: the room moved on) must NOT come through here — those say
+     * nothing about the host.
+     */
+    fun recordPlaylistFailure(host: String, now: Long = System.currentTimeMillis()) {
+        val stat = stats.computeIfAbsent(host) { HostStat() }
+        synchronized(stat) {
+            stat.playlistFailures++
+            stat.playlistErrors++
+            if (stat.playlistFailures >= CONSECUTIVE_FAILURE_THRESHOLD) {
+                val excess = stat.playlistFailures - CONSECUTIVE_FAILURE_THRESHOLD
+                val backoff = (BASE_COOLDOWN_MS * 2.0.pow(excess.coerceAtMost(5))).toLong()
+                    .coerceAtMost(MAX_COOLDOWN_MS)
+                stat.playlistCooldownUntil = now + backoff
+            }
+        }
+    }
+
+    /** A playlist was served: this host is healthy for playlists again. */
+    fun recordPlaylistSuccess(host: String) {
+        stats[host]?.let { stat ->
+            synchronized(stat) {
+                stat.playlistFailures = 0
+                stat.playlistCooldownUntil = 0L
+            }
+        }
+    }
+
+    /** Hosts not cooling down for *playlist* fetches. */
+    fun playlistAvailableHosts(now: Long = System.currentTimeMillis()): List<String> =
+        hosts.filter { host -> (stats[host]?.playlistCooldownUntil ?: 0L) <= now }
+
     /**
      * Record a probe result (independent measurement, not a main download).
      * Probes keep other hosts' stats fresh without consuming main-download traffic.
@@ -308,8 +356,16 @@ object CdnSelector {
     }
 
 
-    fun select(now: Long = System.currentTimeMillis()): String {
-        val avail = availableHosts(now)
+    fun select(now: Long = System.currentTimeMillis()): String = selectFrom(availableHosts(now), now)
+
+    /**
+     * Like [select], but skips hosts that are cooling down for *playlist* fetches. Used to resolve
+     * a variant playlist URL: a host that serves segments fine can still be the one that stopped
+     * answering playlists, and [record] would never keep that penalty alive.
+     */
+    fun selectPlaylist(now: Long = System.currentTimeMillis()): String = selectFrom(playlistAvailableHosts(now), now)
+
+    private fun selectFrom(avail: List<String>, now: Long): String {
         if (avail.isEmpty()) return hosts.firstOrNull() ?: ""
         if (avail.size == 1) return avail[0]
 
@@ -354,8 +410,17 @@ object CdnSelector {
         now: Long = System.currentTimeMillis(),
         includeCooling: Boolean = false,
         exclude: Set<String> = emptySet()
-    ): List<String> {
-        val pool = (if (includeCooling) hosts else availableHosts(now)).filter { it !in exclude }
+    ): List<String> = rankedFrom(if (includeCooling) hosts else availableHosts(now), now, exclude)
+
+    /** [rankedHosts] restricted to hosts that are not cooling down for playlist fetches. */
+    fun rankedPlaylistHosts(
+        now: Long = System.currentTimeMillis(),
+        includeCooling: Boolean = false,
+        exclude: Set<String> = emptySet()
+    ): List<String> = rankedFrom(if (includeCooling) hosts else playlistAvailableHosts(now), now, exclude)
+
+    private fun rankedFrom(candidates: List<String>, now: Long, exclude: Set<String>): List<String> {
+        val pool = candidates.filter { it !in exclude }
         if (pool.size <= 1) return pool
         val scores = scoredHosts(pool, now)
         val ranked = scores.sortedBy { it.second }.map { it.first }
@@ -365,6 +430,13 @@ object CdnSelector {
 
     fun resolve(url: String, now: Long = System.currentTimeMillis()): String {
         val host = select(now)
+        if (host.isEmpty()) return url
+        return rewriteHost(url, host)
+    }
+
+    /** [resolve] for a playlist URL: hosts cooling down for playlists are left out. */
+    fun resolvePlaylist(url: String, now: Long = System.currentTimeMillis()): String {
+        val host = selectPlaylist(now)
         if (host.isEmpty()) return url
         return rewriteHost(url, host)
     }
@@ -398,6 +470,10 @@ object CdnSelector {
         val totalSuccesses: Int,
         val cooldownUntil: Long,
         val lastDurationMs: Long,
+        /** Playlist-only failure state, tracked apart from [failures]/[cooldownUntil]. */
+        val playlistFailures: Int,
+        val playlistErrors: Int,
+        val playlistCooldownUntil: Long,
         /** Per-hour EWMA (ignoring day) for visualization. */
         val hourEwma: DoubleArray,
         val hourSamples: IntArray
@@ -428,6 +504,9 @@ object CdnSelector {
                     totalSuccesses = stat.totalSuccesses,
                     cooldownUntil = stat.cooldownUntil,
                     lastDurationMs = stat.lastDurationMs,
+                    playlistFailures = stat.playlistFailures,
+                    playlistErrors = stat.playlistErrors,
+                    playlistCooldownUntil = stat.playlistCooldownUntil,
                     hourEwma = stat.hourEwma.copyOf(),
                     hourSamples = stat.hourSamples.copyOf()
                 )
@@ -456,11 +535,15 @@ object CdnSelector {
             stats.forEach { it.value.run {
                 failures = 0
                 cooldownUntil = 0L
+                playlistFailures = 0
+                playlistCooldownUntil = 0L
             } }
         } else {
             stats[host]?.run {
                 failures = 0
                 cooldownUntil = 0L
+                playlistFailures = 0
+                playlistCooldownUntil = 0L
             }
         }
     }
@@ -491,6 +574,9 @@ object CdnSelector {
                         put("totalSuccesses", JsonPrimitive(stat.totalSuccesses))
                         put("cooldownUntil", JsonPrimitive(stat.cooldownUntil))
                         put("lastDurationMs", JsonPrimitive(stat.lastDurationMs))
+                        put("playlistFailures", JsonPrimitive(stat.playlistFailures))
+                        put("playlistErrors", JsonPrimitive(stat.playlistErrors))
+                        put("playlistCooldownUntil", JsonPrimitive(stat.playlistCooldownUntil))
                         put("recentDurations", buildJsonArray { stat.recentDurations.forEach { add(JsonPrimitive(it)) } })
                         put("recentIdx", JsonPrimitive(stat.recentIdx))
                         put("recentCount", JsonPrimitive(stat.recentCount))
@@ -546,6 +632,9 @@ object CdnSelector {
                     stat.totalSuccesses = obj["totalSuccesses"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
                     stat.cooldownUntil = obj["cooldownUntil"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
                     stat.lastDurationMs = obj["lastDurationMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+                    stat.playlistFailures = obj["playlistFailures"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                    stat.playlistErrors = obj["playlistErrors"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                    stat.playlistCooldownUntil = obj["playlistCooldownUntil"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
                     stat.recentDurations = obj["recentDurations"]?.jsonArray?.map { it.jsonPrimitive.content.toLong() }?.toLongArray()
                         ?: stat.recentDurations
                     stat.recentIdx = obj["recentIdx"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
