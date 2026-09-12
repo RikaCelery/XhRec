@@ -39,6 +39,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.*
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.*
@@ -468,7 +469,7 @@ class SchedulerEntry(
             parameters["pkey"] = keyName
             token?.takeIf { it.isNotEmpty() }?.let { parameters["aclAuth"] = it }
         }.toString()
-        return CdnSelector.resolve(url)
+        return CdnSelector.resolvePlaylist(url)
     }
 
     /**
@@ -486,20 +487,37 @@ class SchedulerEntry(
      * here would refuse rooms that are about to be recordable. A stream that stops delivering is
      * caught by the session's own stall watchdog instead.
      *
+     * The outcome is fed back to [CdnSelector] as a *playlist* result: a failing host gets a
+     * playlist-specific cooldown (segment successes from other rooms cannot clear it) and its
+     * pooled client is dropped, so the next preconfig attempt neither reuses the connection that
+     * just failed nor re-picks the host by default.
+     *
      * A 403/404 is different from every other failure: the token was accepted by the platform, so
      * the CDN refusing the playlist means the room itself moved on — the show ended, the room went
      * offline, or the private show was replaced. The room is asked to re-read its status (see
      * [refreshRoomStatus]) because the stale value in the dashboard and in this entry is exactly
-     * what keeps the loop retrying a stream that no longer exists.
+     * what keeps the loop retrying a stream that no longer exists. A rejection carries no host
+     * penalty either.
      */
     private suspend fun playlistProbe(url: String): String? {
+        val host = CdnSelector.hostOf(url)
+        val attemptMs = component.runtimeTuning.playlistAttemptTimeout.inWholeMilliseconds
         var rejected = false
         // The probe reports success as an *empty string*, not null: `withTimeoutOrNull` also yields
         // null, so a null-able "ok" would be indistinguishable from a probe that ran out of time.
         val reason: String? = try {
             withTimeoutOrNull(component.runtimeTuning.preconfigProbeTimeout) {
                 val client = component.httpClientProvider.proxied("preconfig_$roomId")
-                val response = withRetry(2) { client.get(url) }
+                val response = withRetry(2) {
+                    client.get(url) {
+                        timeout {
+                            // Abort a dead pooled connection in the engine (which drops it) rather
+                            // than letting the watchdog cancel the whole probe on it.
+                            socketTimeoutMillis = attemptMs
+                            connectTimeoutMillis = attemptMs
+                        }
+                    }
+                }
                 if (response.status.value in 200..299) "" else {
                     rejected = response.status.isRejection()
                     "playlist unusable (HTTP ${response.status.value})"
@@ -513,6 +531,16 @@ class SchedulerEntry(
             "playlist unusable (HTTP ${e.response.status.value})"
         } catch (e: Exception) {
             "playlist unusable (${e.message ?: e::class.simpleName})"
+        }
+        // A host that did not serve the playlist is dropped and reported as a *playlist* failure, so
+        // the next attempt neither reuses the connection that just failed nor re-picks the host by
+        // default. A rejection is excluded: the room moved on, the host is fine.
+        val served = reason != null && reason.isEmpty()
+        if (served) {
+            CdnSelector.recordPlaylistSuccess(host)
+        } else if (!rejected) {
+            component.httpClientProvider.evict("preconfig_$roomId")
+            CdnSelector.recordPlaylistFailure(host)
         }
         // Outside the watchdog on purpose: its budget bounds the CDN request, and a refresh that
         // needs longer than that must not turn the 404 into a "probe timed out".
@@ -871,12 +899,14 @@ class SchedulerComponent(
             is WriterFatal -> {
                 logger.error("Writer fatal room {}: {}", event.roomId, event.error)
                 entries.remove(event.roomId)?.scope?.cancel()
+                evictRoomClients(event.roomId)
             }
             // A room removed from the list while armed/recording must be disarmed and its
             // recording stopped, otherwise the session keeps writing and the UI shows a
             // ghost row (see issue #141). Mirrors the DeactivateCmd branch.
             is RoomRemoved -> {
                 entries.remove(event.roomId)?.scope?.cancel()
+                evictRoomClients(event.roomId)
                 sessionComponent.tell(StopRecording(event.roomId, EndReason.UserStop))
                 logger.info("Room {} removed: disarmed and recording stopped", event.roomId)
             }
@@ -903,6 +933,17 @@ class SchedulerComponent(
     private suspend fun driveFsm(roomId: Long, event: SchedulerEvent, data: SchedulerDriveData?) {
         val e = entries[roomId] ?: return
         e.fsm.driveCatch(event, data)?.let { logger.error("Scheduler FSM drive failed", it) }
+    }
+
+    /**
+     * A room that stops being tracked releases every client its recording created. A pool that went
+     * bad must die with the room instead of being inherited by a future recording of the same id,
+     * and an unarmed room has no reason to keep sockets open.
+     */
+    private fun evictRoomClients(roomId: Long) {
+        httpClientProvider.evict("master_$roomId")
+        httpClientProvider.evict("preconfig_$roomId")
+        httpClientProvider.evict("m3u8_$roomId")
     }
 
     /** Arms a room loaded from list.conf and returns its entry, or null when it is not armed. */
@@ -952,6 +993,7 @@ class SchedulerComponent(
 
             is DeactivateCmd -> {
                 entries.remove(cmd.roomId)?.scope?.cancel()
+                evictRoomClients(cmd.roomId)
                 sessionComponent.tell(StopRecording(cmd.roomId, EndReason.UserStop))
                 logger.info("Room {} deactivated", cmd.roomId)
                 OkResponse
@@ -976,6 +1018,7 @@ class SchedulerComponent(
                 entries.forEach { (id, e) ->
                     sessionComponent.tell(StopRecording(id, EndReason.UserStop))
                     e.scope.cancel()
+                    evictRoomClients(id)
                 }
                 entries.clear()
                 OkResponse

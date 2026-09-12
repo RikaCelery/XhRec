@@ -431,6 +431,9 @@ class HttpServerComponent(
                                     put("totalSuccesses", stat.totalSuccesses)
                                     put("failures", stat.failures)
                                     put("coolingDown", stat.cooldownUntil > now)
+                                    put("playlistFailures", stat.playlistFailures)
+                                    put("playlistErrors", stat.playlistErrors)
+                                    put("playlistCoolingDown", stat.playlistCooldownUntil > now)
                                     run {
                                         val ps = CdnSelector.probeSnapshot(host)
                                         put("probeSamples", JsonPrimitive(ps?.samples ?: 0))

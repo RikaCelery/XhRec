@@ -15,10 +15,12 @@ import github.rikacelery.v3.fsm.StateMachine
 import github.rikacelery.v3.fsm.buildFsm
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.m3u8.ParsedPlaylist
+import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.DefaultHttpClientProvider
 import github.rikacelery.v3.utils.HttpClientProvider
 import github.rikacelery.v3.utils.withRetry
 import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.HttpStatusCode
@@ -198,6 +200,20 @@ class SessionEntry(
     var lastPollGap: Int = 0
     val circleCache = CircleCache(100)
 
+    /**
+     * CDN hosts this session already fetched the playlist from.
+     *
+     * The playlist URL is resolved exactly once, by the scheduler, before the session starts
+     * (`SchedulerEntry.resolveVariantUrl`); nothing downstream re-resolves it. A host that stops
+     * answering therefore keeps being polled until the session gives up on the whole recording and
+     * the scheduler preconfigures again — which picks the same host, because a failed playlist
+     * fetch never told [CdnSelector] anything. This set is what lets the session walk to the next
+     * host instead. It is deliberately session-local rather than a global host penalty: the same
+     * CDN serves other rooms' segments fine, so any host-level failure count would be reset by
+     * their next success long before it cooled the host down.
+     */
+    val playlistHostsTried = LinkedHashSet<String>()
+
     // —— scope / loop timer ——
     val scope = CoroutineScope(
         component.ioScope.coroutineContext + SupervisorJob(component.ioScope.coroutineContext[Job])
@@ -222,6 +238,12 @@ class SessionEntry(
 
     internal fun cutFile(reason: EndReason) {
         playlistLoop.cancel()
+        // A session that ends for good releases its playlist client: a pool that went bad must not
+        // be inherited by the next session of this room, and an idle room should not hold sockets.
+        // A time/size limit restarts on the *same* stream seconds later, so that one keeps it.
+        if (reason != EndReason.TimeLimit && reason != EndReason.SizeLimit) {
+            component.httpClientProvider.evict("m3u8_$roomId")
+        }
         launch {
             component.downloader.tell(
                 DoCutPoint(CutPoint(roomId, segmentIndex - 1, roomName, Instant.now(), reason, quality, generation))
@@ -371,7 +393,20 @@ class SessionEntry(
         return try {
             withTimeout(component.runtimeTuning.playlistFetchTimeout) {
                 val client = component.httpClientProvider.proxied("m3u8_$roomId")
-                val response = withRetry(3) { client.get(playlistUrl) }
+                val attemptMs = component.runtimeTuning.playlistAttemptTimeout.inWholeMilliseconds
+                val response = withRetry(3) {
+                    client.get(playlistUrl) {
+                        timeout {
+                            // Engine-level timeouts, deliberately below playlistFetchTimeout: a
+                            // pooled connection that stopped answering is aborted here, so OkHttp
+                            // drops it and HttpRequestRetry can dial a fresh one. Without this the
+                            // whole fetch budget is spent on one dead connection as a coroutine
+                            // cancellation, which no retry layer can observe.
+                            socketTimeoutMillis = attemptMs
+                            connectTimeoutMillis = attemptMs
+                        }
+                    }
+                }
                 val text = response.bodyAsText()
                 val key = (component.requestBus.request<ConfigResponse>(GetDecryptKey(pkey)).value as? String)
                     ?: return@withTimeout SessionSignal(
@@ -379,22 +414,59 @@ class SessionEntry(
                         RecordingDriveData(failReason = "no decrypt key")
                     )
                 val parsed = component.m3u8Parser.parse(text, key)
+                CdnSelector.recordPlaylistSuccess(CdnSelector.hostOf(playlistUrl))
                 SessionSignal(roomId, RecordingEvent.PlaylistFetched, RecordingDriveData(playlist = parsed))
             }
         } catch (e: TimeoutCancellationException) {
+            failOverPlaylistHost()
             SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = "timeout"))
         } catch (e: ClientRequestException) {
             if (e.response.status == HttpStatusCode.NotFound || e.response.status == HttpStatusCode.Forbidden) {
                 refreshRoomStatus()
                 SessionSignal(roomId, RecordingEvent.PlaylistUnusable, RecordingDriveData(failReason = e.response.status.toString()))
             } else {
+                failOverPlaylistHost()
                 SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = e.message))
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            failOverPlaylistHost()
             SessionSignal(roomId, RecordingEvent.PlaylistFetchFailed, RecordingDriveData(failReason = e.message))
         }
+    }
+
+    /**
+     * Move this session's playlist request to the next-best CDN host after a transport failure, and
+     * report the failure to [CdnSelector] so the host is penalized for the *next* preconfig too.
+     *
+     * Two levels, in this order:
+     *  1. drop this room's playlist client, so the retry cannot be handed the same pooled
+     *     connection that just failed;
+     *  2. move to a host outside [playlistHostsTried]. A plain `CdnSelector.resolve` would hand back
+     *     the same host, because its segment score is still the best one and playlist penalties live
+     *     apart from it. The session therefore keeps its own tried set — the same shape the segment
+     *     downloader uses — with a second pass over all hosts once every host has been tried
+     *     (playlist cooldowns are short, and the only remaining host may still be the working one).
+     *
+     * Returns true when the playlist actually moved to a different host.
+     */
+    internal fun failOverPlaylistHost(): Boolean {
+        val failed = CdnSelector.hostOf(playlistUrl)
+        if (failed.isEmpty()) return false
+        component.httpClientProvider.evict("m3u8_$roomId")
+        CdnSelector.recordPlaylistFailure(failed)
+        playlistHostsTried += failed
+        val next = CdnSelector.rankedPlaylistHosts(exclude = playlistHostsTried).firstOrNull()
+            ?: CdnSelector.rankedPlaylistHosts(includeCooling = true).firstOrNull()
+            ?: return false
+        if (next == failed) return false
+        playlistUrl = CdnSelector.rewriteHost(playlistUrl, next)
+        sessionLogger.warn(
+            "roomId={} playlist fetch failed on {}; switching the playlist to {}",
+            roomId, failed, next
+        )
+        return true
     }
 
     private suspend fun refreshRoomStatus() {
@@ -430,6 +502,8 @@ private fun buildSessionFsm(ctx: SessionEntry) =
                 previousNewSegmentId = null
                 lastPollGap = 0
                 circleCache.clear()   // a new file must re-download the init; media segments are skipped via the lastSegmentId threshold
+                // the playlist host is re-resolved by the scheduler for every new session
+                playlistHostsTried.clear()
                 launch { component.dataChannel.send(StreamStart(roomId, roomName, startTime, quality)) }
                 // LiveEventSource expands the WebSocket channel set and metrics start counting on this
                 launch { component.publish(RecordingStarted(roomId, quality)) }
@@ -717,6 +791,9 @@ internal fun SessionEntry.diagnoseJson(): JsonObject = buildJsonObject {
     put("totalBytes", totalBytes)
     put("retryCount", retryCount)
     put("playlistLoopRunning", playlistLoop.isRunning)
+    // Which hosts the playlist was already moved off in this session: the answer to "the playlist
+    // keeps timing out, why is it still on the same CDN?".
+    put("playlistHostsTried", buildJsonArray { playlistHostsTried.forEach { add(JsonPrimitive(it)) } })
     put("lastPollSegmentCount", lastPollSegmentCount)
     put("lastPollSkipped", lastPollSkipped)
     put("lastPollGap", lastPollGap)

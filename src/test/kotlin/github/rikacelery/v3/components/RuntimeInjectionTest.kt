@@ -46,6 +46,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
@@ -295,6 +296,12 @@ class RuntimeInjectionTest {
             pkey = "key-id"
             quality = "360p"
         }
+        // No CDN candidates: this test pins the poll timing, and MockEngine answers on a real
+        // dispatcher, so its fetches time out under virtual time. With candidates configured the
+        // session would walk the playlist to another host after that failure (see the failover test
+        // below) and the URL assertion would no longer hold.
+        val oldCdnHosts = CdnSelector.hosts
+        CdnSelector.updateHosts(emptyList())
 
         try {
             entry.fsm.drive(RecordingEvent.StartRecording)
@@ -312,6 +319,70 @@ class RuntimeInjectionTest {
             assertTrue(requests.all { it == "http://127.0.0.1:18083/live.m3u8" })
         } finally {
             entry.scope.cancel()
+            CdnSelector.updateHosts(oldCdnHosts)
+            client.close()
+        }
+    }
+
+    // Real time on purpose: the fetch is bounded by withTimeout, and MockEngine's dispatcher is not
+    // the test scheduler, so virtual time would race ahead and time out a request that answered on
+    // the next real millisecond (the same reason checkSchedulerMaster below uses runBlocking).
+    @Test
+    fun `session playlist fails over to the next CDN host when one stops answering`() = runBlocking {
+        val testScope = CoroutineScope(coroutineContext + SupervisorJob())
+        val requests = CopyOnWriteArrayList<String>()
+        val client = HttpClient(MockEngine { request ->
+            requests += request.url.toString()
+            if (request.url.host == "127.0.0.1") throw IOException("connection reset by peer")
+            respond("#EXTM3U\n#EXT-X-MAP:URI=\"http://127.0.0.2:18084/init.mp4\"")
+        })
+        val provider = RecordingProvider(client, client)
+        val eventBus = EventBus()
+        installRequestAnswers(eventBus)
+        val requestBus = RequestBus(eventBus, testScope)
+        val dataChannel = DataChannel()
+        val downloader = DownloaderComponent(dataChannel, eventBus = eventBus, parentScope = testScope)
+        val session = SessionComponent(
+            dataChannel,
+            downloader,
+            M3u8Parser,
+            requestBus,
+            eventBus,
+            testScope,
+            httpClientProvider = provider
+        )
+        val entry = SessionEntry(9, "model", session).apply {
+            playlistUrl = "http://127.0.0.1:18084/live.m3u8"
+            pkey = "key-id"
+            quality = "720p"
+        }
+        val oldCdnHosts = CdnSelector.hosts
+        val errorsBefore = CdnSelector.snapshot()["127.0.0.1"]?.playlistErrors ?: 0
+        CdnSelector.updateHosts(listOf("127.0.0.1", "127.0.0.2"))
+
+        try {
+            val failed = assertIs<SessionSignal>(entry.fetchPlaylistSignal())
+            assertEquals(RecordingEvent.PlaylistFetchFailed, failed.event)
+            // the dead host is remembered by this session, and the playlist walked to the other one
+            assertEquals(listOf("127.0.0.1"), entry.playlistHostsTried.toList())
+            assertEquals("http://127.0.0.2:18084/live.m3u8", entry.playlistUrl)
+            // the pooled client is dropped, so the retry cannot be handed the connection that failed
+            assertEquals(listOf("m3u8_9"), provider.evicted)
+            // and the failure reaches the selector as a *playlist* failure, so the next preconfig
+            // avoids the host too
+            assertEquals(errorsBefore + 1, CdnSelector.snapshot().getValue("127.0.0.1").playlistErrors)
+
+            val fetched = assertIs<SessionSignal>(entry.fetchPlaylistSignal())
+            assertEquals(RecordingEvent.PlaylistFetched, fetched.event, "failReason=${fetched.data?.failReason}")
+            assertTrue(requests.any { it == "http://127.0.0.2:18084/live.m3u8" })
+            // a served playlist clears the playlist penalty of the host that served it, and only
+            // that host's: the failed one keeps its streak for the next preconfig
+            assertEquals(0, CdnSelector.snapshot()["127.0.0.2"]?.playlistFailures ?: 0)
+            assertEquals(1, CdnSelector.snapshot().getValue("127.0.0.1").playlistFailures)
+        } finally {
+            entry.scope.cancel()
+            testScope.cancel()
+            CdnSelector.updateHosts(oldCdnHosts)
             client.close()
         }
     }
@@ -397,6 +468,7 @@ class RuntimeInjectionTest {
     ) : HttpClientProvider {
         val directCalls = CopyOnWriteArrayList<ClientCall>()
         val proxiedCalls = CopyOnWriteArrayList<ClientCall>()
+        val evicted = CopyOnWriteArrayList<String>()
 
         override fun direct(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient {
             directCalls += ClientCall(key, http1, expectSuccess)
@@ -406,6 +478,10 @@ class RuntimeInjectionTest {
         override fun proxied(key: String, http1: Boolean, expectSuccess: Boolean): HttpClient {
             proxiedCalls += ClientCall(key, http1, expectSuccess)
             return proxiedClient
+        }
+
+        override fun evict(key: String) {
+            evicted += key
         }
     }
 
