@@ -2,6 +2,7 @@ package github.rikacelery.v3.integration
 
 import io.ktor.client.statement.bodyAsText
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -76,6 +77,42 @@ class PipelineMetricsIntegrationTest {
                 ?.let { true }
         }
         assertTrue(cut, "the reason a file was cut must be an alertable label")
+    }
+
+    @Test
+    fun `actual segment duration is exported as a proper histogram`() = withFixture { fx ->
+        fx.ready()
+        val before = fx.get("/metrics").bodyAsText()
+        fx.startRecording()
+        val after = fx.get("/metrics").bodyAsText()
+
+        // One metadata block per family however many hosts there are: a repeated HELP/TYPE makes
+        // strict scrapers reject the whole payload.
+        assertEquals(
+            1, after.lines().count { it == "# TYPE xhrec_cdn_segment_duration_seconds histogram" },
+            "the histogram family must be declared exactly once"
+        )
+        assertTrue(
+            sumOf(after, "xhrec_cdn_segment_duration_seconds_count") >
+                sumOf(before, "xhrec_cdn_segment_duration_seconds_count"),
+            "every served segment must be observed"
+        )
+
+        val counts = Regex("""xhrec_cdn_segment_duration_seconds_count\{host="([^"]*)"\} (\d+)""")
+            .findAll(after).associate { it.groupValues[1] to it.groupValues[2].toLong() }
+        val buckets = Regex("""xhrec_cdn_segment_duration_seconds_bucket\{host="([^"]*)",le="([^"]+)"\} (\d+)""")
+            .findAll(after)
+            .groupBy({ it.groupValues[1] }, { it.groupValues[2] to it.groupValues[3].toLong() })
+
+        assertTrue(buckets.isNotEmpty(), "at least one host must be exported")
+        buckets.forEach { (host, entries) ->
+            val values = entries.map { it.second }
+            assertEquals(values.sorted(), values, "histogram buckets must be cumulative for $host")
+            assertEquals(
+                counts[host], entries.first { it.first == "+Inf" }.second,
+                "the +Inf bucket must equal _count for $host"
+            )
+        }
     }
 
     private fun assertGrew(before: String, after: String, family: String, labels: String) {

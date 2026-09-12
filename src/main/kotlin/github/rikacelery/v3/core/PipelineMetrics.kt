@@ -111,9 +111,24 @@ object PipelineMetrics {
      * playlist fetches and skips sub-millisecond downloads, so it cannot answer "which CDN carried
      * the media traffic".
      */
-    fun recordCdnServed(host: String) {
+    fun recordCdnServed(host: String, durationMs: Long) {
         cdnServed.bump(host)
+        cdnSegmentDuration.computeIfAbsent(host) { DurationHistogram(SEGMENT_BUCKETS) }
+            .observe(durationMs / 1000.0)
     }
+
+    /**
+     * Actual segment fetch time per host, as a histogram.
+     *
+     * `xhrec_cdn_estimated_duration_ms` is the *prediction* the selector ranks on, built from an
+     * EWMA; this is what the downloads actually took. Without it there is no way to tell a host that
+     * is predicted slow from one that is measured slow, or to notice that the estimate has drifted
+     * away from reality.
+     *
+     * Buckets are chosen around the downloader's own budgets (`downloaderStallTimeout` 5s,
+     * `downloaderAttemptTimeout` 25s), so a bucket boundary is where behaviour changes.
+     */
+    private val cdnSegmentDuration = ConcurrentHashMap<String, DurationHistogram>()
 
     /**
      * A segment this host failed to deliver (transport error, stall, 5xx). An expired assignment
@@ -215,6 +230,14 @@ object PipelineMetrics {
             sb.appendLine("xhrec_cdn_segment_failures_total{host=\"$host\"} ${count.get()}")
         }
 
+        if (cdnSegmentDuration.isNotEmpty()) {
+            // Declared once: a repeated HELP/TYPE block makes strict scrapers reject the payload.
+            family(sb, "xhrec_cdn_segment_duration_seconds", "Actual segment fetch time per CDN host", "histogram")
+            cdnSegmentDuration.forEach { (host, histogram) ->
+                histogram.appendSeries(sb, "xhrec_cdn_segment_duration_seconds", "host=\"$host\"")
+            }
+        }
+
         // Losing the WebSocket is not fatal but it is silent: room status changes stop arriving, so
         // rooms sit armed and unrecorded until the periodic refresh happens to notice.
         family(sb, "xhrec_ws_connected", "The live event WebSocket is connected (1) or not (0)", "gauge")
@@ -231,6 +254,53 @@ object PipelineMetrics {
     private fun family(sb: StringBuilder, name: String, help: String, type: String) {
         sb.appendLine("# HELP $name $help")
         sb.appendLine("# TYPE $name $type")
+    }
+
+    /**
+     * Segment fetch buckets in seconds, placed around the downloader's own budgets
+     * (`downloaderStallTimeout` 5s, `downloaderAttemptTimeout` 25s) so a boundary is where the
+     * behaviour, not just the number, changes.
+     */
+    private val SEGMENT_BUCKETS = doubleArrayOf(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0)
+
+    /**
+     * Fixed-bucket latency histogram, rendered in the Prometheus text format.
+     *
+     * Counts are kept per bucket and cumulated only at render time: the scrape is the one place the
+     * cumulative form is needed, and per-bucket counters let an observer touch a single slot.
+     * `_sum` is accumulated in micros because an integer add stays exact under concurrency.
+     */
+    class DurationHistogram(private val boundsSeconds: DoubleArray) {
+        private val counts = Array(boundsSeconds.size + 1) { AtomicLong(0) }
+        private val observations = AtomicLong(0)
+        private val sumMicros = AtomicLong(0)
+
+        fun observe(seconds: Double) {
+            val value = if (seconds.isFinite() && seconds >= 0) seconds else 0.0
+            var index = boundsSeconds.size
+            for (i in boundsSeconds.indices) {
+                if (value <= boundsSeconds[i]) {
+                    index = i
+                    break
+                }
+            }
+            counts[index].incrementAndGet()
+            observations.incrementAndGet()
+            sumMicros.addAndGet((value * 1_000_000).toLong())
+        }
+
+        /** Emits `_bucket` / `_sum` / `_count`; the family metadata belongs to the caller. */
+        fun appendSeries(sb: StringBuilder, name: String, labels: String) {
+            var cumulative = 0L
+            for (i in boundsSeconds.indices) {
+                cumulative += counts[i].get()
+                sb.appendLine("${name}_bucket{$labels,le=\"${boundsSeconds[i]}\"} $cumulative")
+            }
+            cumulative += counts.last().get()
+            sb.appendLine("${name}_bucket{$labels,le=\"+Inf\"} $cumulative")
+            sb.appendLine("${name}_sum{$labels} ${sumMicros.get() / 1_000_000.0}")
+            sb.appendLine("${name}_count{$labels} ${observations.get()}")
+        }
     }
 
     private fun ConcurrentHashMap<String, AtomicLong>.bump(key: String) {
