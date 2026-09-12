@@ -116,8 +116,22 @@ object ClientManager {
         }
     }
 
-    private val clientsProxied = HashMap<String, HttpClient>()
-    private val clientsDirect = HashMap<String, HttpClient>()
+    /**
+     * Clients for one base key, split by the flags they were built with. The cache key must include
+     * `http1`/`expectSuccess`: before this, a client built for one flag set was handed to callers
+     * asking for another, so the first caller silently won for the whole process.
+     */
+    private class ClientCache {
+        private val byFlags = HashMap<String, HttpClient>()
+        fun get(http1: Boolean, expectSuccess: Boolean, create: () -> HttpClient): HttpClient =
+            byFlags.getOrPut("http1=$http1,expectSuccess=$expectSuccess") { create() }
+        fun closeAll() {
+            byFlags.values.forEach { runCatching { it.close() } }
+        }
+    }
+
+    private val clientsProxied = HashMap<String, ClientCache>()
+    private val clientsDirect = HashMap<String, ClientCache>()
     private val lock = Any()
 
     private fun HttpClientConfig<OkHttpConfig>.configureClient() {
@@ -171,7 +185,9 @@ object ClientManager {
 
     fun getClient(key: String, http1: Boolean, expectSuccess: Boolean = true): HttpClient {
         synchronized(lock) {
-            return clientsDirect[key] ?: clientDirect(key, http1, expectSuccess).also { clientsDirect[key] = it }
+            return clientsDirect.getOrPut(key) { ClientCache() }.get(http1, expectSuccess) {
+                clientDirect(key, http1, expectSuccess)
+            }
         }
     }
 
@@ -179,7 +195,9 @@ object ClientManager {
 
     fun getProxiedClient(key: String, http1: Boolean, expectSuccess: Boolean = true): HttpClient {
         synchronized(lock) {
-            return clientsProxied[key] ?: clientProxied(key, http1, expectSuccess).also { clientsProxied[key] = it }
+            return clientsProxied.getOrPut(key) { ClientCache() }.get(http1, expectSuccess) {
+                clientProxied(key, http1, expectSuccess)
+            }
         }
     }
 
@@ -191,12 +209,12 @@ object ClientManager {
      */
     fun removeClient(key: String) {
         synchronized(lock) {
-            clientsProxied.remove(key)?.let { client ->
-                runCatching { client.close() }
+            clientsProxied.remove(key)?.let { cache ->
+                cache.closeAll()
                 logger.debug("Evicted proxied client {}", key)
             }
-            clientsDirect.remove(key)?.let { client ->
-                runCatching { client.close() }
+            clientsDirect.remove(key)?.let { cache ->
+                cache.closeAll()
                 logger.debug("Evicted direct client {}", key)
             }
         }
@@ -210,12 +228,13 @@ object ClientManager {
         }
     }
 
+    /** Close every cached client. Called once on shutdown. */
     fun close() {
-        clientsProxied.forEach {
-            it.value.close()
-        }
-        clientsDirect.forEach {
-            it.value.close()
+        synchronized(lock) {
+            clientsProxied.values.forEach { it.closeAll() }
+            clientsDirect.values.forEach { it.closeAll() }
+            clientsProxied.clear()
+            clientsDirect.clear()
         }
     }
 }
