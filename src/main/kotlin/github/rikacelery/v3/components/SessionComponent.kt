@@ -5,6 +5,7 @@ import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.core.RoomStateRegistry
 import github.rikacelery.v3.core.diagnose
 import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.data.StreamStart
@@ -777,6 +778,13 @@ class SessionComponent(
     private fun driveFsm(sig: SessionSignal) {
         val e = entries[sig.roomId] ?: return
         e.fsm.driveCatch(sig.event, sig.data)?.let { logger.error("Session FSM drive failed", it) }
+        // The playlist loop drives this every poll, so the exported progress clock and resume-mark
+        // lag stay fresh without a second timer.
+        RoomStateRegistry.update(sig.roomId) {
+            sessionState = e.fsm.currentState.name
+            lastProgressAtMs = e.lastProgressAt.toEpochMilli()
+            resumeMarkAhead = e.lastPollMarkAhead
+        }
     }
 
     private fun onBus(event: Any) {

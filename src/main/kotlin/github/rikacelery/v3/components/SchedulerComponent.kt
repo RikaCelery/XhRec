@@ -6,6 +6,7 @@ import github.rikacelery.v3.core.BusMonitor
 import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.core.RoomStateRegistry
 import github.rikacelery.v3.core.diagnose
 import github.rikacelery.v3.data.Hosts
 import github.rikacelery.v3.data.Room
@@ -928,6 +929,7 @@ class SchedulerComponent(
             is WriterFatal -> {
                 logger.error("roomId={} writer fatal: {}", event.roomId, event.error)
                 entries.remove(event.roomId)?.scope?.cancel()
+                RoomStateRegistry.remove(event.roomId)
                 evictRoomClients(event.roomId)
                 // The writer has already closed and deleted the partial file, so a session left
                 // running would keep downloading bytes into nothing. Stop it for the same reason
@@ -939,6 +941,7 @@ class SchedulerComponent(
             // ghost row (see issue #141). Mirrors the DeactivateCmd branch.
             is RoomRemoved -> {
                 entries.remove(event.roomId)?.scope?.cancel()
+                RoomStateRegistry.remove(event.roomId)
                 evictRoomClients(event.roomId)
                 sessionComponent.tell(StopRecording(event.roomId, EndReason.UserStop))
                 logger.info("roomId={} removed, disarmed and recording stopped", event.roomId)
@@ -961,11 +964,32 @@ class SchedulerComponent(
     private suspend fun driveFsm(sig: SchedulerSignal) {
         val e = entries[sig.roomId] ?: return
         e.fsm.driveCatch(sig.event, sig.data)?.let { logger.error("Scheduler FSM drive failed", it) }
+        exportRoomState(sig.roomId, e)
     }
 
     private suspend fun driveFsm(roomId: Long, event: SchedulerEvent, data: SchedulerDriveData?) {
         val e = entries[roomId] ?: return
         e.fsm.driveCatch(event, data)?.let { logger.error("Scheduler FSM drive failed", it) }
+        exportRoomState(roomId, e)
+    }
+
+    /**
+     * Refreshes the exported state of one armed room. Called from **both** `driveFsm` overloads:
+     * they are independent, and the self-scheduled signals (PreconfigDone, BackToArmed, …) only go
+     * through the [SchedulerSignal] one, so instrumenting a single overload left the exported state
+     * stuck wherever an externally-driven transition had left it.
+     *
+     * Identity and arming live here rather than in RoomComponent because the scheduler is the
+     * authority on being armed — a room's `armed` flag never changes when the room list is saved.
+     */
+    private fun exportRoomState(roomId: Long, e: SchedulerEntry) {
+        RoomStateRegistry.update(roomId) {
+            status = e.roomStatus
+            quality = e.configuredQuality.ifBlank { e.settings.quality }
+            armed = true
+            schedulerState = e.fsm.currentState.name
+            hintCode = e.hint()?.code?.wireName
+        }
     }
 
     /**
@@ -1032,6 +1056,7 @@ class SchedulerComponent(
 
             is DeactivateCmd -> {
                 entries.remove(cmd.roomId)?.scope?.cancel()
+                RoomStateRegistry.update(cmd.roomId) { armed = false; schedulerState = ""; hintCode = null }
                 evictRoomClients(cmd.roomId)
                 sessionComponent.tell(StopRecording(cmd.roomId, EndReason.UserStop))
                 logger.info("roomId={} deactivated", cmd.roomId)

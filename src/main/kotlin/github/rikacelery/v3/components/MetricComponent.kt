@@ -2,6 +2,8 @@ package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
+import github.rikacelery.v3.core.PipelineMetrics
+import github.rikacelery.v3.core.RoomStateRegistry
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.HttpConnectionStats
@@ -39,6 +41,9 @@ data class RoomMetrics(
     val segmentMissing: AtomicLong = AtomicLong(0),
     /** Playlist entries skipped because the resume mark already covered them (never reset). */
     val segmentsSkipped: AtomicLong = AtomicLong(0),
+    /** Cut and session-exit reasons, so "why did this recording end" is a label. */
+    val cutReasons: ConcurrentHashMap<String, AtomicLong> = ConcurrentHashMap(),
+    val stopReasons: ConcurrentHashMap<String, AtomicLong> = ConcurrentHashMap(),
     val runningUrls: ConcurrentHashMap<String, RunningUrlInfo> = ConcurrentHashMap()
 )
 
@@ -72,6 +77,10 @@ class MetricComponent(
         is DownloadStarted -> OnMetricEvent(event)
         is SegmentGapDetected -> OnMetricEvent(event)
         is SegmentsSkipped -> OnMetricEvent(event)
+        is CutPointDone -> OnMetricEvent(event)
+        is SessionExit -> OnMetricEvent(event)
+        is WsReconnected -> OnMetricEvent(event)
+        is WsDisconnected -> OnMetricEvent(event)
         is FileReady -> OnMetricEvent(event)
         is FileProcessed -> OnMetricEvent(event)
         is PlaylistRefreshed -> OnMetricEvent(event)
@@ -151,6 +160,19 @@ class MetricComponent(
                     metrics.getOrPut(e.roomId) { RoomMetrics() }.segmentsSkipped.addAndGet(e.count.toLong())
                 }
 
+                is CutPointDone -> {
+                    metrics.getOrPut(e.roomId) { RoomMetrics() }
+                        .cutReasons.computeIfAbsent(e.reason.name) { AtomicLong() }.incrementAndGet()
+                }
+
+                is SessionExit -> {
+                    metrics.getOrPut(e.roomId) { RoomMetrics() }
+                        .stopReasons.computeIfAbsent(e.reason.name) { AtomicLong() }.incrementAndGet()
+                }
+
+                is WsReconnected -> PipelineMetrics.recordWsConnected()
+                is WsDisconnected -> PipelineMetrics.recordWsDisconnected()
+
                 is FileReady -> {
                     val m = metrics[e.roomId] ?: return
                     m.fileCount.incrementAndGet()
@@ -229,6 +251,10 @@ class MetricComponent(
         family("xhrec_quality", "Recording quality", "gauge")
         family("xhrec_recording", "A recording session is running for this room (1) or not (0)", "gauge")
         family("xhrec_segment_downloaded_current", "Downloaded in current segment", "gauge")
+        family("xhrec_room_download_bytes_total", "Total bytes downloaded for a room", "counter")
+        family("xhrec_cdn_cooldown", "CDN host cooling down for segment downloads (1) or not (0)", "gauge")
+        family("xhrec_room_cut_total", "File cuts, by reason", "counter")
+        family("xhrec_room_recordings_stopped_total", "Recording sessions that ended, by reason", "counter")
         family("xhrec_cdn_estimated_duration_ms", "CDN host estimated duration at current time", "gauge")
         family("xhrec_cdn_confidence", "CDN host prediction confidence (0-1)", "gauge")
         family("xhrec_cdn_total_successes", "CDN host total successful downloads", "counter")
@@ -264,6 +290,13 @@ class MetricComponent(
             sb.appendLine("xhrec_quality{roomId=\"$roomId\",quality=\"${m.quality}\"} 1")
             sb.appendLine("xhrec_recording{roomId=\"$roomId\"} ${if (roomId in recording) 1 else 0}")
             sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
+            sb.appendLine("xhrec_room_download_bytes_total{roomId=\"$roomId\"} ${m.lifetimeBytes.get()}")
+            m.cutReasons.forEach { (reason, count) ->
+                sb.appendLine("xhrec_room_cut_total{roomId=\"$roomId\",reason=\"$reason\"} ${count.get()}")
+            }
+            m.stopReasons.forEach { (reason, count) ->
+                sb.appendLine("xhrec_room_recordings_stopped_total{roomId=\"$roomId\",reason=\"$reason\"} ${count.get()}")
+            }
         }
 
         // CDN host duration metrics
@@ -277,6 +310,7 @@ class MetricComponent(
             sb.appendLine("xhrec_cdn_total_errors{host=\"$host\"} ${stat.totalErrors}")
             sb.appendLine("xhrec_cdn_playlist_failures{host=\"$host\"} ${stat.playlistFailures}")
             sb.appendLine("xhrec_cdn_playlist_cooldown{host=\"$host\"} ${if (stat.playlistCooldownUntil > now) 1 else 0}")
+            sb.appendLine("xhrec_cdn_cooldown{host=\"$host\"} ${if (stat.cooldownUntil > now) 1 else 0}")
         }
 
         // Connection-level telemetry for the human-paced clients (playlist / master / preconfig),
@@ -314,6 +348,11 @@ class MetricComponent(
                 sb.appendLine("xhrec_http_cancelled_total{$labels} ${s.cancelled}")
             }
         }
+
+        // Bus, data channel and actor counters are process-wide and live in the objects that own
+        // them; they are pulled here rather than pushed as events (see PipelineMetrics).
+        PipelineMetrics.appendMetrics(sb)
+        RoomStateRegistry.appendMetrics(sb, now)
 
         return sb.toString()
     }
