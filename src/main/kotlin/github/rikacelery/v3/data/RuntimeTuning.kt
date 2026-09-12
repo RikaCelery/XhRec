@@ -8,6 +8,14 @@ import kotlin.time.Duration.Companion.seconds
 data class RuntimeTuning(
     val roomPollInterval: Duration = 5.minutes,
     val roomRefreshDebounce: Duration = 1500.milliseconds,
+    /**
+     * How long a room's status read absorbs further failure-driven refreshes: a session playlist
+     * that turned 403/404 and, moments later, a preconfig probe that did the same collapse into one
+     * immediate read plus at most one catch-up read at the end of this window, instead of two
+     * immediate platform requests. Activation ignores the window: that refresh is a command, not a
+     * hint.
+     */
+    val roomStatusRefreshWindow: Duration = 2.seconds,
     val webSocketReconnectInitial: Duration = 1.seconds,
     val webSocketReconnectMax: Duration = 30.seconds,
     val preconfigRetryInterval: Duration = 15.seconds,

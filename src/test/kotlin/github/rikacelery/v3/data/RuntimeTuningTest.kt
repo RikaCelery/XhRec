@@ -14,6 +14,7 @@ class RuntimeTuningTest {
 
         assertEquals(5.minutes, tuning.roomPollInterval)
         assertEquals(1500.milliseconds, tuning.roomRefreshDebounce)
+        assertEquals(2.seconds, tuning.roomStatusRefreshWindow)
         assertEquals(1.seconds, tuning.webSocketReconnectInitial)
         assertEquals(30.seconds, tuning.webSocketReconnectMax)
         assertEquals(15.seconds, tuning.preconfigRetryInterval)
