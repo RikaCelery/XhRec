@@ -207,7 +207,7 @@ class Bootstrap(
     }
 
     private suspend fun addRoomFromParsed(id: Long, name: String, parsed: ListConfLine) {
-        SensitiveStringRegistry.mask(name)
+        SensitiveStringRegistry.maskRoom(id, name)
         val settings = parsed.toSettings()
         roomComponent.internalAdd(id, name, settings)
         if (parsed.armed) {

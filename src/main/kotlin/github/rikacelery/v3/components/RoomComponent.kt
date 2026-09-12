@@ -214,7 +214,7 @@ class RoomComponent(
                         ErrorResponse("Exist $name")
                     } else {
                         rooms[id] = newRoom(id, name, cmd.settings)
-                        SensitiveStringRegistry.mask(name)
+                        SensitiveStringRegistry.maskRoom(id, name)
                         logger.info("Room added: id={}, name={}, quality={}", id, name, cmd.settings.quality)
                         eventBus.publish(RoomAdded(id, name))
                         RoomNameResponse(name)
@@ -407,7 +407,7 @@ class RoomComponent(
     suspend fun importFavorites(modelIds: List<Long>): List<String> {
         val known = rooms.keys
         val added = resolveRoomNames(modelIds.distinct().filterNot { it in known }).map { (id, name) ->
-            SensitiveStringRegistry.mask(name)
+            SensitiveStringRegistry.maskRoom(id, name)
             internalAdd(id, name, RoomSettings(quality = FAVORITES_DEFAULT_QUALITY))
             logger.info("Favorite imported as room: id={}, name={}", id, name)
             name

@@ -469,7 +469,8 @@ Logs are written to `./logs` with daily rotation (`xhrec.yyyy-MM-dd.log`).
 Sensitive information is replaced in log output by default. Static patterns (JWT tokens, cookies, auth URL parameters,
 proxy addresses) are masked with `***`. Dynamic strings (model names, usernames) are registered at startup and replaced
 with a stable CRC32-based hash that persists within a session but changes on restart, allowing log correlation without
-revealing identities.
+revealing identities. Room ids are masked with the **same hash as the room's model name**, so a `roomId=` and the name it
+belongs to read as one entity, and the id is only replaced inside a `roomId=...` pattern (never as a bare number).
 
 Masking can be toggled at runtime via the eye icon in the WebUI toolbar, or through the API:
 

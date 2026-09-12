@@ -9,6 +9,13 @@ class MaskingMessageConverter : MessageConverter() {
         var msg = event.formattedMessage ?: return ""
         if (!SensitiveStringRegistry.enabled) return msg
         msg = STATIC_RULES.fold(msg) { acc, rule -> rule.first.replace(acc, rule.second) }
+        // Room ids are masked before the substring pass and only here: an id is pure digits, so
+        // maskText must never hold it (it would rewrite every unrelated number). The replacement is
+        // the room's own name mask, which keeps an id and its model name readable as one entity.
+        msg = ROOM_ID_RULE.replace(msg) { m ->
+            m.groupValues[1] + m.groupValues[2] +
+                SensitiveStringRegistry.maskPattern(m.groupValues[3]) + m.groupValues[4]
+        }
         msg = SensitiveStringRegistry.maskText(msg)
         return msg
     }
@@ -26,5 +33,8 @@ class MaskingMessageConverter : MessageConverter() {
             // HTTP proxy address
             Regex("proxy=https?://[^\\s]+") to "proxy=***",
         )
+
+        /** Covers `roomId=1001`, `roomId="1001"`, `"roomId":1001` and `roomId: 1001`. */
+        private val ROOM_ID_RULE = Regex("""(["']?roomId["']?\s*[=:]\s*)(["']?)(\d+)(["']?)""")
     }
 }
