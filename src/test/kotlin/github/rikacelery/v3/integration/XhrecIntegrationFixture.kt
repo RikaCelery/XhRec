@@ -62,6 +62,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -410,35 +411,34 @@ class XhrecIntegrationFixture(
         )
     }
 
+    /** The scheduler entry's diagnostics for [roomId], or null when the room is not tracked. */
+    suspend fun schedulerEntry(roomId: Long): JsonObject? =
+        schedulerComponent.diagnose(Diagnosable.SECTION_ENTRIES, mapOf("room" to roomId.toString()))
+            .jsonObject["entries"]?.jsonArray?.firstOrNull()?.jsonObject
+
     /**
-     * Waits until [actor]'s FSM history for [roomId] records a transition for [event] (optionally
-     * whose recorded data contains [dataContains]) **and** the actor's mailbox is empty.
-     *
-     * That pair is the deterministic point at which a negative assertion is safe: the recorded
-     * transition is proof the room actually reacted to the trigger, and the empty mailbox proves
-     * the reaction finished. It replaces "sleep for N ms, then assert nothing happened", which both
-     * wastes time and races on a loaded machine.
+     * Waits until the scheduler has applied [status] to [roomId]. The entry stores the status the
+     * moment it processes the change, so this has no stale-match problem: it can only become true
+     * after the trigger, whatever the room's previous status was.
      */
-    suspend fun awaitTransition(
-        actor: Actor<*>,
-        roomId: Long,
-        event: String,
-        dataContains: String? = null,
-        timeout: Duration = 10.seconds
-    ) {
-        val what = "${actor.diagnoseName} room $roomId to process $event" +
-            (dataContains?.let { " ($it)" } ?: "")
-        await(timeout, what) {
-            val snapshot = actor.diagnose(Diagnosable.SECTION_HISTORY, mapOf("room" to roomId.toString()))
-            val history = snapshot["history"]?.jsonObject?.get(roomId.toString())?.jsonArray
-            val seen = history?.any { entry ->
-                val obj = entry.jsonObject
-                obj["event"]?.jsonPrimitive?.content == event &&
-                    (dataContains == null ||
-                        obj["data"]?.jsonPrimitive?.content?.contains(dataContains) == true)
-            } == true
-            val idle = snapshot["mailboxDepth"]?.jsonPrimitive?.intOrNull == 0
-            (seen && idle).takeIf { it }
+    suspend fun awaitSchedulerStatus(roomId: Long, status: String, timeout: Duration = 10.seconds) {
+        await(timeout, "scheduler room $roomId status=$status") {
+            (schedulerEntry(roomId)?.get("roomStatus")?.jsonPrimitive?.content == status).takeIf { it }
+        }
+    }
+
+    /** Waits until the scheduler FSM for [roomId] reaches [state] (e.g. Armed after a stop). */
+    suspend fun awaitSchedulerState(roomId: Long, state: String, timeout: Duration = 10.seconds) {
+        await(timeout, "scheduler room $roomId state=$state") {
+            val current = schedulerEntry(roomId)?.get("fsm")?.jsonObject?.get("state")?.jsonPrimitive?.content
+            (current == state).takeIf { it }
+        }
+    }
+
+    /** Waits until the scheduler entry for [roomId] reports the sticky flag [field] as true. */
+    suspend fun awaitSchedulerFlag(roomId: Long, field: String, timeout: Duration = 10.seconds) {
+        await(timeout, "scheduler room $roomId $field=true") {
+            (schedulerEntry(roomId)?.get(field)?.jsonPrimitive?.booleanOrNull == true).takeIf { it }
         }
     }
 

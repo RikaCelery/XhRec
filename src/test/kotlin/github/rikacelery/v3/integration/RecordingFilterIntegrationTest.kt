@@ -32,7 +32,7 @@ class RecordingFilterIntegrationTest {
 
         // Deterministic barrier: once the scheduler has recorded this status transition and gone
         // idle, the decision to stay quiet has been made — no sleep needed.
-        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "public")
+        fx.awaitSchedulerStatus(1001, "public")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "a public show must not be recorded while public recording is off: ${fx.sessions()}"
@@ -55,7 +55,7 @@ class RecordingFilterIntegrationTest {
         fx.awaitRoomSubscribed(1001)
         fx.mock.setRoomStatus(1001, "public")
         // Precondition barrier: the scheduler has processed the status and decided not to record.
-        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "public")
+        fx.awaitSchedulerStatus(1001, "public")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "precondition: the armed room stays quiet while public recording is off"
@@ -79,7 +79,7 @@ class RecordingFilterIntegrationTest {
         assertEquals(EndReason.StatusChanged, file.reason)
 
         // The stop is complete once the scheduler is back to Armed; it must not restart after that.
-        fx.awaitTransition(fx.schedulerComponent, 1001, "BackToArmed")
+        fx.awaitSchedulerState(1001, "Armed")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "a public show must stay stopped after the filter was turned off: ${fx.sessions()}"
@@ -125,9 +125,9 @@ class RecordingFilterIntegrationTest {
         val before = fx.mock.requests().size
         fx.mock.setRoomStatus(1001, "private")
 
-        // Leaving Preconfiguring (privilege exhausted) is the deterministic end of the probing
-        // window: an unthrottled probe would have asked on every retry tick before this point.
-        fx.awaitTransition(fx.schedulerComponent, 1001, "BackToArmed")
+        // The privilege is marked exhausted only by the free-spy failure path, and the room then
+        // stops probing: a deterministic end to the window, with no sleep.
+        fx.awaitSchedulerFlag(1001, "freeSpyExhausted")
         val probes = fx.mock.requests().drop(before)
             .count { it.path.contains("/api/front/v2/models/1001/cam") }
 
@@ -221,7 +221,7 @@ class RecordingFilterIntegrationTest {
         fx.mock.setRoomStatus(1001, "private")
 
         // Barrier: the scheduler processed the private status; the filter keeps it from recording.
-        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "private")
+        fx.awaitSchedulerStatus(1001, "private")
         assertTrue(
             fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
             "free spy recording is off, so the private show must not be recorded"
@@ -245,7 +245,7 @@ class RecordingFilterIntegrationTest {
 
         fx.mock.setRoomStatus(1001, "off")
         // Barrier: the previous show's status change has been processed before flipping back.
-        fx.awaitTransition(fx.schedulerComponent, 1001, "RoomStatusChanged", dataContains = "off")
+        fx.awaitSchedulerStatus(1001, "off")
         fx.mock.setRoomStatus(1001, "private")
         fx.awaitRequestCount("/api/front/v2/models/1001/cam", atLeast = firstShow + 1)
 
