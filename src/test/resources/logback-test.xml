@@ -1,0 +1,22 @@
+<configuration>
+    <!--
+      Tests must not use the production logback.xml: its rolling FILE appender writes the shared
+      logs/xhrec.log, which is not safe when Gradle runs suites in several JVMs at once (and it
+      litters the real log with test output). Console only, no scanning, noisy libraries pinned off.
+    -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{1} - %msg%n</pattern>
+            <charset>utf8</charset>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <logger name="io.netty" level="OFF"/>
+    <logger name="io.ktor" level="OFF"/>
+    <logger name="org.eclipse.jetty" level="INFO"/>
+    <logger name="ch.qos.logback" level="WARN"/>
+</configuration>

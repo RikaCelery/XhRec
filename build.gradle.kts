@@ -47,4 +47,13 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+
+    // Suites run in separate JVMs, not one shared one: the component graph is built on
+    // process-wide singletons (Diagnostics keys actors by name, plus CdnSelector, Hosts,
+    // SensitiveStringRegistry, PredictionSampleStore), so two fixtures in the same JVM would
+    // collide. Every fixture binds ephemeral ports (port 0) and its own temp directory, and the
+    // test logback config keeps them off the shared logs/xhrec.log, so forks are independent.
+    // Kept modest: each fork loads Netty/Ktor and the recorder, and CI runners are small.
+    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 3)
+    maxHeapSize = "768m"
 }
