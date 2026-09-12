@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -237,19 +238,42 @@ class RecordingFilterIntegrationTest {
         fx.awaitRoomSubscribed(1001)
 
         fx.mock.setRoomStatus(1001, "private")
-        delay(750)
+        awaitRequestCount(fx, "/api/front/v2/models/1001/cam", atLeast = 1)
         val firstShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }
         assertTrue(firstShow > 0, "the privilege must be probed when the private show starts")
 
         fx.mock.setRoomStatus(1001, "off")
         delay(250)
         fx.mock.setRoomStatus(1001, "private")
-        delay(750)
+        awaitRequestCount(fx, "/api/front/v2/models/1001/cam", atLeast = firstShow + 1)
 
         val secondShow = fx.mock.requests().count { it.path.contains("/api/front/v2/models/1001/cam") }
         assertTrue(
             secondShow > firstShow,
             "the next private show must probe again instead of staying exhausted forever"
+        )
+    }
+
+    /**
+     * Waits until the mock has served at least [atLeast] requests whose path contains [pathPart].
+     *
+     * Used instead of a fixed sleep before a *positive* assertion: a loaded machine that is slow to
+     * reach the probe would otherwise fail the test even though the behaviour is correct.
+     */
+    private suspend fun awaitRequestCount(
+        fx: XhrecIntegrationFixture,
+        pathPart: String,
+        atLeast: Int,
+        timeout: Duration = 10.seconds
+    ) {
+        val deadline = System.currentTimeMillis() + timeout.inWholeMilliseconds
+        while (System.currentTimeMillis() < deadline) {
+            if (fx.mock.requests().count { it.path.contains(pathPart) } >= atLeast) return
+            delay(20.milliseconds)
+        }
+        throw AssertionError(
+            "timed out waiting for >=$atLeast requests matching '$pathPart'; " +
+                "saw ${fx.mock.requests().count { it.path.contains(pathPart) }}"
         )
     }
 }
