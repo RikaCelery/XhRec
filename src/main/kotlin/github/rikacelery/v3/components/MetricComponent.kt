@@ -49,6 +49,17 @@ class MetricComponent(
 
     private val metrics = ConcurrentHashMap<Long, RoomMetrics>()
 
+    /**
+     * Rooms with a session running right now.
+     *
+     * Every other per-room series survives the session it describes — `metrics` entries are dropped
+     * only when the room itself is removed — so a flat `xhrec_downloaded_total` says "not
+     * downloading" without saying whether the room was supposed to be. This gauge separates the
+     * two, which is what makes "recording but not downloading" alertable instead of something that
+     * also fires for every offline room.
+     */
+    private val recording = ConcurrentHashMap.newKeySet<Long>()
+
     override suspend fun onStart(scope: CoroutineScope) {
         // One collector preserves ordering across event types, including immediate
         // failures and file rotations. wrapEvent filters out unrelated events.
@@ -162,16 +173,21 @@ class MetricComponent(
 
                 is RecordingStarted -> {
                     metrics.getOrPut(e.roomId) { RoomMetrics() }.quality = e.quality
+                    recording.add(e.roomId)
                 }
 
                 is RecordingStopped -> {
-                    // Deliberately keep the counters. RecordingStopped fires per session (a limit
-                    // cut restarts the room), so removing here reset every lifetime counter on each
-                    // cut and erased the series before anyone could read it post-mortem. The entry is
-                    // dropped only when the room itself is removed.
+                    // The session is over, so the room is not downloading because it is not
+                    // recording — the distinction `xhrec_recording` exists to make. The counters
+                    // stay: RecordingStopped fires per session (a limit cut restarts the room), so
+                    // resetting here erased every lifetime counter on each cut.
+                    recording.remove(e.roomId)
                 }
 
-                is RoomRemoved -> metrics.remove(e.roomId)
+                is RoomRemoved -> {
+                    metrics.remove(e.roomId)
+                    recording.remove(e.roomId)
+                }
 
                 is RoomStatusChanged -> {
                     // Record model schedule when room goes live (not offline)
@@ -211,6 +227,7 @@ class MetricComponent(
         family("xhrec_segment_id_current", "Current segment ID", "gauge")
         family("xhrec_downloading_current", "Currently downloading segments", "gauge")
         family("xhrec_quality", "Recording quality", "gauge")
+        family("xhrec_recording", "A recording session is running for this room (1) or not (0)", "gauge")
         family("xhrec_segment_downloaded_current", "Downloaded in current segment", "gauge")
         family("xhrec_cdn_estimated_duration_ms", "CDN host estimated duration at current time", "gauge")
         family("xhrec_cdn_confidence", "CDN host prediction confidence (0-1)", "gauge")
@@ -245,6 +262,7 @@ class MetricComponent(
             sb.appendLine("xhrec_segment_id_current{roomId=\"$roomId\"} ${m.currentSegmentId.get()}")
             sb.appendLine("xhrec_downloading_current{roomId=\"$roomId\"} ${m.runningUrls.size}")
             sb.appendLine("xhrec_quality{roomId=\"$roomId\",quality=\"${m.quality}\"} 1")
+            sb.appendLine("xhrec_recording{roomId=\"$roomId\"} ${if (roomId in recording) 1 else 0}")
             sb.appendLine("xhrec_segment_downloaded_current{roomId=\"$roomId\"} ${m.segmentDownloaded.get()}")
         }
 
