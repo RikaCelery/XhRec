@@ -22,42 +22,87 @@ ffmpeg 计算都在录制主机内完成**，客户端只负责交互，因此�
 ## 快速开始
 
 ```bash
-./cutter/deploy.sh              # 编译 + 上传 + 重建镜像 + 重启容器
-./cutter/deploy.sh --build      # 只重建镜像，不动运行中的容器
-./cutter/check-ui.sh            # 校验 cutter.html 内联模块的 JS 语法
+./gradlew :cutter:shadowJar      # 编译出 cutter/build/libs/cutter-all.jar
+./cutter/check-ui.sh             # 校验 cutter.html 内联模块的 JS 语法与暴露符号
+./gradlew :cutter:test           # 99 个测试
 ```
 
-打开 <http://10.0.2.202:8092/>，或深链到某个录制：`http://10.0.2.202:8092/?id=<mediaId>`。
+部署见下一节；起好之后浏览器打开 `http://<主机>:<端口>/`，或深链到某个录制
+`http://<主机>:<端口>/?id=<mediaId>`。
 
-## 部署参数（deploy.sh）
+## 部署
 
-**路径类参数没有默认值**，必须由调用方给出——脚本里写死一个路径，对别人的机器是错的，
-对某一台机器是"对的"，于是会在别处静默地错下去。
+XhCut 跑在录制主机上，产物是一个自带 jar 的容器镜像。下面四步就是全部流程，
+`user@host`、三个宿主目录按你的环境替换即可——**仓库里不保存任何主机的路径**。
+
+### 1. 编译
 
 ```bash
-XHCUT_REMOTE=celery@10.0.2.202 \
-XHCUT_MEDIA_DIR=/media/nas/out \
-XHCUT_CUTS_DIR=/media/nas/_Crawler/Video/R18/rec/cuts \
-XHCUT_CACHE_DIR=/mnt/xhcut_cache \
-./cutter/deploy.sh
+./gradlew :cutter:shadowJar
+# -> cutter/build/libs/cutter-all.jar
 ```
 
-必填：
+### 2. 上传三个文件
 
-| 变量 | 含义 |
+```bash
+ssh user@host 'mkdir -p ~/xhcut'
+scp cutter/build/libs/cutter-all.jar cutter/Dockerfile cutter/entrypoint.sh user@host:~/xhcut/
+```
+
+### 3. 在主机上构建镜像
+
+```bash
+ssh user@host 'cd ~/xhcut && docker build -t xhcut .'
+```
+
+### 4. 起容器
+
+三个宿主目录**必须已存在**，容器不会在宿主机上创建任何东西：
+
+```bash
+ssh user@host 'mkdir -p /path/to/cache'      # 只需一次
+```
+
+```bash
+ssh user@host 'docker rm -f xhcut 2>/dev/null; docker run -d \
+  --name xhcut --restart unless-stopped \
+  --user 1000:1000 \
+  --gpus all \
+  -p 8092:8092 \
+  -e TZ=Asia/Shanghai \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e XHCUT_MEDIA=/media/out \
+  -e XHCUT_OUT=/media/cuts \
+  -e XHCUT_CACHE=/cache \
+  -v /path/to/recordings:/media/out:rw \
+  -v /path/to/cuts:/media/cuts:rw \
+  -v /path/to/cache:/cache:rw \
+  --log-opt max-size=10m --log-opt max-file=3 \
+  xhcut'
+```
+
+要改的只有 `-v` 左边那三个宿主路径；右边的 `/media/out`、`/media/cuts`、`/cache`
+是容器内部的挂载点，随便叫什么，只要和 `-e XHCUT_*` 对得上。
+
+| 项 | 说明 |
 |---|---|
-| `XHCUT_REMOTE` | ssh 目标（`user@host`） |
-| `XHCUT_MEDIA_DIR` | 宿主机上存放录像的目录（容器内以 rw 挂载） |
-| `XHCUT_CUTS_DIR` | 宿主机上存放成品的目录 |
-| `XHCUT_CACHE_DIR` | 宿主机暂存目录（需存在且可写；缓存是可再生的中间产物） |
+| `--user 1000:1000` | 以拥有录像语料的 uid 运行，成品属主才对；缓存目录也要对它可写 |
+| `--gpus all` + `NVIDIA_DRIVER_CAPABILITIES=all` | 代理转码走 NVENC。**两个都要**：默认的 capability 集合只挂 `libnvidia-ml`（够 `nvidia-smi` 用），不挂 `libnvidia-encode`，会报 `Cannot load libnvidia-encode.so.1`。没有 GPU 的主机可以整段去掉，会自动退回 libx264 |
+| 媒体根用 `rw` | 编辑器要能删录像、以及"导出后删除源文件"；挂成 `ro` 这些操作会返回 409 |
+| 三个宿主目录必须已存在 | 路径写错应当在这里失败，而不是起一个容器往新建的空目录里静默地写 |
 
-可选（括号内为默认值）：`XHCUT_REMOTE_DIR`（`/home/<ssh 用户>/xhcut`）、`XHCUT_IMAGE`（`xhcut`）、
-`XHCUT_CONTAINER`（`xhcut`）、`XHCUT_HOST_PORT`（`8092`）、`XHCUT_UID`（`1000`）、
-`XHCUT_GPU`（`1`）；容器内的挂载点 `XHCUT_CONTAINER_MEDIA`/`_CUTS`/`_CACHE`
-（`/media/out`、`/media/cuts`、`/cache`）一般不用改。
+`entrypoint.sh` 在启动时要求 `XHCUT_MEDIA`/`XHCUT_OUT`/`XHCUT_CACHE` 都已设置，缺任一
+直接以退出码 2 退出——镜像里**不预置**这三个路径，所以"忘了传"不会假装启动成功。
 
-三个宿主目录**必须已存在**：容器不允许在宿主机上创建任何东西，路径写错应当在这里失败，
-而不是起一个容器往新建的空目录里静默地写。`./cutter/deploy.sh --help` 会打印完整用法。
+### 更新
+
+重复 1–4 即可。第 4 步的 `docker rm -f` 会中断正在录的那个文件，所以想只换镜像、
+不动运行中的容器，就只跑到第 3 步。
+
+### 本地常用脚本
+
+上面这套流程在本机是用一个不纳入版本控制的本地脚本封装的（路径参数化、构建 + 上传 +
+重建 + 重启一条命令）。仓库里只保留文档，`cutter/deploy.sh` 已被 `.gitignore` 忽略。
 
 ## 命令行参数
 

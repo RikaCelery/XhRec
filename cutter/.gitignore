@@ -7,3 +7,8 @@ build/
 # Scratch produced by local runs of the jar (index, preview segments, waveforms).
 cache/
 out/
+
+# Local deployment for this specific host: it hardcodes the paths, ports and ssh target
+# of one machine, so it stays out of the repository. README.md documents the same steps
+# generically for anyone else.
+deploy.sh
