@@ -19,3 +19,8 @@ dependencyResolutionManagement {
         google()
     }
 }
+
+// XhCut — remote, event-aware lossless cutter for XhRec recordings.
+// Self-contained: it owns its own main class, jar and container image, so the
+// root project's application/shadowJar/deploy.sh behaviour is unchanged.
+include(":cutter")

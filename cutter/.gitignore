@@ -1,0 +1,9 @@
+# Build output and the per-project Gradle cache. The repository root already ignores
+# `build/` and `.gradle`, but naming them here keeps the module's boundaries obvious to
+# anyone reading just this directory.
+build/
+.gradle/
+
+# Scratch produced by local runs of the jar (index, preview segments, waveforms).
+cache/
+out/
