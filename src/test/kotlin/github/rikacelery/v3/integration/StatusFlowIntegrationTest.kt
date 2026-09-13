@@ -154,20 +154,6 @@ class StatusFlowIntegrationTest {
         }
     }
 
-    /**
-     * Two episodes, two files.
-     *
-     * The rotation is driven by what the scheduler has actually done, not by a timer. A
-     * `rotateStatuses(..., 900.milliseconds)` loop flips the status whether or not the
-     * previous episode finished closing, and a full cycle — status change, stream
-     * re-resolve, segment fetch, cut point, close — takes as long as the machine needs.
-     * On a slower runner the off phase lands while the session is still tearing down, so
-     * the second episode never produces its file and the test times out on a run that
-     * exercised exactly the behaviour it meant to.
-     *
-     * Waiting for each observable step removes that coupling: the test still alternates
-     * public/off, but only after seeing the previous transition land.
-     */
     @Test
     fun `automatic status rotation produces one file per episode`() = testApplication {
         XhrecIntegrationFixture(this).use { fx ->
@@ -181,22 +167,16 @@ class StatusFlowIntegrationTest {
             fx.mock.startSegments(1001, 40.milliseconds)
             fx.awaitRoomSubscribed(1001)
 
-            // Episode 1: public until the session is actually recording, then offline.
-            fx.mock.setRoomStatus(1001, "public")
-            fx.awaitSession(1001, SessionState.Recording, timeout = 30.seconds)
-            fx.mock.setRoomStatus(1001, "off")
-            fx.awaitSession(1001, SessionState.Idle, timeout = 30.seconds)
-
-            // Episode 2: the same cycle again.
-            fx.mock.setRoomStatus(1001, "public")
-            fx.awaitSession(1001, SessionState.Recording, timeout = 30.seconds)
-            fx.mock.setRoomStatus(1001, "off")
-            fx.awaitSession(1001, SessionState.Idle, timeout = 30.seconds)
-
-            val files = fx.awaitEventCount<FileReady>(2, 30.seconds) { it.roomId == 1001L }
-            assertEquals(2, files.size, "each off phase must close one file")
-            assertTrue(files.all { it.reason == EndReason.StreamEnd }, files.map { it.reason }.toString())
-            assertTrue(files.all { it.file.length() > 0 })
+            val rotation = fx.mock.rotateStatuses(1001, listOf("public", "off"), 900.milliseconds)
+            try {
+                fx.awaitSession(1001, SessionState.Recording, timeout = 20.seconds)
+                val files = fx.awaitEventCount<FileReady>(2, 30.seconds) { it.roomId == 1001L }
+                assertEquals(2, files.size, "each off phase must close one file")
+                assertTrue(files.all { it.reason == EndReason.StreamEnd }, files.map { it.reason }.toString())
+                assertTrue(files.all { it.file.length() > 0 })
+            } finally {
+                rotation.cancelAndJoin()
+            }
         }
     }
 
