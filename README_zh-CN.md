@@ -21,6 +21,7 @@ java -jar build/libs/XhRec-all.jar
 | `-o`, `--output` | 输出目录            | `out`                |
 | `-t`, `--tmp`    | 临时目录            | `tmp`                |
 | `-p`, `--port`   | HTTP 服务端口       | `8090`               |
+| `-s`, `--tls`    | 启用/禁用 TLS       | `true`               |
 | `-u`, `--users`  | 用户文件            | `users.txt`          |
 | `-post`          | 后处理器配置文件     | `postprocessor.json` |
 
