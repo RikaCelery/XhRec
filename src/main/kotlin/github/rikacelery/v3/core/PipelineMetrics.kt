@@ -94,8 +94,16 @@ object PipelineMetrics {
 
     fun actor(name: String): ActorStat = actors.computeIfAbsent(name) { ActorStat() }
 
-    fun forgetActor(name: String) {
-        actors.remove(name)
+    /**
+     * Drops an actor's counters, but only if it is still the owner of the entry.
+     *
+     * Actor names are stable ("SessionComponent"), and fixtures build several component graphs in
+     * one JVM, so a stop that lands late must not delete the counters a *newer* actor of the same
+     * name has already registered — doing that removed the actor's series from `/metrics` until its
+     * next message, which is how a flaky test saw a missing `xhrec_actor_mailbox_depth`.
+     */
+    fun forgetActor(name: String, stat: ActorStat) {
+        actors.remove(name, stat)
     }
 
     // ── CDN attribution for media traffic ─────────────────────────────────────

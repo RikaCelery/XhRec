@@ -34,6 +34,13 @@ abstract class Actor<T : Any>(
 
     private var started = false
 
+    /**
+     * This actor's counters. Registered here rather than on the first handled message so that every
+     * live actor has a `xhrec_actor_mailbox_depth` series — an actor that has not been sent anything
+     * yet is exactly the one an operator wants to see at depth 0 rather than missing.
+     */
+    private val stats: PipelineMetrics.ActorStat = PipelineMetrics.actor(name)
+
     // —— Subscription readiness ——
     // `start()` only launches the loop: the bus subscriptions registered in `onStart` attach to the
     // shared flow a moment later, and the bus drops events for subscribers that have not attached
@@ -70,7 +77,7 @@ abstract class Actor<T : Any>(
             startCompleted.set(true)
             signalSubscriptionsReady()
             for (msg in mailbox) {
-                val stat = PipelineMetrics.actor(name)
+                val stat = stats
                 stat.inFlight.incrementAndGet()
                 val start = System.nanoTime()
                 try {
@@ -101,7 +108,7 @@ abstract class Actor<T : Any>(
     open fun stop() {
         started = false
         Diagnostics.unregister(name)
-        PipelineMetrics.forgetActor(name)
+        PipelineMetrics.forgetActor(name, stats)
         mailbox.close()
         scope.cancel()
     }
@@ -117,7 +124,7 @@ abstract class Actor<T : Any>(
      * same counter instead of two copies that can disagree.
      */
     private suspend fun enqueue(msg: T) {
-        val depth = PipelineMetrics.actor(name).depth
+        val depth = stats.depth
         depth.incrementAndGet()
         try {
             mailbox.send(msg)
@@ -168,7 +175,7 @@ abstract class Actor<T : Any>(
         put("actor", name)
         put("type", this@Actor::class.simpleName ?: "")
         put("started", started)
-        put("mailboxDepth", PipelineMetrics.actor(name).depth.get())
+        put("mailboxDepth", stats.depth.get())
         put("mailboxCapacity", mailboxCapacity)
         extra.forEach { (key, value) -> put(key, value) }
     }

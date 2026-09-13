@@ -61,4 +61,11 @@ tasks.test {
         Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
     )
     maxHeapSize = "768m"
+
+    // Without this a CI failure reads "AssertionFailedError at JUnitSupport.kt:56" and the message
+    // that says *which* assertion is only inside the uploaded report. Printing it costs nothing.
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }
