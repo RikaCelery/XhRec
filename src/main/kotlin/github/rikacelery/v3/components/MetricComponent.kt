@@ -24,11 +24,15 @@ data class RoomMetrics(
     val segmentDownloaded: AtomicLong = AtomicLong(0),
     val segmentFailed: AtomicLong = AtomicLong(0),
     val segmentBytes: AtomicLong = AtomicLong(0),
+    // Session bytes: reset when a session starts, because a session that is cut and restarted (a
+    // stream change, a cut, an init change) writes a NEW file from zero. Staying cumulative here
+    // hides exactly the restarts an operator needs to see — one room on the live instance restarts
+    // every ~10s, and a lifetime counter let it read as a healthy 600 MiB room the whole time.
+    val sessionBytes: AtomicLong = AtomicLong(0),
     // lifetime counters (never reset)
     val lifetimeAttempted: AtomicLong = AtomicLong(0),
     val lifetimeDownloaded: AtomicLong = AtomicLong(0),
     val lifetimeFailed: AtomicLong = AtomicLong(0),
-    val lifetimeBytes: AtomicLong = AtomicLong(0),
     // unchanged
     val proxyCount: AtomicLong = AtomicLong(0),
     val directCount: AtomicLong = AtomicLong(0),
@@ -103,7 +107,7 @@ class MetricComponent(
                                 "success" to m.segmentDownloaded.get(),
                                 "failed" to m.segmentFailed.get(),
                                 "bytesWrite" to m.segmentBytes.get(),
-                                "lifetimeBytes" to m.lifetimeBytes.get(),
+                                "sessionBytes" to m.sessionBytes.get(),
                                 "lifetimeDownloaded" to m.lifetimeDownloaded.get(),
                                 "running" to m.runningUrls.mapKeys { it.key }
                                     .mapValues { (_, v) ->
@@ -134,7 +138,7 @@ class MetricComponent(
                     m.segmentDownloaded.incrementAndGet()
                     m.segmentBytes.addAndGet(e.bytes.toLong())
                     m.lifetimeDownloaded.incrementAndGet()
-                    m.lifetimeBytes.addAndGet(e.bytes.toLong())
+                    m.sessionBytes.addAndGet(e.bytes.toLong())
                     synchronized(m) {
                         m.latencySamples.addLast(e.durationMs)
                         if (m.latencySamples.size > 10) m.latencySamples.removeFirst()
@@ -194,7 +198,12 @@ class MetricComponent(
                 }
 
                 is RecordingStarted -> {
-                    metrics.getOrPut(e.roomId) { RoomMetrics() }.quality = e.quality
+                    val m = metrics.getOrPut(e.roomId) { RoomMetrics() }
+                    m.quality = e.quality
+                    // A new session writes a new file, so its byte counter starts over. This is what
+                    // makes a restart visible: without it the counter climbs straight through every
+                    // cut and the room looks healthy while it is actually restarting every ~10s.
+                    m.sessionBytes.set(0)
                     recording.add(e.roomId)
                 }
 
@@ -211,6 +220,7 @@ class MetricComponent(
                         m.segmentDownloaded.set(0)
                         m.segmentFailed.set(0)
                         m.segmentBytes.set(0)
+                        m.sessionBytes.set(0)
                         m.currentSegmentId.set(0)
                         m.quality = ""
                         m.runningUrls.clear()
@@ -266,7 +276,11 @@ class MetricComponent(
         family("xhrec_quality", "Recording quality", "gauge")
         family("xhrec_recording", "A recording session is running for this room (1) or not (0)", "gauge")
         family("xhrec_segment_downloaded_current", "Downloaded in current segment", "gauge")
-        family("xhrec_room_download_bytes_total", "Total bytes downloaded for a room", "counter")
+        family(
+            "xhrec_room_download_bytes_total",
+            "Bytes downloaded in the current recording session (resets when a session starts)",
+            "counter"
+        )
         family("xhrec_cdn_cooldown", "CDN host cooling down for segment downloads (1) or not (0)", "gauge")
         family("xhrec_room_cut_total", "File cuts, by reason", "counter")
         family("xhrec_room_recordings_stopped_total", "Recording sessions that ended, by reason", "counter")
@@ -292,7 +306,6 @@ class MetricComponent(
             sb.appendLine("xhrec_segment_missing_total{roomId=\"$roomId\"} ${m.segmentMissing.get()}")
             sb.appendLine("xhrec_segments_skipped_total{roomId=\"$roomId\"} ${m.segmentsSkipped.get()}")
             sb.appendLine("xhrec_files_total{roomId=\"$roomId\"} ${m.fileCount.get()}")
-            sb.appendLine("xhrec_room_download_bytes_total{roomId=\"$roomId\"} ${m.lifetimeBytes.get()}")
             m.cutReasons.forEach { (reason, count) ->
                 sb.appendLine("xhrec_room_cut_total{roomId=\"$roomId\",reason=\"$reason\"} ${count.get()}")
             }
@@ -319,6 +332,7 @@ class MetricComponent(
                 if (m.refreshLatencySamples.isNotEmpty()) m.refreshLatencySamples.average() else 0.0
             }
             sb.appendLine("xhrec_bytes_write_total{roomId=\"$roomId\"} ${m.segmentBytes.get()}")
+            sb.appendLine("xhrec_room_download_bytes_total{roomId=\"$roomId\"} ${m.sessionBytes.get()}")
             sb.appendLine("xhrec_avg_latency_ms{roomId=\"$roomId\"} $avgLatency")
             sb.appendLine("xhrec_refresh_latency_ms{roomId=\"$roomId\"} $avgRefreshLatency")
             sb.appendLine("xhrec_segment_id_current{roomId=\"$roomId\"} ${m.currentSegmentId.get()}")
