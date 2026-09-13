@@ -197,6 +197,7 @@ class HttpRoutesTest {
         )
         val server = HttpServerComponent(
             port = 0,
+            tls = true,
             eventBus = eventBus,
             requestBus = requestBus,
             metricComponent = MetricComponent(eventBus, scope),

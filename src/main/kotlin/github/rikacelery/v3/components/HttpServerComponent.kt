@@ -42,6 +42,7 @@ import kotlin.time.Duration.Companion.seconds
 
 class HttpServerComponent(
     private val port: Int,
+    private val tls: Boolean,
     private val eventBus: EventBus,
     private val requestBus: RequestBus,
     private val metricComponent: MetricComponent,
@@ -58,40 +59,52 @@ class HttpServerComponent(
     }
 
     fun start(): EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration> {
-        val keyStoreFile = File("xhrec.keystore")
-        if (!keyStoreFile.exists()) {
-            val ks = buildKeyStore {
-                certificate("xhrec") {
-                    password = "changeit"
-                    domains = listOf("127.0.0.1", "0.0.0.0", "localhost")
-                }
-            }
-            ks.saveToFile(keyStoreFile, "changeit")
-            logger.info("Generated self-signed certificate: {}", keyStoreFile.absolutePath)
-        }
-        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-            keyStoreFile.inputStream().use { load(it, "changeit".toCharArray()) }
-        }
+        val useTls = this@HttpServerComponent.tls
 
         lateinit var engine: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>
+
         engine = embeddedServer(Netty, applicationEnvironment {
             log = LoggerFactory.getLogger("ktor.application")
         }, {
-            // engine config: SSL
-            sslConnector(
-                keyStore = keyStore,
-                keyAlias = "xhrec",
-                keyStorePassword = { "changeit".toCharArray() },
-                privateKeyPassword = { "changeit".toCharArray() }
-            ) {
-                port = this@HttpServerComponent.port
-                keyStorePath = keyStoreFile
+            if (useTls) {
+                // TLS / HTTPS Configuration
+                val keyStoreFile = File("xhrec.keystore")
+                if (!keyStoreFile.exists()) {
+                    val ks = buildKeyStore {
+                        certificate("xhrec") {
+                            password = "changeit"
+                            domains = listOf("127.0.0.1", "0.0.0.0", "localhost")
+                        }
+                    }
+                    ks.saveToFile(keyStoreFile, "changeit")
+                    logger.info("Generated self-signed certificate: {}", keyStoreFile.absolutePath)
+                }
+                val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
+                    keyStoreFile.inputStream().use { load(it, "changeit".toCharArray()) }
+                }
+
+                sslConnector(
+                    keyStore = keyStore,
+                    keyAlias = "xhrec",
+                    keyStorePassword = { "changeit".toCharArray() },
+                    privateKeyPassword = { "changeit".toCharArray() }
+                ) {
+                    port = this@HttpServerComponent.port
+                    keyStorePath = keyStoreFile
+                }
+            } else {
+                // Standard HTTP Configuration
+                connector {
+                    port = this@HttpServerComponent.port
+                }
             }
         }) {
             installApplication(this, stopEngine = { engine.stop(1000, 5000) })
         }
+
         engine.start(wait = false)
-        logger.info("HTTP server started on port $port")
+        val protocol = if (useTls) "HTTPS" else "HTTP"
+        logger.info("$protocol server started on port $port")
         return engine
     }
 

@@ -47,7 +47,7 @@ class ConfigComponentTest {
         val configPath = tempDir.resolve("xhrec.json").toFile()
         val config = SystemConfig(
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
-            port = 8080, proxy = null,
+            port = 8080, tls = true, proxy = null,
             decryptKeys = mapOf("key1" to "secret1", "key2" to "secret2"),
             streamAuthKey = "auth-secret", 
             hosts = HostsConfig(platformHosts = listOf("ex.com"), webSocketHosts = listOf("ws.ex.com")),
@@ -121,7 +121,7 @@ class ConfigComponentTest {
         val configPath = tempDir.resolve("xhrec2.json").toFile()
         val config = SystemConfig(
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
-            port = 8080, proxy = null,
+            port = 8080, tls = true, proxy = null,
             decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
              hosts = HostsConfig(platformHosts = listOf("ex.com")),
             configPath = configPath.absolutePath
@@ -166,7 +166,7 @@ class ConfigComponentTest {
         configPath.writeText("{\"platformHosts\":[\"mirror.example.com\"],\"webSocketHosts\":[\"ws.mirror.example.com\"],\"hlsHosts\":[\"cdn.mirror.example.com\"],\"hlsMasterHost\":\"master.mirror.example.com\"}")
         val config = SystemConfig(
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
-            port = 8080, proxy = null,
+            port = 8080, tls = true, proxy = null,
             decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
              hosts = HostsConfig(platformHosts = listOf("default.example.com")),
             configPath = configPath.absolutePath
@@ -189,7 +189,7 @@ class ConfigComponentTest {
         val configPath = tempDir.resolve("xhrec-set.json").toFile()
         val config = SystemConfig(
             outputDir = tempDir.toFile(), tmpDir = tempDir.toFile(),
-            port = 8080, proxy = null,
+            port = 8080, tls = true, proxy = null,
             decryptKeys = mapOf("k" to "v"), streamAuthKey = "auth",
              hosts = HostsConfig(platformHosts = listOf("old.example.com")),
             configPath = configPath.absolutePath

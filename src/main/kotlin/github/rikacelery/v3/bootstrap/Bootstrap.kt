@@ -48,6 +48,7 @@ class Bootstrap(
         val outputDir: String = "out",
         val tmpDir: String = "tmp",
         val port: Int = 8090,
+        val tls: Boolean = true,
         val usersPath: String = "users.txt",
         val postProcessorPath: String = "postprocessor.json"
     )
@@ -58,6 +59,7 @@ class Bootstrap(
             .addOption("o", "output", true, "output directory")
             .addOption("t", "tmp", true, "temp directory")
             .addOption("p", "port", true, "HTTP port")
+            .addOption("s", "tls", true, "Enable TLS/SSL (Default: true)")
             .addOption("u", "users", true, "users.txt path")
             .addOption("post", true, "postprocessor.json path")
         val cmd = try {
@@ -72,6 +74,7 @@ class Bootstrap(
             outputDir = cmd.getOptionValue("output", "out"),
             tmpDir = cmd.getOptionValue("tmp", "tmp"),
             port = cmd.getOptionValue("port", "8090").toInt(),
+            tls = cmd.getOptionValue("tls", "true").toBoolean(),
             usersPath = cmd.getOptionValue("users", "users.txt"),
             postProcessorPath = cmd.getOptionValue("post", "postprocessor.json")
         )
