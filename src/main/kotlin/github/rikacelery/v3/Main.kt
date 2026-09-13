@@ -20,6 +20,7 @@ import github.rikacelery.v3.utils.DefaultHttpClientProvider
 import github.rikacelery.v3.utils.LogLevels
 import github.rikacelery.v3.utils.PredictionStore
 import github.rikacelery.v3.utils.SensitiveStringRegistry
+import github.rikacelery.v3.utils.getOptionOrEnv
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -93,15 +94,15 @@ fun main(vararg args: String) {
         val persisted = loadPersistedConfig(configPath)
 
         val config = SystemConfig(
-            outputDir = File(cli.getOptionValue("output", "out")),
-            tmpDir = File(cli.getOptionValue("tmp", "tmp")),
-            port = cli.getOptionValue("port", "8090").toInt(),
-            tls = cli.getOptionValue("tls", "true").toBoolean(),
+            outputDir = File(cli.getOptionOrEnv("output", "out")),
+            tmpDir = File(cli.getOptionOrEnv("tmp", "tmp")),
+            port = cli.getOptionOrEnv("port", "8090").toInt(),
+            tls = cli.getOptionOrEnv("tls", "true").toBoolean(),
             proxy = System.getenv("http_proxy"),
             decryptKeys = persisted.decryptKeys,
             streamAuthKey = persisted.pkey,
             hosts = persisted.hosts,
-            listConfPath = cli.getOptionValue("file", "list.conf"),
+            listConfPath = cli.getOptionOrEnv("file", "list.conf"),
             configPath = configPath,
             maskSensitiveLogs = persisted.maskSensitiveLogs,
             apiToken = persisted.apiToken,
@@ -140,7 +141,7 @@ fun main(vararg args: String) {
         // 2. Components
         val metricComponent = MetricComponent(eventBus, appScope)
         val configComponent = ConfigComponent(config, apiClient, eventBus, appScope)
-        val authComponent = AuthComponent(cli.getOptionValue("users", "users.txt"), eventBus, appScope)
+        val authComponent = AuthComponent(cli.getOptionOrEnv("users", "users.txt"), eventBus, appScope)
         val roomComponent =
             RoomComponent(apiClient, config.listConfPath, requestBus, eventBus, appScope, runtimeTuning)
         // WS auth JWT is fetched dynamically at startup from config/initial (guest session),
