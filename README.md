@@ -15,19 +15,34 @@ Then open `https://localhost:8090` for the dashboard.
 
 ## CLI Options
 
-| Option           | Description           | Default              |
-|------------------|-----------------------|----------------------|
-| `-f`, `--file`   | Room list config      | `list.conf`          |
-| `-o`, `--output` | Output directory      | `out`                |
-| `-t`, `--tmp`    | Temp directory        | `tmp`                |
-| `-p`, `--port`   | HTTP server port      | `8090`               |
-| `-s`, `--tls`    | Enable/Disable TLS    | `true`               |
-| `-u`, `--users`  | Users file            | `users.txt`          |
-| `-post`          | Post processor config | `postprocessor.json` |
+Every option can also be set via an `XHREC_`-prefixed environment variable
+instead of a flag - useful for Docker deployments where you'd rather set
+`environment:` entries than edit the container's command. A CLI flag always
+takes precedence over its environment variable if both are set; the
+environment variable takes precedence over the built-in default.
+
+| Option            | Environment Variable | Description            | Default               |
+|-------------------|-----------------------|------------------------|-----------------------|
+| `-f`, `--file`    | `XHREC_FILE`          | Room list config       | `list.conf`           |
+| `-o`, `--output`  | `XHREC_OUTPUT`        | Output directory       | `out`                 |
+| `-t`, `--tmp`     | `XHREC_TMP`           | Temp directory         | `tmp`                 |
+| `-p`, `--port`    | `XHREC_PORT`          | HTTP server port       | `8090`                |
+| `-s`, `--tls`     | `XHREC_TLS`           | Enable TLS             | `true`                |
+| `-u`, `--users`   | `XHREC_USERS`         | Users file             | `users.txt`           |
+| `-post`           | `XHREC_POST`          | Post processor config  | `postprocessor.json`  |
+
 
 ```shell
 java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.json -t /tmp/xhrec -o /out
 ```
+
+The Docker Compose setup (see [`docker/docker-compose.yml`](docker/docker-compose.yml))
+sets `XHREC_OUTPUT`, `XHREC_FILE`, and `XHREC_USERS` to point at the
+container's mounted volumes, since the app's own built-in defaults are
+relative paths that don't know about those mounts. `postprocessor.json`
+and `xhrec.json` aren't set via environment variables there - the
+entrypoint symlinks them into place instead, which also sidesteps a
+known parsing issue with the `-post` flag (see `docker/entrypoint.sh`).
 
 ## Configuration
 
