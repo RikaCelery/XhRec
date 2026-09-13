@@ -21,6 +21,7 @@ Then open `https://localhost:8090` for the dashboard.
 | `-o`, `--output` | Output directory      | `out`                |
 | `-t`, `--tmp`    | Temp directory        | `tmp`                |
 | `-p`, `--port`   | HTTP server port      | `8090`               |
+| `-s`, `--tls`    | Enable/Disable TLS    | `true`               |
 | `-u`, `--users`  | Users file            | `users.txt`          |
 | `-post`          | Post processor config | `postprocessor.json` |
 
