@@ -47,11 +47,19 @@ runs:
           echo "Expected exactly one ShadowJar in build/libs" >&2
           exit 1
         fi
+        # XhCut is a subproject, so its ShadowJar lands in its own directory. Both jars
+        # ship together: the cutter is useless without a recorder to feed it, and a
+        # release carrying only one of them would leave the other to be built by hand.
+        if [[ ! -f cutter/build/libs/cutter-all.jar ]]; then
+          echo "Expected cutter/build/libs/cutter-all.jar (did :cutter:shadowJar run?)" >&2
+          exit 1
+        fi
         mkdir -p build/ci-artifacts
         cp "${jars[0]}" build/ci-artifacts/XhRec-all.jar
+        cp cutter/build/libs/cutter-all.jar build/ci-artifacts/XhCut-all.jar
         tar -cf build/ci-artifacts/extension.tar extension
         cd build/ci-artifacts
-        sha256sum XhRec-all.jar extension.tar > SHA256SUMS
+        sha256sum XhRec-all.jar XhCut-all.jar extension.tar > SHA256SUMS
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v7
