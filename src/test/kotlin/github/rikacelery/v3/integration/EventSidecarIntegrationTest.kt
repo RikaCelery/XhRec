@@ -1,6 +1,7 @@
 package github.rikacelery.v3.integration
 
 import github.rikacelery.v3.events.EndReason
+import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.LiveMessage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -59,34 +60,35 @@ class EventSidecarIntegrationTest {
     }
 
     /**
-     * The regression that motivated moving the gate: while a recording is closed — between a
-     * cut's `StreamEnd` and the next `StreamStart` — there is no sidecar to append to, so the
-     * frame must not be written anywhere. It used to be emitted onto the data channel and
-     * silently discarded by the writer, which meant the event was lost even though the room
-     * still counted as recording.
+     * The gate is "is there an open file", so a frame published with none must be discarded.
+     *
+     * The room is **deactivated** rather than cut. A cut closes the sidecar and opens the next
+     * one within the same breath, so a frame published right after a `break` legitimately lands
+     * in the new file — asserting otherwise races the reopen and says nothing about the gate.
+     * Deactivation leaves the room with no file and nothing scheduled to open one, which is the
+     * state that actually has to drop the frame: there is nowhere to write it, and it must not
+     * be buffered until a file appears.
      */
     @Test
-    fun `events published while the recording is closed are not written to the next file`() = withFixture { fx ->
+    fun `events published with no open file are dropped`() = withFixture { fx ->
         fx.ready()
         fx.startRecording()
         fx.eventBus.publish(LiveMessage(1001L, "newChatMessage", tipBody()))
         assertNotNull(fx.awaitEventSidecar("createdAt"), "precondition: the open file accepts events")
 
-        // Close the recording, then emit into the gap. The room is still 'recording' from the
-        // session's point of view; only the writer knows the handle is gone.
-        fx.get("/break?id=1001")
-        fx.awaitEvent<github.rikacelery.v3.events.FileReady>(15.seconds) { it.roomId == 1001L }
+        fx.get("/deactivate?id=1001").expectOk("Deactivated")
+        fx.awaitEvent<FileReady>(15.seconds) { it.roomId == 1001L }
 
         val orphan = "ORPHAN-${System.nanoTime()}"
         fx.eventBus.publish(LiveMessage(1001L, "newChatMessage", textBody(orphan)))
         delay(500)
 
-        // Whatever sidecars exist, none of them may contain the event emitted while closed.
+        // Whatever sidecars exist, none of them may contain the frame published while closed.
         val leaked = fx.tmpDir.walkTopDown()
             .filter { it.isFile && it.name.endsWith(".event") }
             .filter { runCatching { it.readText().contains(orphan) }.getOrDefault(false) }
             .toList()
-        assertTrue(leaked.isEmpty(), "an event emitted with no open file was written to ${leaked.map { it.name }}")
+        assertTrue(leaked.isEmpty(), "a frame published with no open file was written to ${leaked.map { it.name }}")
     }
 }
 
