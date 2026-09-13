@@ -158,6 +158,12 @@ fun main(vararg args: String) {
             dataChannel, config.tmpDir,
             eventBus = eventBus, parentScope = appScope
         )
+        // Bridges LiveEventSource's platform frames into the `.event` sidecar WriterComponent writes.
+        // Without it the sidecar stays empty and is deleted on close — see the class note.
+        val liveEventRecorder = LiveEventRecorderComponent(
+            dataChannel,
+            eventBus = eventBus, parentScope = appScope
+        )
         val postProcessorComponent = PostProcessorComponent(eventBus = eventBus, parentScope = appScope)
         val sessionComponent = SessionComponent(
             dataChannel,
@@ -223,6 +229,7 @@ fun main(vararg args: String) {
         liveEventSource.start()
         downloaderComponent.start()
         writerComponent.start()
+        liveEventRecorder.start()
         postProcessorComponent.start()
         sessionComponent.start()
         schedulerComponent.start()
