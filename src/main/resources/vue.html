@@ -431,15 +431,27 @@
                                             @click="activateVideo(room.id)">
                                             <i class="fa-solid fa-play"></i>
                                         </div>
-                                        <div v-if="scrub && scrub.roomId === room.id" class="scrub-bubble"
-                                            :style="scrubBubbleStyle(room.id)">
-                                            <div class="scrub-time">{{ scrubLabel }}</div>
-                                        </div>
                                     </template>
+                                    <!-- A public room that is not being recorded yet still has a snapshot:
+                                         show it, but no video — nothing feeds the preview pipeline until a
+                                         session runs, so click-to-watch would open a stream with no data. -->
+                                    <img v-else-if="imagePreview && isPreviewable(room) && previewCount(room.id) > 0"
+                                        :src="latestPreviewUrl(room.id)"
+                                        :style="{ height: previewHeight + 'px', width: (previewHeight * 1.6) + 'px' }"
+                                        class="object-cover rounded shadow-sm border border-slate-200"
+                                        :title="$t('Snapshot preview — recording has not started')"
+                                        @mouseenter="beginScrub(room.id)"
+                                        @mousemove="moveScrub($event, room.id)" />
                                     <div v-else
                                         :style="{ height: previewHeight + 'px', width: (previewHeight * 1.6) + 'px' }"
                                         class="bg-slate-100 rounded border border-slate-200 flex items-center justify-center text-slate-300 text-xs">
                                         {{ $t('N/A') }}</div>
+                                    <!-- One bubble serves both branches: the mouse picks the frame, the time
+                                         label says which one it is. -->
+                                    <div v-if="scrub && scrub.roomId === room.id" class="scrub-bubble"
+                                        :style="scrubBubbleStyle(room.id)">
+                                        <div class="scrub-time">{{ scrubLabel }}</div>
+                                    </div>
                                 </div>
                             </td>
                             <td class="px-2 py-1.5 text-slate-400 font-mono text-xs text-center">{{room.id || '-'}}</td>
@@ -1065,6 +1077,7 @@
                             'Add & Activate': '添加并激活', 'Add Only': '仅添加', 'Toggle Dark Mode': '切换深色模式',
                             'Preview size': '预览大小', 'Power Off Server': '关闭服务器',
                             'Click to watch live': '点击观看直播',
+                            'Snapshot preview — recording has not started': '快照预览 —— 尚未开始录制',
                             'days of records': '天记录', 'days forecast': '天预测', 'next': '未来',
                             'Public': '公开', 'Ticket': '开票', 'Private': '私密', 'P2P': 'P2P',
                             'Closed': '未开播', 'Forecast': '预测',
@@ -1678,7 +1691,7 @@
                 async refreshPreviewMeta() {
                     if (!this.imagePreview) return;
                     for (const room of this.roomDisplay) {
-                        if (room.sessionStatus !== 'Recording') continue;
+                        if (room.sessionStatus !== 'Recording' && !this.isPreviewable(room)) continue;
                         try {
                             const res = await fetch(`${HOST}/preview/index?id=${room.id}`);
                             if (!res.ok) { delete this.previewMeta[room.id]; continue; }
@@ -1688,6 +1701,11 @@
                             // Keep the last known meta: a blip must not blank the preview.
                         }
                     }
+                },
+                // Mirrors PreviewComponent's sampling targets: recording rooms, plus armed rooms the
+                // platform shows as public. Anything else has no snapshot to ask for.
+                isPreviewable(room) {
+                    return room.roomStatus === 'public' && (room.sessionStatus === 'Recording' || room.listening);
                 },
                 previewCount(roomId) {
                     return this.previewMeta[roomId]?.count || 0;
