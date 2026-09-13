@@ -4,8 +4,12 @@ import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.Actor
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.Room
+import github.rikacelery.v3.data.RoomStatus
 import github.rikacelery.v3.data.RuntimeTuning
+import github.rikacelery.v3.events.GetArmedRoomIds
 import github.rikacelery.v3.events.GetHostsConfig
+import github.rikacelery.v3.events.GetRooms
 import github.rikacelery.v3.events.GetSessions
 import github.rikacelery.v3.events.HostsConfigResponse
 import github.rikacelery.v3.utils.DefaultHttpClientProvider
@@ -49,14 +53,46 @@ data class PreviewSprite(
     val samples: List<File>
 )
 
+/**
+ * The rooms a sampling pass should cover: every room being recorded, plus every armed room the
+ * platform last reported as public. Recording rooms are not filtered by status — a paid show is
+ * still recorded, and the response decides what is storable anyway — while an armed room that is
+ * `off` is skipped before it costs a request.
+ *
+ * A room missing from the room list is dropped: without a name there is no broadcast to ask about.
+ */
+internal fun previewTargets(
+    rooms: List<Room>,
+    sessions: List<RoomSession>,
+    armed: Set<Long>
+): List<Pair<Long, String>> {
+    val nameById = rooms.associate { it.id to it.name }
+    val statusById = rooms.associate { it.id to it.status }
+    val recording = sessions.asSequence()
+        .filter { it.state == SessionState.Recording }
+        .map { it.roomId }
+    val armedPublic = armed.asSequence()
+        .filter { RoomStatus.isPublic(statusById[it].orEmpty()) }
+    return (recording + armedPublic)
+        .distinct()
+        .mapNotNull { roomId -> nameById[roomId]?.let { roomId to it } }
+        .sortedBy { it.first }
+        .toList()
+}
+
 /** Drives [PreviewComponent]; one tick per [RuntimeTuning.previewSampleInterval]. */
 sealed interface PreviewMsg
 
 data object PreviewTick : PreviewMsg
 
 /**
- * Keeps the last two hours of site snapshots for the rooms that are recording, and hands the WebUI
- * one composited image to scrub through.
+ * Keeps the last two hours of site snapshots for the rooms that are recording or armed, and hands
+ * the WebUI one composited image to scrub through.
+ *
+ * Armed rooms are sampled as well as recording ones so the strip is already warm when a broadcast
+ * starts: an armed room is minutes away from being recorded, and the frames from just before the
+ * session are exactly the ones worth having at the left edge of the strip. The platform status in
+ * the last poll gates it — an armed room that is `off` costs no request.
  *
  * The WebUI used to fetch these thumbnails itself — it called the site's broadcast API and loaded
  * the CDN image URL into an `<img>`, so every open tab talked to the site directly and the preview
@@ -100,16 +136,19 @@ class PreviewComponent(
 
     override suspend fun handle(msg: PreviewMsg) {
         if (msg !is PreviewTick) return
-        val sessions = try {
-            requestBus.request<List<RoomSession>>(GetSessions)
+        val targets = try {
+            previewTargets(
+                rooms = requestBus.request(GetRooms),
+                sessions = requestBus.request(GetSessions),
+                armed = requestBus.request<List<Long>>(GetArmedRoomIds).toSet()
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.debug("preview: session list unavailable: {}", e.message)
+            logger.debug("preview: room list unavailable: {}", e.message)
             return
         }
-        val recording = sessions.filter { it.state == SessionState.Recording }
-        if (recording.isEmpty()) return
+        if (targets.isEmpty()) return
         // Read once per tick, not per room: this is the folder the WebUI's host settings write to,
         // and a sample every five minutes does not need to observe a change mid-tick.
         val thumbHost = try {
@@ -121,21 +160,23 @@ class PreviewComponent(
         }.ifBlank { DEFAULT_THUMB_HOST }
         val semaphore = Semaphore(MAX_PARALLEL)
         withContext(Dispatchers.IO) {
-            recording.map { session -> async { semaphore.withPermit { sample(session, thumbHost) } } }.awaitAll()
+            targets.map { target ->
+                async { semaphore.withPermit { sample(target.first, target.second, thumbHost) } }
+            }.awaitAll()
         }
     }
 
-    private suspend fun sample(session: RoomSession, thumbHost: String) {
+    private suspend fun sample(roomId: Long, roomName: String, thumbHost: String) {
         val slot = System.currentTimeMillis() / SLOT_MS * SLOT_MS
-        val target = File(File(root, session.roomId.toString()), "$slot.jpg")
+        val target = File(File(root, roomId.toString()), "$slot.jpg")
         if (target.exists()) return
 
         val info: JsonObject = try {
-            apiClient.roomFetchBroadcastInfo(session.roomName)
+            apiClient.roomFetchBroadcastInfo(roomName)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.debug("preview: roomId={} broadcast info failed: {}", session.roomId, e.message)
+            logger.debug("preview: roomId={} broadcast info failed: {}", roomId, e.message)
             return
         }
         // `api/front/v1/broadcasts/<name>` answers `{"item": {...}}` — the same shape the room poll
@@ -144,18 +185,18 @@ class PreviewComponent(
         val status = item["status"]?.jsonPrimitive?.content ?: return
         if (status != PUBLIC_STATUS) return
         val snapshotTs = item["snapshotTimestamp"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
-        if (lastSnapshotTs[session.roomId] == snapshotTs) return
-        val modelId = item["modelId"]?.jsonPrimitive?.content?.toLongOrNull() ?: session.roomId
+        if (lastSnapshotTs[roomId] == snapshotTs) return
+        val modelId = item["modelId"]?.jsonPrimitive?.content?.toLongOrNull() ?: roomId
 
         val url = "https://$thumbHost/thumbs/$snapshotTs/$modelId"
         val bytes = try {
-            httpClientProvider.direct("thumb_${session.roomId % 8}")
+            httpClientProvider.direct("thumb_${roomId % 8}")
                 .get(url) { header(HttpHeaders.UserAgent, BROWSER_UA) }
                 .body<ByteArray>()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.debug("preview: roomId={} snapshot download failed: {}", session.roomId, e.message)
+            logger.debug("preview: roomId={} snapshot download failed: {}", roomId, e.message)
             return
         }
         if (bytes.isEmpty()) return
@@ -172,12 +213,12 @@ class PreviewComponent(
                 "-frames:v", "1", "-vf", NORMALISE,
                 "-q:v", "4", target.absolutePath
             )
-            lastSnapshotTs[session.roomId] = snapshotTs
+            lastSnapshotTs[roomId] = snapshotTs
             prune(target.parentFile)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.debug("preview: roomId={} snapshot transcode failed: {}", session.roomId, e.message)
+            logger.debug("preview: roomId={} snapshot transcode failed: {}", roomId, e.message)
         } finally {
             raw.delete()
         }

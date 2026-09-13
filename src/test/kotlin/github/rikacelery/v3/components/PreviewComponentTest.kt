@@ -3,6 +3,7 @@ package github.rikacelery.v3.components
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
+import github.rikacelery.v3.data.Room
 import github.rikacelery.v3.utils.DefaultHttpClientProvider
 import github.rikacelery.v3.utils.runProcessGetStdout
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -10,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.time.Instant
 import kotlin.io.path.createTempDirectory
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -113,5 +115,41 @@ class PreviewComponentTest {
             component.stop()
             tmp.deleteRecursively()
         }
+    }
+
+    /**
+     * Armed rooms are sampled so the strip is already populated when a broadcast starts — but only
+     * the ones the platform last showed as public, so an armed room that is off costs no request.
+     */
+    @Test
+    fun `sampling covers recording rooms and armed public ones`() {
+        val rooms = listOf(
+            Room(id = 1L, name = "recording-private", quality = "720p", sizeLimitBytes = 0, lastSeen = null, status = "virtualPrivate"),
+            Room(id = 2L, name = "armed-public", quality = "720p", sizeLimitBytes = 0, lastSeen = null, status = "public"),
+            Room(id = 3L, name = "armed-off", quality = "720p", sizeLimitBytes = 0, lastSeen = null, status = "off"),
+            Room(id = 4L, name = "idle-public", quality = "720p", sizeLimitBytes = 0, lastSeen = null, status = "public")
+        )
+        val sessions = listOf(
+            RoomSession(1L, "recording-private", "720p", SessionState.Recording, Instant.now()),
+            RoomSession(4L, "idle-public", "720p", SessionState.Idle, Instant.now())
+        )
+
+        val targets = previewTargets(rooms, sessions, armed = setOf(2L, 3L))
+
+        assertEquals(
+            listOf(1L to "recording-private", 2L to "armed-public"),
+            targets,
+            "a recording room is covered whatever its status, an armed one only while public"
+        )
+    }
+
+    @Test
+    fun `a room that is not in the list cannot be sampled`() {
+        val targets = previewTargets(
+            rooms = listOf(Room(id = 1L, name = "known", quality = "720p", sizeLimitBytes = 0, lastSeen = null, status = "public")),
+            sessions = emptyList(),
+            armed = setOf(1L, 999L)
+        )
+        assertEquals(listOf(1L to "known"), targets, "no name means no broadcast to ask about")
     }
 }
