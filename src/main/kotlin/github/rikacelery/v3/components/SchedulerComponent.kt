@@ -45,6 +45,7 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Job
@@ -103,6 +104,37 @@ data class SchedulerBus(val event: Any) : SchedulerMsg
 data class SchedulerSignal(val roomId: Long, val event: SchedulerEvent, val data: SchedulerDriveData?) : SchedulerMsg
 
 data class SchedulerHandleCommand(val env: CommandEnvelope) : SchedulerMsg
+
+/**
+ * Step one of arming: create the room's scheduler entry, with the settings read off the loop.
+ *
+ * The activation command runs off the actor loop because it makes network round trips, but both the
+ * entry map and the FSM belong to the loop — [github.rikacelery.v3.fsm.StateMachine.drive] guards
+ * against a second drive with a plain flag, so a drive from another coroutine that overlaps the
+ * loop's own drive is rejected as "re-entrant", logged and dropped, leaving the room armed with
+ * nothing left to move it. [done] completes once the entry exists, and the creation stays *before*
+ * the refresh in [SchedulerArmStatus] so a status event that the refresh publishes still finds the
+ * entry — the ordering this had when it ran inline on the loop.
+ */
+data class SchedulerArmEntry(
+    val roomId: Long,
+    val name: String,
+    val settings: RoomSettings,
+    val done: CompletableDeferred<Unit>
+) : SchedulerMsg
+
+/**
+ * Step two of arming: drive the entry with the status read after the refresh.
+ *
+ * The drive is on the loop for the reason above, and it is a separate step because the status is
+ * only known after the refresh. It consults the entry's *current* settings, so a settings change
+ * that landed in between is what decides whether the room starts.
+ */
+data class SchedulerArmStatus(
+    val roomId: Long,
+    val roomStatus: String,
+    val done: CompletableDeferred<Unit>
+) : SchedulerMsg
 
 // ============================================================
 // Entry
@@ -885,6 +917,29 @@ class SchedulerComponent(
         when (msg) {
             is SchedulerBus -> onBus(msg.event)
             is SchedulerSignal -> driveFsm(msg)
+            is SchedulerArmEntry -> {
+                try {
+                    entries.getOrPut(msg.roomId) {
+                        SchedulerEntry(msg.roomId, msg.name, this).apply { settings = msg.settings }
+                    }
+                    logger.info("roomId={} ({}) activated (armed)", msg.roomId, msg.name)
+                } finally {
+                    msg.done.complete(Unit)
+                }
+            }
+            is SchedulerArmStatus -> {
+                try {
+                    if (msg.roomStatus.isNotEmpty() && entries[msg.roomId]?.canRecord(msg.roomStatus) == true) {
+                        driveFsm(
+                            msg.roomId,
+                            SchedulerEvent.RoomStatusChanged,
+                            SchedulerDriveData(roomStatus = msg.roomStatus)
+                        )
+                    }
+                } finally {
+                    msg.done.complete(Unit)
+                }
+            }
             // Activation makes several request-bus round trips, one of which refreshes a room over
             // the network. Run it off the actor mailbox so a slow platform call cannot stall room
             // events; handleCommand still replies with CommandAck when it finishes.
@@ -1021,28 +1076,24 @@ class SchedulerComponent(
                 try {
                     val name = requestBus.request<RoomNameResponse>(GetRoomName(cmd.roomId)).name
                     val config = requestBus.request<RoomConfigResponse>(GetRoomConfig(cmd.roomId))
-                    entries.getOrPut(cmd.roomId) {
-                        SchedulerEntry(cmd.roomId, name, this).apply {
-                            settings = config.settings.copy(
-                                pkey = config.settings.pkey.ifBlank { streamAuthKey }
-                            )
-                        }
-                    }
-                    logger.info("roomId={} ({}) activated (armed)", cmd.roomId, name)
+                    val settings = config.settings.copy(pkey = config.settings.pkey.ifBlank { streamAuthKey })
+                    // The entry first, then the refresh: this branch runs off the actor loop (see the
+                    // dispatch in `handle`), so every mutation is handed to the mailbox, but in the
+                    // order it had when it ran inline — a status event published by the refresh has to
+                    // find the entry, or an armed room ends up with no status and no hint.
+                    val armed = CompletableDeferred<Unit>()
+                    tell(SchedulerArmEntry(cmd.roomId, name, settings, armed))
+                    armed.await()
                     requestBus.request<OkResponse>(RefreshRoomCmd(cmd.roomId))
-                    // Arming a room that is already recordable must not wait for the next
-                    // status event: the refresh above only publishes RoomStatusChanged when
-                    // the status actually changes, so an already-public room would sit armed
-                    // until something else moved. Feed the current status into the FSM.
+                    // Arming a room that is already recordable must not wait for the next status
+                    // event: the refresh above only publishes RoomStatusChanged when the status
+                    // actually changes, so an already-public room would sit armed until something
+                    // else moved. Feed the current status into the FSM.
                     val currentStatus = requestBus.request<List<Room>>(GetRooms)
                         .firstOrNull { it.id == cmd.roomId }?.status.orEmpty()
-                    if (currentStatus.isNotEmpty() && entries[cmd.roomId]?.canRecord(currentStatus) == true) {
-                        driveFsm(
-                            cmd.roomId,
-                            SchedulerEvent.RoomStatusChanged,
-                            SchedulerDriveData(roomStatus = currentStatus)
-                        )
-                    }
+                    val kicked = CompletableDeferred<Unit>()
+                    tell(SchedulerArmStatus(cmd.roomId, currentStatus, kicked))
+                    kicked.await()
                     OkResponse
                 } catch (e: CancellationException) {
                     throw e

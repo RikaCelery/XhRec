@@ -30,6 +30,7 @@ import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.CommandAck
 import github.rikacelery.v3.events.CommandEnvelope
 import github.rikacelery.v3.events.GetArmedRoomIds
+import github.rikacelery.v3.events.GetPreconfiguringRoomIds
 import github.rikacelery.v3.events.GetRooms
 import github.rikacelery.v3.events.GetSessions
 import github.rikacelery.v3.events.SegmentDownloaded
@@ -391,6 +392,13 @@ class XhrecIntegrationFixture(
         events.filterIsInstance<T>().firstOrNull(predicate)
     }
 
+    /** roomId -> scheduler FSM state, straight from the diagnose view an operator would read. */
+    suspend fun schedulerStates(): Map<String, String> {
+        val body = get("/diagnose?actor=SchedulerComponent").bodyAsText()
+        val states = Json.parseToJsonElement(body).jsonObject["states"]?.jsonObject ?: return emptyMap()
+        return states.mapValues { it.value.jsonPrimitive.content }
+    }
+
     suspend fun awaitFile(roomId: Long, timeout: Duration = 15.seconds): File =
         awaitEvent<FileReady>(timeout) { it.roomId == roomId }.file
 
@@ -408,7 +416,11 @@ class XhrecIntegrationFixture(
                 "recent events=${events.filterNot { it is CommandAck || it is CommandEnvelope }.takeLast(25)}; " +
                 "recent requests=${mock.requests().takeLast(15).map { "${it.method} ${it.path}" }}; " +
                 "sessions=${runCatching { sessions() }.getOrNull()}; " +
-                "armed=${runCatching { requestBus.request<List<Long>>(GetArmedRoomIds) }.getOrNull()}"
+                "armed=${runCatching { requestBus.request<List<Long>>(GetArmedRoomIds) }.getOrNull()}; " +
+                // Which state each armed room's FSM sits in: "armed but no session" reads very
+                // differently in Armed (nothing drove it) than in Preconfiguring (it is retrying).
+                "schedulerStates=${runCatching { schedulerStates() }.getOrNull()}; " +
+                "preconfiguring=${runCatching { requestBus.request<List<Long>>(GetPreconfiguringRoomIds) }.getOrNull()}"
         )
     }
 
