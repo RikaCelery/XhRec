@@ -21,6 +21,10 @@ ffmpeg 计算都在录制主机内完成**，客户端只负责交互，因此�
 
 ## 快速开始
 
+不用自己编译也可以：每次 main 有推送，CI 都会把 **`XhCut-all.jar`** 连同 `XhRec-all.jar`
+一起更新到 [dev-build release](https://github.com/RikaCelery/XhRec/releases/tag/dev-build)。
+下载后按「部署」第 2 步上传即可。
+
 ```bash
 ./gradlew :cutter:shadowJar      # 编译出 cutter/build/libs/cutter-all.jar
 ./cutter/check-ui.sh             # 校验 cutter.html 内联模块的 JS 语法与暴露符号
@@ -35,18 +39,31 @@ ffmpeg 计算都在录制主机内完成**，客户端只负责交互，因此�
 XhCut 跑在录制主机上，产物是一个自带 jar 的容器镜像。下面四步就是全部流程，
 `user@host`、三个宿主目录按你的环境替换即可——**仓库里不保存任何主机的路径**。
 
-### 1. 编译
+### 1. 拿到 jar
+
+自己编译：
 
 ```bash
 ./gradlew :cutter:shadowJar
 # -> cutter/build/libs/cutter-all.jar
 ```
 
+或者直接从 [dev-build release](https://github.com/RikaCelery/XhRec/releases/tag/dev-build)
+下载 `XhCut-all.jar`（CI 在 main 每次推送时更新它）。
+
 ### 2. 上传三个文件
 
 ```bash
 ssh user@host 'mkdir -p ~/xhcut'
-scp cutter/build/libs/cutter-all.jar cutter/Dockerfile cutter/entrypoint.sh user@host:~/xhcut/
+# 本地编译的话用 cutter/build/libs/cutter-all.jar；下载的话用 XhCut-all.jar
+scp XhCut-all.jar cutter/Dockerfile cutter/entrypoint.sh user@host:~/xhcut/
+```
+
+镜像里固定把它读作 `/cutter-all.jar`（见 `Dockerfile` 的 `COPY`），所以上传时文件名保持
+`cutter-all.jar` 最省事：
+
+```bash
+cp XhCut-all.jar cutter-all.jar
 ```
 
 ### 3. 在主机上构建镜像

@@ -41,7 +41,8 @@ Automated development build from main. This pre-release is updated in place.
 - Build: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID
 - Built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
-Download XhRec-all.jar and extension.tar. SHA256SUMS contains their SHA-256 checksums.
+Download XhRec-all.jar (the recorder), XhCut-all.jar (the cutter) and extension.tar.
+SHA256SUMS contains their SHA-256 checksums.
 
 ## Changes
 EOF
@@ -62,7 +63,7 @@ fi
 
 if [[ -n "$release_id" ]]; then
   # Keep the release URL and ID. Replace only these assets after the build passes.
-  gh release upload dev-build XhRec-all.jar extension.tar SHA256SUMS --clobber
+  gh release upload dev-build XhRec-all.jar XhCut-all.jar extension.tar SHA256SUMS --clobber
 fi
 
 if [[ -n "$tag_ref" ]]; then
@@ -77,7 +78,7 @@ if [[ -n "$release_id" ]]; then
   gh release edit dev-build --title 'CI builds' --prerelease --latest=false \
     --notes-file release-notes.md
 else
-  gh release create dev-build XhRec-all.jar extension.tar SHA256SUMS \
+  gh release create dev-build XhRec-all.jar XhCut-all.jar extension.tar SHA256SUMS \
     --verify-tag --title 'CI builds' --prerelease --latest=false \
     --notes-file release-notes.md
 fi
