@@ -6,6 +6,7 @@ import github.rikacelery.v3.components.ConfigComponent
 import github.rikacelery.v3.components.DownloaderComponent
 import github.rikacelery.v3.components.HttpServerComponent
 import github.rikacelery.v3.components.LiveEventSource
+import github.rikacelery.v3.components.LiveEventRecorderComponent
 import github.rikacelery.v3.components.LoadUsers
 import github.rikacelery.v3.components.MetricComponent
 import github.rikacelery.v3.components.PostProcessorComponent
@@ -123,6 +124,8 @@ class XhrecIntegrationFixture(
         private set
     lateinit var writerComponent: WriterComponent
         private set
+    lateinit var liveEventRecorder: LiveEventRecorderComponent
+        private set
     lateinit var sessionComponent: SessionComponent
         private set
     lateinit var schedulerComponent: SchedulerComponent
@@ -213,6 +216,11 @@ class XhrecIntegrationFixture(
             eventBus = eventBus,
             parentScope = scope
         )
+        liveEventRecorder = LiveEventRecorderComponent(
+            dataChannel,
+            eventBus = eventBus,
+            parentScope = scope
+        )
         sessionComponent = SessionComponent(
             dataChannel,
             downloaderComponent,
@@ -255,6 +263,7 @@ class XhrecIntegrationFixture(
         liveEventSource.start()
         downloaderComponent.start()
         writerComponent.start()
+        liveEventRecorder.start()
         sessionComponent.start()
         schedulerComponent.start()
 
@@ -267,6 +276,7 @@ class XhrecIntegrationFixture(
             "liveEventSource" to liveEventSource,
             "downloader" to downloaderComponent,
             "writer" to writerComponent,
+            "liveEventRecorder" to liveEventRecorder,
             "session" to sessionComponent,
             "scheduler" to schedulerComponent
         )
