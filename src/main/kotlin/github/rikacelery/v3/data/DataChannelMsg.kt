@@ -40,12 +40,6 @@ data class StreamEnd(
     val reason: EndReason
 ) : DataChannelMsg
 
-data class StreamEvent(
-    val roomId: Long,
-    val timestamp: Instant,
-    val eventJson: String
-) : DataChannelMsg
-
 data class DownloadMeta(
     val url: String,
     val fetchDurationMs: Long,

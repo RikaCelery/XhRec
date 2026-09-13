@@ -48,11 +48,12 @@ class MseStore : DataHook {
 
     // ── DataHook ────────────────────────────────────────────────────
     override suspend fun intercept(msg: DataChannelMsg): DataChannelMsg {
+        // Exhaustive on purpose: the sealed hierarchy is small, and adding a variant should
+        // force a decision here rather than fall into a silent catch-all.
         when (msg) {
             is StreamStart -> onStreamStart(msg.roomId)
             is StreamData -> onStreamData(msg)
             is StreamEnd -> onStreamEnd(msg.roomId)
-            else -> {}
         }
         return msg
     }
