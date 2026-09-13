@@ -1,6 +1,7 @@
 package github.rikacelery.v3.integration
 
 import io.ktor.client.statement.bodyAsText
+import kotlin.time.Duration.Companion.seconds
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -27,12 +28,12 @@ class PipelineMetricsIntegrationTest {
 
         val after = fx.get("/metrics").bodyAsText()
 
-        assertGrew(before, after, "xhrec_eventbus_published_total", "event=\"SegmentDownloaded\"")
-        assertGrew(before, after, "xhrec_datachannel_sent_total", "msg=\"StreamData\"")
-        assertGrew(before, after, "xhrec_room_download_bytes_total", "roomId=\"1001\"")
+        assertGrew(fx, before, "xhrec_eventbus_published_total", "event=\"SegmentDownloaded\"")
+        assertGrew(fx, before, "xhrec_datachannel_sent_total", "msg=\"StreamData\"")
+        assertGrew(fx, before, "xhrec_room_download_bytes_total", "roomId=\"1001\"")
         // SessionComponent, not WriterComponent: the writer consumes the DataChannel directly from
         // `onStart` and never goes through its own mailbox, so its actor counters stay at zero.
-        assertGrew(before, after, "xhrec_actor_messages_total", "actor=\"SessionComponent\"")
+        assertGrew(fx, before, "xhrec_actor_messages_total", "actor=\"SessionComponent\"")
 
         // Gauges, so they only have to be present and parse as a number.
         assertTrue(
@@ -162,13 +163,25 @@ class PipelineMetricsIntegrationTest {
         assertTrue("""xhrec_recording{roomId="1001"} 0""" in after, "an offline room must report recording=0")
     }
 
-    private fun assertGrew(before: String, after: String, family: String, labels: String) {
+    /**
+     * Waits for [family] to grow, rather than comparing two single scrapes.
+     *
+     * The room-level counters are updated by the metric component, which is an actor: a
+     * `SegmentDownloaded` that has already been published may not have reached `/metrics` by the
+     * time the test scrapes it, and on a loaded CI runner this lost the race often enough to fail
+     * the build. Waiting pins the wiring under test instead of the scheduler's whims.
+     */
+    private suspend fun assertGrew(
+        fx: XhrecIntegrationFixture,
+        before: String,
+        family: String,
+        labels: String
+    ) {
         val start = sample(before, family, labels)
-        val end = sample(after, family, labels)
-        assertTrue(
-            end > start,
-            "$family{$labels} must grow while a room records, went $start -> $end"
-        )
+        fx.await(15.seconds, "$family{$labels} to grow past $start") {
+            val end = sample(fx.get("/metrics").bodyAsText(), family, labels)
+            (end > start).takeIf { it }
+        }
     }
 
     @Test

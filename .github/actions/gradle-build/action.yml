@@ -16,6 +16,13 @@ runs:
         cache-provider: basic
         cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
+    # ffmpeg is what the preview strip is composited with (concat + scale + tile). Without it the
+    # sprite test skips itself, which would leave that path covered only on a developer machine.
+    - name: Install ffmpeg
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
     - name: Test and build ShadowJar
       shell: bash
       run: ./gradlew check shadowJar --no-daemon --build-cache --stacktrace

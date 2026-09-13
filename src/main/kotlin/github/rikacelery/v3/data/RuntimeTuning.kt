@@ -62,6 +62,12 @@ data class RuntimeTuning(
      * bus taps would stay armed — and keep costing — for the life of the process.
      */
     val debugStreamHeartbeat: Duration = 10.seconds,
+    /**
+     * How often the preview sampler asks the platform for a snapshot. The store keeps one sample per
+     * five-minute slot per room, so a shorter tick only shortens the delay before a slot is filled —
+     * it never produces more samples. Kept below the slot so that grid cannot be missed.
+     */
+    val previewSampleInterval: Duration = 1.minutes,
     val httpRestartDelay: Duration = 500.milliseconds,
     val downloaderRaceDelay: Duration = 8.seconds,
     val downloaderAttemptTimeout: Duration = 25.seconds,

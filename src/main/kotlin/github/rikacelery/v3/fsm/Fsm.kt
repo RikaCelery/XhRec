@@ -68,6 +68,14 @@ class StateMachine<S, E, D, C>(
         private set
 
     private var driving = false
+
+    /**
+     * The thread currently inside [drive], if any. The flag alone cannot tell a same-thread
+     * re-entrant action from a drive issued by a second coroutine, and the two need very different
+     * fixes: the first is an action that must schedule instead of driving, the second is an owner
+     * that is driving its FSM from somewhere other than its own loop.
+     */
+    private var drivingThread: Thread? = null
     private val historyLock = Any()
     private val _history = ArrayDeque<TransitionRecord<S, E>>(maxHistorySize)
 
@@ -88,11 +96,16 @@ class StateMachine<S, E, D, C>(
 
     fun drive(event: E, data: D? = null) {
         if (driving) {
-            dumpHistoryAndThrow(
-                FsmException.IllegalTransition("Re-entrant drive: action for state [$currentState] event [$event] must not call drive again")
-            )
+            val message = if (drivingThread !== Thread.currentThread()) {
+                "Concurrent drive from thread [${Thread.currentThread().name}] while [${drivingThread?.name}] " +
+                    "is driving state [$currentState] event [$event]: an FSM may only be driven from its owner's loop"
+            } else {
+                "Re-entrant drive: action for state [$currentState] event [$event] must not call drive again"
+            }
+            dumpHistoryAndThrow(FsmException.IllegalTransition(message))
         }
         driving = true
+        drivingThread = Thread.currentThread()
         try {
             val transition = matrix[currentState]?.get(event)
                 ?: dumpHistoryAndThrow(
@@ -122,6 +135,7 @@ class StateMachine<S, E, D, C>(
             }
         } finally {
             driving = false
+            drivingThread = null
         }
     }
 

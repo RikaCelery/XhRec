@@ -51,6 +51,10 @@ class PredictionStore(
                 ModelSchedule.importState(modelObj.toString())
                 logger.info("Loaded model schedule data for {} rooms", ModelSchedule.getAllRoomIds().size)
             }
+            root["scheduleHistory"]?.jsonObject?.let { historyObj ->
+                ScheduleHistory.importState(historyObj.toString())
+                logger.info("Loaded occupancy history for {} rooms", ScheduleHistory.rooms().size)
+            }
         } catch (e: Exception) {
             logger.warn("Failed to load prediction data: ${e.message}")
         }
@@ -63,12 +67,15 @@ class PredictionStore(
         try {
             // Drop rooms whose history aged out before serializing, so the map cannot grow forever.
             ModelSchedule.cleanup()
+            ScheduleHistory.cleanup()
             withContext(Dispatchers.IO) {
                 val payload = buildString {
                     append("{\"cdn\":")
                     append(CdnSelector.exportState())
                     append(",\"modelSchedule\":")
                     append(ModelSchedule.exportState())
+                    append(",\"scheduleHistory\":")
+                    append(ScheduleHistory.exportState())
                     append("}")
                 }
                 val file = File(filePath)

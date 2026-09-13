@@ -180,6 +180,18 @@ fun main(vararg args: String) {
             runtimeTuning
         )
 
+        // Samples the platform's own live snapshot for each recording room, so the WebUI's preview
+        // never has to reach the platform from the browser.
+        val previewComponent = PreviewComponent(
+            requestBus,
+            apiClient,
+            eventBus,
+            appScope,
+            config.tmpDir,
+            httpClientProvider,
+            runtimeTuning
+        )
+
         // Prediction persistence (loads on init, auto-saves periodically, saves on stop)
         val predictionStore = PredictionStore(
             "xhrec-predictions.json",
@@ -198,6 +210,7 @@ fun main(vararg args: String) {
             postProcessorComponent,
             appScope,
             mseStore,
+            previewComponent,
             config.apiToken
         )
 
@@ -213,6 +226,7 @@ fun main(vararg args: String) {
         postProcessorComponent.start()
         sessionComponent.start()
         schedulerComponent.start()
+        previewComponent.start()
         predictionStore.start()
 
         // 4. Bootstrap: load users, processors, rooms from config files
