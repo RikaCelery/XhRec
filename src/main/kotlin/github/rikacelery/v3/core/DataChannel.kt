@@ -52,7 +52,6 @@ class DataChannel(capacity: Int = 256) {
         is github.rikacelery.v3.data.StreamStart -> msg.roomId
         is github.rikacelery.v3.data.StreamData -> msg.roomId
         is github.rikacelery.v3.data.StreamEnd -> msg.roomId
-        is github.rikacelery.v3.data.StreamEvent -> msg.roomId
     }
 
     suspend fun receive(): DataChannelMsg {

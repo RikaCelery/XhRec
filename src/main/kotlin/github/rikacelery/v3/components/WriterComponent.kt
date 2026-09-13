@@ -6,10 +6,10 @@ import github.rikacelery.v3.core.Diagnosable
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.data.StreamData
 import github.rikacelery.v3.data.StreamEnd
-import github.rikacelery.v3.data.StreamEvent
 import github.rikacelery.v3.data.StreamStart
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
+import github.rikacelery.v3.events.LiveMessage
 import github.rikacelery.v3.events.WriterFatal
 import github.rikacelery.v3.hooks.WriterHook
 import kotlinx.coroutines.*
@@ -65,26 +65,68 @@ class WriterComponent(
     private val minOutputBytes: Long = 1024,
     eventBus: EventBus,
     parentScope: CoroutineScope
-) : Actor<Unit>("WriterComponent", eventBus, parentScope) {
+) : Actor<Any>("WriterComponent", eventBus, parentScope) {
 
     private val files = ConcurrentHashMap<Long, ActiveFile>()
     private val timeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")
         .withZone(ZoneId.systemDefault())
 
     override suspend fun onStart(scope: CoroutineScope) {
+        // Platform frames are persisted here rather than by a separate component because
+        // *this* class owns the file. The gate for "is there somewhere to write an event"
+        // has to be the same object that opens and closes the handle: a recorder that
+        // tracked the recording state instead would keep emitting through the window
+        // between a cut's `StreamEnd` (which closes the sidecar) and the next
+        // `StreamStart` (which opens one), and every event in that window was silently
+        // dropped — nothing logs it, because from the writer's side there is simply no
+        // open file. `RecordingStopped` does not close that window either: it is published
+        // on session exit, not on a cut, so a break or restart never fires it.
+        subscribe(LiveMessage::class)
         scope.launch {
             while (isActive) {
                 when (val msg = dataChannel.receive()) {
                     is StreamStart -> handleStreamStart(msg)
                     is StreamData -> handleStreamData(msg)
                     is StreamEnd -> handleStreamEnd(msg)
-                    is StreamEvent -> handleStreamEvent(msg)
                 }
             }
         }
     }
 
-    override suspend fun handle(msg: Unit) {}
+    override suspend fun handle(msg: Any) {
+        if (msg is LiveMessage) recordEvent(msg)
+    }
+
+    override suspend fun wrapEvent(event: Any): Any? = when (event) {
+        is LiveMessage -> event
+        else -> null
+    }
+
+    /**
+     * Appends one platform frame to the sidecar of the room's **currently open** file.
+     *
+     * The envelope is the one the reader unwraps (`{"type": …, "data": …}`); the payload is
+     * passed through untouched so the reader's timestamp handling is unaffected, and the
+     * receipt time is a sibling of `data` so it cannot be mistaken for an occurrence time.
+     */
+    private suspend fun recordEvent(event: LiveMessage) {
+        val active = files[event.roomId] ?: return
+        if (event.type.isEmpty()) return
+        val line = buildJsonObject {
+            put("type", event.type)
+            put("recordedAt", Instant.now().toString())
+            put("data", event.body)
+        }.toString()
+        try {
+            withContext(Dispatchers.IO) {
+                active.eventFos.write((line + "\n").toByteArray())
+            }
+        } catch (e: Exception) {
+            logger.error("roomId=${event.roomId} failed to write event: ${e.message}", e)
+            eventBus.publish(WriterFatal(event.roomId, e.message ?: "Unknown error"))
+            files.remove(event.roomId)?.dispose()
+        }
+    }
 
     private suspend fun handleStreamStart(msg: StreamStart) {
         val existing = files.remove(msg.roomId)
@@ -136,19 +178,6 @@ class WriterComponent(
     private suspend fun handleStreamEnd(msg: StreamEnd) {
         val active = files.remove(msg.roomId) ?: return
         closeActiveFile(active, msg.reason)
-    }
-
-    private suspend fun handleStreamEvent(msg: StreamEvent) {
-        val active = files[msg.roomId] ?: return
-        try {
-            withContext(Dispatchers.IO) {
-                active.eventFos.write((msg.eventJson + "\n").toByteArray())
-            }
-        } catch (e: Exception) {
-            logger.error("roomId=${msg.roomId} failed to write event: ${e.message}", e)
-            eventBus.publish(WriterFatal(msg.roomId, e.message ?: "Unknown error"))
-            files.remove(msg.roomId)?.dispose()
-        }
     }
 
     private suspend fun closeActiveFile(active: ActiveFile, reason: EndReason) {
