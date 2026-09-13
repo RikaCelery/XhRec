@@ -15,6 +15,7 @@ import github.rikacelery.v3.events.*
 import github.rikacelery.v3.exceptions.DeletedException
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.utils.PathSingle
+import github.rikacelery.v3.utils.ScheduleHistory
 import github.rikacelery.v3.utils.SensitiveStringRegistry
 import github.rikacelery.v3.utils.asString
 import kotlinx.coroutines.*
@@ -352,6 +353,9 @@ class RoomComponent(
                     logger.error("roomId={} refreshAll error: {}", room.id, e.message, e)
                 }
             }
+            // The occupancy history rides on this loop instead of making its own requests: the poll
+            // already knows every room's status, and a ten-minute slot needs nothing finer.
+            ScheduleHistory.sample(rooms.values.associate { it.id to it.status })
         }
     }
 

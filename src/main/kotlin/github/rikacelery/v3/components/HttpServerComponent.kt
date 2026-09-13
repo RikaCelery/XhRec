@@ -12,6 +12,7 @@ import github.rikacelery.v3.data.RuntimeTuning
 import github.rikacelery.v3.events.*
 import github.rikacelery.v3.ml.PredictionEngine
 import github.rikacelery.v3.utils.CdnSelector
+import github.rikacelery.v3.utils.ScheduleHistory
 import github.rikacelery.v3.utils.LogLevels
 import github.rikacelery.v3.utils.ModelSchedule
 import io.ktor.http.*
@@ -49,6 +50,7 @@ class HttpServerComponent(
     private val postProcessorComponent: PostProcessorComponent,
     private val scope: CoroutineScope,
     private val mseStore: MseStore = MseStore(),
+    private val previewComponent: PreviewComponent? = null,
     private val apiToken: String = "",
     private val runtimeTuning: RuntimeTuning = RuntimeTuning()
 ) {
@@ -701,6 +703,52 @@ class HttpServerComponent(
                         }
                     }
                 }
+                // ── Live preview snapshots ──────────────────────────────────────────
+                // The platform's own snapshot, sampled by PreviewComponent and served from here.
+                // The browser must never talk to the platform: it used to call the broadcast API and
+                // load the CDN thumbnail directly, which leaked the viewer's address and broke
+                // whenever the platform was unreachable from the browser.
+                get("/preview/latest") {
+                    val id = call.request.queryParameters["id"]?.toLongOrNull()
+                        ?: return@get call.respondText("Missing id", status = HttpStatusCode.BadRequest)
+                    val file = previewComponent?.latest(id)
+                        ?: return@get call.respondText("No snapshot", status = HttpStatusCode.NotFound)
+                    call.response.header("Cache-Control", "no-cache")
+                    call.respondFile(file)
+                }
+                // One request carries the whole strip: the grid geometry plus every sample's slot.
+                get("/preview/index") {
+                    val id = call.request.queryParameters["id"]?.toLongOrNull()
+                        ?: return@get call.respondText("Missing id", status = HttpStatusCode.BadRequest)
+                    val sprite = previewComponent?.spriteInfo(id)
+                        ?: return@get call.respondText("No snapshot", status = HttpStatusCode.NotFound)
+                    call.response.header("Cache-Control", "no-cache")
+                    call.respond(buildJsonObject {
+                        put("roomId", JsonPrimitive(id))
+                        put("count", JsonPrimitive(sprite.samples.size))
+                        put("columns", JsonPrimitive(sprite.columns))
+                        put("rows", JsonPrimitive(sprite.rows))
+                        put("cellWidth", JsonPrimitive(sprite.cellWidth))
+                        put("cellHeight", JsonPrimitive(sprite.cellHeight))
+                        put("samples", buildJsonArray {
+                            sprite.samples.forEachIndexed { index, sample ->
+                                add(buildJsonObject {
+                                    put("index", JsonPrimitive(index))
+                                    put("at", JsonPrimitive(sample.nameWithoutExtension.toLongOrNull() ?: 0L))
+                                })
+                            }
+                        })
+                    })
+                }
+                get("/preview/sprite") {
+                    val id = call.request.queryParameters["id"]?.toLongOrNull()
+                        ?: return@get call.respondText("Missing id", status = HttpStatusCode.BadRequest)
+                    val sprite = previewComponent?.spriteInfo(id)
+                        ?: return@get call.respondText("No snapshot", status = HttpStatusCode.NotFound)
+                    call.response.header("Cache-Control", "no-cache")
+                    call.respondFile(sprite.file)
+                }
+
                 get("/model/schedule") {
                     val name = call.request.queryParameters["name"] ?: ""
                     val idParam = call.request.queryParameters["id"] ?: ""
@@ -753,6 +801,44 @@ class HttpServerComponent(
                         })
                         snapshot.nextPredictedHour?.let { put("nextPredictedHour", JsonPrimitive(it)) }
                         put("recentCount", JsonPrimitive(snapshot.recentCount))
+                    })
+                }
+
+                // The show-records grid: ten-minute occupancy for the last days, plus the forecast
+                // for the next three. One room at a time — the grid is 144 cells wide.
+                get("/model/schedule/grid") {
+                    val idParam = call.request.queryParameters["id"] ?: ""
+                    val roomId = idParam.toLongOrNull()
+                        ?: return@get call.respondText(
+                            "id parameter required",
+                            status = HttpStatusCode.BadRequest
+                        )
+                    val days = call.request.queryParameters["days"]?.toIntOrNull()?.coerceIn(1, ScheduleHistory.KEEP_DAYS.toInt()) ?: 7
+                    val forecastDays = call.request.queryParameters["forecast"]?.toIntOrNull()?.coerceIn(0, 7) ?: 3
+                    val name = requestBus.request<List<Room>>(GetRooms).find { it.id == roomId }?.name ?: ""
+                    call.respond(buildJsonObject {
+                        put("roomId", JsonPrimitive(roomId))
+                        put("name", JsonPrimitive(name))
+                        put("slotMinutes", JsonPrimitive(ScheduleHistory.SLOT_MINUTES))
+                        put("history", buildJsonArray {
+                            ScheduleHistory.history(roomId, days).forEach { day ->
+                                add(buildJsonObject {
+                                    put("date", JsonPrimitive(day.date))
+                                    put("slots", JsonPrimitive(day.slots))
+                                })
+                            }
+                        })
+                        put("forecast", buildJsonArray {
+                            ScheduleHistory.forecast(roomId, forecastDays).forEach { day ->
+                                add(buildJsonObject {
+                                    put("date", JsonPrimitive(day.date))
+                                    // Percent, rounded: the grid only needs a shade per cell.
+                                    put("slots", buildJsonArray {
+                                        day.slots.forEach { add(JsonPrimitive(Math.round(it * 100).toInt())) }
+                                    })
+                                })
+                            }
+                        })
                     })
                 }
 
