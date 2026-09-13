@@ -1,0 +1,2504 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>XhCut</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script type="importmap">
+        { "imports": { "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js" } }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+    <style>
+        :root { color-scheme: dark; }
+        html, body { height: 100%; margin: 0; }
+        body { background: #0b0d10; color: #e5e7eb; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+        .scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+        .scroll::-webkit-scrollbar-track { background: #14171c; }
+        .scroll::-webkit-scrollbar-thumb { background: #333a45; border-radius: 4px; }
+        .scroll::-webkit-scrollbar-thumb:hover { background: #454e5c; }
+        .row-active { background: #1d2a3a !important; }
+        .tbtn { padding: 2px 7px; border-radius: 4px; border: 1px solid #374151; color: #cbd5e1; }
+        .tbtn:hover { background: #1f2937; }
+        .tcbox { width: 7.4rem; background: #0f1216; border: 1px solid #374151; border-radius: 4px;
+                 padding: 2px 5px; text-align: center; color: #e5e7eb;
+                 font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+
+        /* ---------------------------------------------------------------- timeline
+           Percent-positioned boxes inside a container whose width is `zoom * 100%`,
+           so the ruler, clips, every lane and the playhead share one coordinate
+           system and stay aligned at any zoom. */
+        .lane { position: relative; height: 22px; background: #101317; border-bottom: 1px solid #171b21; }
+        .lane-label { position: absolute; left: 0; top: 0; z-index: 24; font-size: 10px; color: #6b7280;
+                      background: rgba(11,13,16,.72); padding: 1px 4px; pointer-events: none; }
+        .mark { position: absolute; top: 0; bottom: 0; }
+
+        /* Clips: an NLE look — body, number badge, label, and trim handles. */
+        .clip { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; overflow: hidden;
+                border: 1px solid rgba(0,0,0,.55); cursor: grab; user-select: none; }
+        .clip.selected { background: linear-gradient(180deg, #5c8a3c, #40632a); }
+        .clip.unselected { background: linear-gradient(180deg, #4a4a52, #35353c); }
+        .clip.active { background: linear-gradient(180deg, #a9714a, #7d4f31); box-shadow: 0 0 0 2px #f59e0b inset; }
+        .clip.marker { min-width: 3px; background: linear-gradient(180deg, #a855f7, #7e22ce); }
+        .clip .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 3; }
+        .clip .handle:hover { background: rgba(255,255,255,.4); }
+        .clip .h-l { left: 0; } .clip .h-r { right: 0; }
+        .clip .badge { position: absolute; left: 3px; top: 1px; font-size: 9px; line-height: 1.3;
+                       background: rgba(0,0,0,.55); color: #fff; padding: 0 3px; border-radius: 2px; z-index: 2; }
+        .clip .label { position: absolute; left: 4px; bottom: 2px; right: 4px; font-size: 10px; color: #f3f4f6;
+                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px #000; z-index: 2; }
+
+        .kf { position: absolute; bottom: 0; width: 1px; height: 7px; background: #94a3b8; opacity: .85; }
+        /* Already-cached frame timestamps, After Effects style. */
+        .kf.cached { height: 4px; background: #22c55e; width: 3px; border-radius: 1px; opacity: .95; }
+        /* Browser buffered range — the client-side cache bar. */
+        .buffered { position: absolute; bottom: 5px; height: 3px; background: #0ea5e9; opacity: .9; }
+        .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: #262c34; }
+        .tick.minor { top: 65%; }
+
+        /* Playhead: one line spanning every lane, with a grabbable head. */
+        .playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: #ef4444; z-index: 30; pointer-events: none; }
+        .playhead-head { position: absolute; top: 0; left: -6px; width: 13px; height: 12px; background: #ef4444;
+                         clip-path: polygon(0 0, 100% 0, 50% 100%); pointer-events: auto; cursor: ew-resize; }
+        .scrub-zone { cursor: ew-resize; }
+        .splitter { flex-shrink: 0; background: #19212b; touch-action: none; z-index: 40; }
+        .splitter:hover, .splitter:active { background: #0284c7; }
+        .splitter.vertical { width: 6px; cursor: col-resize; }
+        .splitter.horizontal { height: 6px; cursor: row-resize; }
+        .lane-resize { position: absolute; bottom: 0; left: 0; right: 0; height: 5px; cursor: row-resize;
+                       z-index: 35; touch-action: none; border-bottom: 1px solid #334155; }
+        .lane-resize:hover { background: #0284c7; }
+        .thumbnail { position: absolute; top: 0; bottom: 5px; border-right: 1px solid #334155; overflow: hidden; background: #17202b; }
+        .thumbnail img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        .thumbnail span { position: absolute; bottom: 0; left: 0; padding: 0 3px; background: #000a; font-size: 10px; }
+    </style>
+</head>
+
+<body>
+    <div id="app" class="h-screen flex flex-col"></div>
+
+    <script type="module">
+        import { createApp, ref, computed, watch, onMounted, nextTick } from 'vue'
+
+        // ---------------------------------------------------------------- helpers
+        const pad = (n, w = 2) => String(Math.floor(n)).padStart(w, '0')
+
+        /** `HH:MM:SS.mmm` — the timecode style used by the transport readouts. */
+        const tc = (s) => {
+            if (s == null || !isFinite(s)) return '00:00:00.000'
+            const neg = s < 0
+            s = Math.abs(s)
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60)
+            const ms = Math.round((s - Math.floor(s)) * 1000)
+            return `${neg ? '-' : ''}${pad(h)}:${pad(m)}:${pad(sec)}.${pad(ms, 3)}`
+        }
+        const fmtDur = (s) => {
+            if (s == null || !isFinite(s)) return '--:--'
+            s = Math.floor(s)
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
+            return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`
+        }
+        const fmtSize = (b) => {
+            if (b == null || b === 0) return '-'
+            const u = ['B', 'KB', 'MB', 'GB', 'TB']
+            let i = 0, v = b
+            while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+            return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)}${u[i]}`
+        }
+        const fmtDate = (ms) => ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '-'
+
+        const POWER_LABEL = ['-', '低', '中', '高', '极高']
+        const POWER_COLOR = ['#374151', '#4d7c0f', '#0e7490', '#b45309', '#b91c1c']
+        const CONF_LABEL = { EXACT: '精确', INTERPOLATED: '插值', EXTRAPOLATED: '外推', NONE: '无' }
+        const CONF_COLOR = { EXACT: '#10b981', INTERPOLATED: '#eab308', EXTRAPOLATED: '#f97316', NONE: '#6b7280' }
+        const ZOOM_MAX = 8192
+        /** Sentinel quality that streams the original file instead of transcoding. */
+        const RAW_QUALITY = 'raw'
+        /**
+         * Locally cached faststart proxy: the browser decodes and buffers it itself.
+         *
+         * The source recordings are not faststart (the index sits at the tail), so
+         * pointing <video> at them stalls for ~30 s before a single frame appears.
+         * The proxy is small, has its index at the front, and therefore starts and
+         * seeks immediately — with all decoding and buffering done client-side.
+         */
+        const PROXY_QUALITY = 'proxy'
+        /** Jumps longer than this get a still-frame preview while the player catches up. */
+        const FAR_SEEK_SECONDS = 10
+        const QUALITY_ORDER = ['tiny', 'low', 'mid', 'high', RAW_QUALITY, PROXY_QUALITY]
+        const qualityLabel = (q) => (q === RAW_QUALITY ? '无损' : q === PROXY_QUALITY ? '本地代理' : q)
+        const round3 = (v) => Math.round(v * 1000) / 1000
+        const readStored = key => { try { return JSON.parse(localStorage.getItem(key)) } catch { return null } }
+        const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+        const app = {
+            setup() {
+                // ------------------------------------------------------------ state
+                const health = ref(null)
+                const items = ref([])
+                /**
+                 * Page size. The index holds ~32k recordings and the list is only ever the
+                 * current page, so this is a window onto the server's full sorted result,
+                 * not a cap: `offset` walks the rest as the user scrolls.
+                 */
+                const LIBRARY_PAGE = 300
+                const libraryOffset = ref(0)
+                const libraryDone = ref(false)
+                /** Guards against a slow page landing after the filter changed under it. */
+                let libraryGeneration = 0
+                const libraryLoadingMore = ref(false)
+                /**
+                 * Whether the server can actually unlink recordings.
+                 *
+                 * The media root is mounted read-only in the shipped deployment, and an
+                 * unlink against a read-only mount cannot succeed. Rather than offer a
+                 * button that always fails, the controls are disabled with the reason —
+                 * the server probes the root on every request, so flipping the mount to
+                 * rw is picked up on the next reload without a restart.
+                 */
+                const deleteEnabled = ref(false)
+                const deleteBlockedReason = ref('')
+                /**
+                 * Instance-wide settings, stored server-side (`/api/settings`).
+                 *
+                 * Keeping them off `localStorage` is deliberate: they decide what happens to
+                 * files on the NAS, so they must not differ per browser.
+                 */
+                const settings = ref({ deleteSourceAfterExport: false, error: null })
+                const savingSettings = ref(false)
+                /** Ids ticked in the library for a bulk delete. */
+                const checked = ref(new Set())
+                /** Pending confirmation: { items: [...] } or null. */
+                const deletePrompt = ref(null)
+                const deleting = ref(false)
+                const deleteError = ref('')
+                const rooms = ref([])
+                const total = ref(0)
+                const loading = ref(false)
+                const scanning = ref(false)
+                const selected = ref(null)
+                const detail = ref(null)
+                const lanes = ref(null)
+                const lanesLoading = ref(false)
+
+                const q = ref('')
+                const sort = ref('heat')
+                const roomFilter = ref('')
+                const eventsOnly = ref(true)
+
+                const player = ref(null)
+                const playerState = ref('')
+                const quality = ref('low')
+                const showAudio = ref(true)
+                const showSpec = ref(false)
+                let hls = null
+
+                const segments = ref([])
+                const suggestions = ref([])
+                const suggestLoading = ref(false)
+                const prefs = ref({ mergeGap: 15, minBlock: 45, padBefore: 8, padAfter: 6, minScore: 0.35, preset: 'toy' })
+                const rightTab = ref('suggest')
+                const activeSeg = ref(-1)
+                const exportJob = ref(null)
+                const outputDir = ref('')
+                const message = ref('')
+                let suggestTimer = null
+
+                const viewport = ref(null)
+                const track = ref(null)
+                const zoom = ref(1)
+                const scrollLeft = ref(0)
+                const currentTime = ref(0)
+                const playing = ref(false)
+                const rate = ref(1)
+                const snap = ref(true)
+                const showKeyframes = ref(true)
+                const keyframes = ref([])
+                const scrubPreview = ref(false)
+                /** Still frame shown while scrubbing; see scheduleScrubFrame. */
+                const scrubFrameUrl = ref(null)
+                const proxy = ref(null)            // latest proxy status from the server
+                /** Proxy resolutions offered; 240p is for a weak link, 480p for detail. */
+                const PROXY_HEIGHTS = [240, 480]
+                const proxyHeight = ref(480)
+                /** Frame rates offered; dropping frames is the single biggest speed lever. */
+                const PROXY_FPS = [[2, '2fps 最快'], [5, '5fps'], [0, '全帧']]
+                const proxyFps = ref(5)
+                const buffered = ref([])           // [[start,end], ...] the browser holds
+                let proxyPoll = null
+                let frameTimer = null
+                let pendingSeek = null
+                const buffering = ref(false)
+                const seeking = ref(false)
+                const drag = ref(null)
+                let kfTimer = null
+                const kfCache = new Map()
+
+                const laneFlags = ref({ toy: true, gifts: true, level: true, chat: false })
+                const layout = ref({ library: 280, video: 250, events: 110, suggest: 320, segments: 340, export: 320 })
+                const laneHeights = ref({ ruler: 26, thumbnails: 70, clips: 46, toy: 28, gifts: 28, level: 28, chat: 24, audio: 44, spec: 64 })
+                /**
+                 * Uniform shift applied to every parsed event, in seconds.
+                 *
+                 * Event times come from the recording's file-name start stamp, which is
+                 * taken when the writer opens the file and can sit a little off the
+                 * media timeline; this nudges the whole event layer to line up. It is a
+                 * per-recording value — every recording's stamp is off by its own
+                 * amount — so it lives in the per-editor state, not global preferences.
+                 */
+                const EVENT_OFFSET_MIN = -3
+                const EVENT_OFFSET_MAX = 17
+                /**
+                 * Calibrated default shift, matching DEFAULT_EVENT_NUDGE_SECONDS on the server.
+                 *
+                 * A recording's file-name stamp is written when the writer opens the file, a few
+                 * seconds after the platform's stream clock starts, so events land late by that gap
+                 * until they are nudged. Measured at +7.0 s on four independent anchors across two
+                 * recordings, with no drift over 8.6 h; see docs/toy-activation-research.md.
+                 *
+                 * Only the event lanes move: cut points and exports are in video time, so this can
+                 * never shift an edit. A per-recording value saved in the editor state wins.
+                 */
+                const DEFAULT_EVENT_OFFSET = 7.0
+                const eventOffset = ref(DEFAULT_EVENT_OFFSET)
+                const showThumbnails = ref(true)
+                const pendingMarkerId = ref(null)
+                const undoStack = ref([])
+                const redoStack = ref([])
+                let restoring = true, openGeneration = 0, persistTimer = null
+                const storageNotice = ref('')
+
+                // ------------------------------------------------------- derived
+                const videoStream = computed(() => (detail.value?.streams || []).find(s => s.type === 'video'))
+                const fps = computed(() => {
+                    const f = videoStream.value?.fps
+                    return f && f > 0 && f < 1000 ? f : 30
+                })
+                const duration = computed(() => {
+                    const d = lanes.value?.durationSeconds ?? detail.value?.durationSeconds
+                    return d && d > 0 ? d : 0
+                })
+                /**
+                 * Viewport width as *reactive* state.
+                 *
+                 * Reading `element.clientWidth` inside a computed looks fine but is not:
+                 * Vue cannot track a DOM property, so the value is captured once — very
+                 * possibly before layout settles — and then never recomputed. That is
+                 * why the playhead only lined up with the mouse after a zoom: zoom is
+                 * reactive, so it forced a recompute with a correct width. A
+                 * ResizeObserver feeds this ref instead.
+                 */
+                const viewportWidth = ref(0)
+                let resizeObserver = null
+
+                function observeViewport() {
+                    const el = viewport.value
+                    if (!el || typeof ResizeObserver === 'undefined') return
+                    if (resizeObserver) resizeObserver.disconnect()
+                    resizeObserver = new ResizeObserver(() => {
+                        const w = el.clientWidth
+                        if (w > 0 && w !== viewportWidth.value) {
+                            viewportWidth.value = w
+                            scheduleKeyframeLoad()
+                        }
+                    })
+                    resizeObserver.observe(el)
+                    viewportWidth.value = el.clientWidth
+                }
+
+                const contentWidth = computed(() => Math.max(1, viewportWidth.value || 1) * zoom.value)
+                const pxPerSecond = computed(() => duration.value > 0 ? contentWidth.value / duration.value : 1)
+                const timeToPct = (t) => duration.value > 0 ? (t / duration.value) * 100 : 0
+                const widthToPct = (a, b) => duration.value > 0 ? ((b - a) / duration.value) * 100 : 0
+                const pxToTime = (px) => px / Math.max(pxPerSecond.value, 1e-9)
+
+                /** Time range currently on screen; drives keyframe and spectrum fetches. */
+                const viewWindow = computed(() => {
+                    const el = viewport.value
+                    if (!el || !duration.value) return { from: 0, to: duration.value || 0 }
+                    return {
+                        from: Math.max(0, pxToTime(scrollLeft.value)),
+                        to: Math.min(duration.value, pxToTime(scrollLeft.value + (viewportWidth.value || el.clientWidth)))
+                    }
+                })
+
+                /**
+                 * Ruler ticks, generated only for the visible window.
+                 *
+                 * Spanning the whole duration looks equivalent but is not: at high zoom
+                 * the step shrinks to a fraction of a second and a six-hour recording
+                 * asks for hundreds of thousands of tick elements, which locks up the
+                 * browser. Real NLEs draw the ruler for the viewport for this reason.
+                 */
+                const rulerTicks = computed(() => {
+                    if (!duration.value) return []
+                    const { from, to } = viewWindow.value
+                    const raw = 100 / Math.max(pxPerSecond.value, 1e-9)
+                    const steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800]
+                    const step = steps.find(s => s >= raw) || steps[steps.length - 1]
+                    const minorStep = step / 5
+                    const showMinor = minorStep * pxPerSecond.value > 7
+                    const first = Math.floor(Math.max(0, from - step) / step) * step
+                    const last = Math.min(duration.value, to + step)
+                    const out = []
+                    for (let t = first; t <= last + 1e-6 && out.length < 400; t += step) {
+                        if (t < 0 || t > duration.value) continue
+                        const minors = []
+                        if (showMinor) {
+                            for (let k = 1; k < 5; k++) {
+                                const mt = t + minorStep * k
+                                if (mt < duration.value && mt >= 0) minors.push(mt)
+                            }
+                        }
+                        out.push({ t, label: step < 1 ? tc(t) : fmtDur(t), minors })
+                    }
+                    return out
+                })
+
+                const exportable = computed(() =>
+                    segments.value.filter(s => s.selected && s.end != null && s.end > s.start))
+
+                function newSegment(start, end, name) {
+                    return { id: crypto.randomUUID?.() || 's' + Date.now().toString(36) + Math.random().toString(36).slice(2), start: round3(start), end: end == null ? null : round3(end), name: name || '', selected: true }
+                }
+                function sortSegments() {
+                    const active = segments.value[activeSeg.value]
+                    segments.value.sort((a, b) => a.start - b.start)
+                    activeSeg.value = active ? segments.value.indexOf(active) : -1
+                }
+
+                // ------------------------------------------------------- transport
+                function seekToTime(t, { center = false } = {}) {
+                    if (!Number.isFinite(t)) return
+                    const clamped = Math.max(0, Math.min(duration.value || 0, t))
+                    // A far jump leaves the player showing a stale frame until the new
+                    // fragment arrives (transcoded on demand, so up to a couple of
+                    // seconds). Cover that gap with a still of the destination frame.
+                    const far = Math.abs(clamped - currentTime.value) > FAR_SEEK_SECONDS
+                    currentTime.value = clamped
+                    pendingSeek = clamped
+                    seeking.value = true
+                    if (far) {
+                        scrubPreview.value = true
+                        scheduleScrubFrame(clamped)
+                    }
+                    applyPendingSeek()
+                    if (center) centerOn(clamped)
+                }
+                function applyPendingSeek() {
+                    const el = player.value
+                    if (!el || pendingSeek == null || el.readyState === 0) return
+                    if (Math.abs(el.currentTime - pendingSeek) > 0.01) el.currentTime = pendingSeek
+                    onSeeked()
+                }
+                function centerOn(t) {
+                    const el = viewport.value
+                    if (!el || !duration.value) return
+                    el.scrollLeft = (t / duration.value) * el.scrollWidth - el.clientWidth / 2
+                }
+                function stepFrames(n) { pause(); seekToTime(currentTime.value + n / fps.value) }
+                function stepSeconds(n) { seekToTime(currentTime.value + n) }
+
+                /** Jump to the adjacent keyframe; a frame of slack skips the current one. */
+                function jumpKeyframe(dir) {
+                    if (!keyframes.value.length) return
+                    const slack = 1 / fps.value
+                    const target = dir > 0
+                        ? keyframes.value.find(k => k > currentTime.value + slack)
+                        : [...keyframes.value].reverse().find(k => k < currentTime.value - slack)
+                    if (target != null) { pause(); seekToTime(target, { center: true }) }
+                }
+                function jumpSegment(dir) {
+                    if (!segments.value.length) return
+                    const i = activeSeg.value
+                    const next = i < 0
+                        ? (dir > 0 ? 0 : segments.value.length - 1)
+                        : Math.max(0, Math.min(segments.value.length - 1, i + dir))
+                    activeSeg.value = next
+                    seekToTime(segments.value[next].start, { center: true })
+                }
+                function play() {
+                    const el = player.value
+                    if (!el) return
+                    applyPendingSeek()
+                    el.play().catch(e => {
+                        if (e.name !== 'AbortError') message.value = '无法播放：' + e.message
+                    })
+                }
+                function pause() { const el = player.value; if (el) el.pause() }
+                function togglePlay() { playing.value ? pause() : play() }
+                function setRate(r) {
+                    if (!Number.isFinite(r)) return
+                    rate.value = Math.max(0.1, Math.min(16, r))
+                    if (player.value) player.value.playbackRate = rate.value
+                }
+                function nudgeRate(dir) {
+                    // ∛2 per press, as LosslessCut uses, so three presses ≈ 2x.
+                    const factor = Math.pow(2, 1 / 3)
+                    let next = rate.value * (dir > 0 ? factor : 1 / factor)
+                    if ((rate.value < 1 && next > 1) || (rate.value > 1 && next < 1)) next = 1
+                    setRate(next)
+                }
+
+                // -------------------------------------------------- segment editing
+                function editSnapshot() {
+                    return JSON.stringify({ segments: segments.value, active: activeSeg.value, pending: pendingMarkerId.value })
+                }
+                function rememberEdit(before = editSnapshot()) {
+                    undoStack.value.push(before)
+                    if (undoStack.value.length > 80) undoStack.value.shift()
+                    redoStack.value = []
+                }
+                function restoreEdit(snapshot) {
+                    const d = JSON.parse(snapshot)
+                    segments.value = d.segments; activeSeg.value = d.active; pendingMarkerId.value = d.pending
+                }
+                function undoEdit() {
+                    if (!undoStack.value.length) return
+                    redoStack.value.push(editSnapshot()); restoreEdit(undoStack.value.pop())
+                }
+                function redoEdit() {
+                    if (!redoStack.value.length) return
+                    undoStack.value.push(editSnapshot()); restoreEdit(redoStack.value.pop())
+                }
+                function segmentError(candidate, excluded = []) {
+                    const { start, end } = candidate
+                    if (!Number.isFinite(start) || start < 0 || start >= duration.value) return '开始标记必须在录像范围内'
+                    if (end != null && (!Number.isFinite(end) || end > duration.value || end - start < 0.001 - 1e-9)) return '终点必须在起点之后，且不能超出录像'
+                    for (const other of segments.value) {
+                        if (excluded.includes(other)) continue
+                        const overlap = end == null
+                            ? (other.end == null ? Math.abs(start - other.start) < 0.001 : start >= other.start && start < other.end)
+                            : other.end == null
+                                ? other.start >= start && other.start < end
+                                : start < other.end && end > other.start
+                        if (overlap) return '此范围与已有片段或开始标记重叠，请先调整边界'
+                    }
+                    return ''
+                }
+                function updateSegment(s, start, end, record = true) {
+                    const rawError = segmentError({ ...s, start, end }, [s])
+                    if (rawError) { message.value = rawError; return false }
+                    const next = { ...s, start: round3(start), end: end == null ? null : Math.min(duration.value, round3(end)) }
+                    const error = segmentError(next, [s])
+                    if (error) { message.value = error; return false }
+                    if (s.start === next.start && s.end === next.end) return true
+                    if (record) rememberEdit()
+                    Object.assign(s, next)
+                    if (s.end != null && pendingMarkerId.value === s.id) pendingMarkerId.value = null
+                    message.value = ''
+                    return true
+                }
+                function setSegmentBound(which) {
+                    const s = segments.value[activeSeg.value]
+                    if (!s) {
+                        if (which === 'start') addSegmentAtPlayhead()
+                        else message.value = '请先用 I 或「＋片段」设置开始标记'
+                        return
+                    }
+                    if (updateSegment(s, which === 'start' ? currentTime.value : s.start, which === 'end' ? currentTime.value : s.end)) sortSegments()
+                }
+                function editSegmentInput(i, which, e) {
+                    const s = segments.value[i]
+                    const value = e.target.value.trim()
+                    const number = value === '' ? (which === 'end' ? null : NaN) : Number(value)
+                    updateSegment(s, which === 'start' ? number : s.start, which === 'end' ? number : s.end)
+                    e.target.value = s[which] ?? ''
+                    sortSegments()
+                }
+                function clearSegmentEnd() {
+                    const s = segments.value[activeSeg.value]
+                    if (s) updateSegment(s, s.start, null)
+                }
+                function splitAtPlayhead() {
+                    const s = segments.value[activeSeg.value], at = round3(currentTime.value)
+                    if (!s || s.end == null || at <= s.start || at >= s.end) { message.value = '光标必须位于所选片段内部'; return }
+                    rememberEdit()
+                    const right = { ...newSegment(at, s.end, s.name), selected: s.selected }
+                    s.end = at; segments.value.push(right); sortSegments()
+                }
+                function removeSegment(i) {
+                    if (!segments.value[i]) return
+                    rememberEdit()
+                    if (pendingMarkerId.value === segments.value[i].id) pendingMarkerId.value = null
+                    const active = segments.value[activeSeg.value]
+                    segments.value.splice(i, 1); activeSeg.value = segments.value.indexOf(active)
+                }
+                const mergeCandidates = computed(() => segments.value.filter(s => s.selected && s.end != null))
+                function mergeSegments() {
+                    const list = mergeCandidates.value
+                    if (list.length < 2) { message.value = '请勾选至少两个有终点的片段'; return }
+                    const merged = newSegment(Math.min(...list.map(s => s.start)), Math.max(...list.map(s => s.end)), list.map(s => s.name).filter(Boolean).join(' + '))
+                    const error = segmentError(merged, list)
+                    if (error) { message.value = '合并范围包含未勾选的片段或标记，请先调整勾选'; return }
+                    rememberEdit()
+                    segments.value = segments.value.filter(s => !list.includes(s))
+                    segments.value.push(merged); activeSeg.value = segments.value.length - 1; sortSegments()
+                    message.value = '已合并勾选片段（包含中间间隔），可撤销'
+                }
+
+                // --------------------------------------------------------- snapping
+                /**
+                 * Snap candidates: keyframes, other clip edges, the playhead and the ends
+                 * of the recording. Without this, trimming to a keyframe by hand is
+                 * guesswork — and a start that misses a keyframe is exactly what makes
+                 * ffmpeg back up further than the user asked for.
+                 */
+                function snapTargets(excludeIndex) {
+                    const out = [0, duration.value, currentTime.value]
+                    if (showKeyframes.value && keyframesUseful.value) for (const k of keyframes.value) out.push(k)
+                    segments.value.forEach((s, i) => {
+                        if (i === excludeIndex) return
+                        out.push(s.start)
+                        if (s.end != null) out.push(s.end)
+                    })
+                    return out
+                }
+                function applySnap(t, excludeIndex) {
+                    if (!snap.value) return t
+                    const threshold = 8 / Math.max(pxPerSecond.value, 1e-9)
+                    let best = t, bestDist = threshold
+                    for (const target of snapTargets(excludeIndex)) {
+                        const d = Math.abs(target - t)
+                        if (d < bestDist) { bestDist = d; best = target }
+                    }
+                    return best
+                }
+
+                // ------------------------------------------------------------ drag
+                /**
+                 * Still-frame scrub preview.
+                 *
+                 * Issuing a `currentTime` write on every pointermove makes hls.js abort
+                 * and restart fragment loads dozens of times a second, which leaves the
+                 * player stuck. Throttle real seeks and allow the current decode to
+                 * settle while coalescing mouse movement to the latest destination.
+                 * A still frame covers slow fragment loads; release commits the exact
+                 * destination and restores the previous playback intent.
+                 */
+                // ------------------------------------------------- scrub frames
+                //
+                // Keep one frame request in flight and coalesce pointer moves to the
+                // latest destination. Speculative neighbour requests compete with HLS
+                // for the same slow connection and NAS seeks.
+                const FRAME_WIDTH = 720
+                const FRAME_CACHE_MAX = 300
+                const frameCache = new Map()      // bucket key -> URL
+                const frameRevision = ref(0)
+                let frameRequest = null
+                let scrubSeekTimer = null, lastScrubSeek = 0
+
+                /** Bucket size adapts to zoom: zoomed out, half-second steps are invisible. */
+                function frameBucketSeconds() {
+                    const pxPerSecondNow = pxPerSecond.value
+                    if (pxPerSecondNow >= 8) return 0.25
+                    if (pxPerSecondNow >= 1) return 0.5
+                    return 1
+                }
+                function frameKey(t) {
+                    return Math.min(duration.value, Math.round(t / frameBucketSeconds()) * frameBucketSeconds())
+                }
+                function frameUrlFor(key) {
+                    return `/api/media/${selected.value.id}/frame?t=${key.toFixed(3)}&w=${FRAME_WIDTH}`
+                }
+                function cachePut(key, url) {
+                    if (frameCache.has(key)) URL.revokeObjectURL(frameCache.get(key))
+                    frameCache.delete(key)
+                    frameCache.set(key, url)
+                    frameRevision.value++
+                    while (frameCache.size > FRAME_CACHE_MAX) {
+                        const oldest = frameCache.keys().next().value
+                        URL.revokeObjectURL(frameCache.get(oldest))
+                        frameCache.delete(oldest)
+                    }
+                }
+                /**
+                 * Green marks for timestamps whose frame is already local.
+                 *
+                 * Two sources are unioned: this session's LRU (immediate) and the host's
+                 * on-disk frame cache (survives reloads). Drawn bucketed to the current
+                 * pixel grid so a densely cached region reads as a solid bar rather than
+                 * thousands of nodes — the same idea as After Effects shading cached
+                 * frames on the time ruler.
+                 */
+                const serverCachedTimes = ref([])
+                const cachedMarks = computed(() => {
+                    frameRevision.value
+                    if (!duration.value) return []
+                    const keys = new Set(frameCache.keys())
+                    const out = new Map()
+                    const bucket = frameBucketSeconds()
+                    for (const k of keys) {
+                        const t = Number(k)
+                        if (t >= 0 && t <= duration.value) out.set(Math.round(t), true)
+                    }
+                    const serverBucket = Math.max(1, Math.round(bucket))
+                    for (const t of serverCachedTimes.value) {
+                        const snapped = Math.round(t / serverBucket) * serverBucket
+                        out.set(snapped, true)
+                    }
+                    return [...out.keys()].map(t => timeToPct(t))
+                })
+
+                async function loadCachedFrameIndex() {
+                    if (!selected.value) { serverCachedTimes.value = []; return }
+                    const generation = openGeneration
+                    try {
+                        const r = await fetch(`/api/media/${selected.value.id}/frames/cached?w=${FRAME_WIDTH}`)
+                        const times = r.ok ? ((await r.json()).times || []) : []
+                        if (generation === openGeneration) serverCachedTimes.value = times
+                    } catch (e) { if (generation === openGeneration) serverCachedTimes.value = [] }
+                }
+
+                /** The bucket the playhead is currently asking for; stale replies are dropped. */
+                let latestFrameKey = null
+
+                /**
+                 * Cache keys are source seconds, so changing zoom cannot reinterpret a
+                 * cached frame as a different timestamp. Never paint after seek settles.
+                 */
+                function scheduleScrubFrame(t) {
+                    if (!selected.value) return
+                    const key = frameKey(t)
+                    latestFrameKey = key
+                    const cached = frameCache.get(key)
+                    if (cached) {
+                        scrubFrameUrl.value = cached
+                        return
+                    }
+                    if (!frameRequest && !frameTimer) frameTimer = setTimeout(fetchScrubFrame, 70)
+                }
+                async function fetchScrubFrame() {
+                    frameTimer = null
+                    const key = latestFrameKey
+                    if (key == null || !selected.value || frameRequest) return
+                    const controller = new AbortController()
+                    frameRequest = controller
+                    try {
+                        const r = await fetch(frameUrlFor(key), { signal: controller.signal })
+                        if (!r.ok) return
+                        const blob = await r.blob()
+                        if (controller.signal.aborted) return
+                        const url = URL.createObjectURL(blob)
+                        cachePut(key, url)
+                        if (key === latestFrameKey && scrubPreview.value) scrubFrameUrl.value = url
+                    } catch (e) { /* keep the last frame while loading or cancelling */ }
+                    finally {
+                        if (frameRequest === controller) {
+                            frameRequest = null
+                            if (latestFrameKey != null && latestFrameKey !== key && !frameCache.has(latestFrameKey)) {
+                                frameTimer = setTimeout(fetchScrubFrame, 70)
+                            }
+                        }
+                    }
+                }
+                function clearScrubFrame() {
+                    clearTimeout(frameTimer)
+                    frameTimer = null
+                    latestFrameKey = null
+                    frameRequest?.abort()
+                    frameRequest = null
+                    scrubFrameUrl.value = null
+                    scrubPreview.value = false
+                }
+                function beginScrub(e) {
+                    if (e.button !== 0) return
+                    const el = viewport.value
+                    if (!el) return
+                    drag.value = { kind: 'scrub', resume: player.value && !player.value.paused }
+                    pause()
+                    stopThumbnails()
+                    scrubPreview.value = true
+                    el.setPointerCapture?.(e.pointerId)
+                    applyScrub(e, el)
+                }
+                function applyScrub(e, el) {
+                    if (!(duration.value > 0)) return
+                    const rect = el.getBoundingClientRect()
+                    const raw = pxToTime(e.clientX - rect.left + el.scrollLeft)
+                    if (!isFinite(raw)) return
+                    const t = Math.max(0, Math.min(duration.value, raw))
+                    // Move the playhead immediately; video follows at a bounded rate.
+                    currentTime.value = t
+                    scrubPreview.value = true
+                    scheduleScrubFrame(t)
+                    scheduleScrubSeek()
+                }
+                function scheduleScrubSeek() {
+                    if (scrubSeekTimer) return
+                    scrubSeekTimer = setTimeout(() => {
+                        scrubSeekTimer = null
+                        if (drag.value?.kind !== 'scrub') return
+                        const el = player.value, target = currentTime.value
+                        // Let an in-flight decode finish before requesting the newest
+                        // position. A stalled request gets replaced after one second.
+                        if (el && (!el.seeking || performance.now() - lastScrubSeek > 1000)) {
+                            if (Math.abs(el.currentTime - target) > 0.1 || el.readyState === 0) {
+                                pendingSeek = target; seeking.value = true
+                                applyPendingSeek(); lastScrubSeek = performance.now()
+                            }
+                            refreshBuffered()
+                        }
+                        scheduleScrubSeek()
+                    }, 160)
+                }
+                /** Called when a real seek completes, revealing the video again. */
+                function onSeeked() {
+                    const el = player.value
+                    if (!el || pendingSeek == null) return
+                    if (drag.value?.kind === 'scrub') {
+                        if (!el.seeking && el.readyState >= 2 && Math.abs(el.currentTime - currentTime.value) < 0.25) clearScrubFrame()
+                        return
+                    }
+                    // A stale seeked/canplay event must not release a newer target.
+                    if (el.seeking || el.readyState < 2 || Math.abs(el.currentTime - pendingSeek) > 0.25) return
+                    pendingSeek = null
+                    seeking.value = false
+                    buffering.value = false
+                    clearScrubFrame()
+                }
+                function beginClipDrag(e, index, kind) {
+                    e.stopPropagation(); e.preventDefault()
+                    if (e.button !== 0) return
+                    const s = segments.value[index]
+                    if (!s) return
+                    activeSeg.value = index
+                    const rect = track.value.getBoundingClientRect()
+                    drag.value = {
+                        kind, index,
+                        before: editSnapshot(),
+                        origStart: s.start,
+                        origEnd: s.end,
+                        grabTime: pxToTime(e.clientX - rect.left)
+                    }
+                    e.target.setPointerCapture?.(e.pointerId)
+                }
+                function onPointerMove(e) {
+                    const d = drag.value
+                    if (!d) return
+                    if (d.kind === 'resize') {
+                        d.object[d.key] = clamp(d.initial + ((d.axis === 'x' ? e.clientX : e.clientY) - d.origin) * d.direction, d.min, d.max)
+                        return
+                    }
+                    if (d.kind === 'scrub') {
+                        const el = viewport.value
+                        if (el) applyScrub(e, el)
+                        return
+                    }
+                    const s = segments.value[d.index]
+                    if (!s || !track.value) return
+                    const rect = track.value.getBoundingClientRect()
+                    const delta = pxToTime(e.clientX - rect.left) - d.grabTime
+                    if (d.kind === 'move') {
+                        const len = (d.origEnd ?? d.origStart) - d.origStart
+                        const start = Math.max(0, Math.min(Math.max(0, duration.value - len), applySnap(d.origStart + delta, d.index)))
+                        updateSegment(s, start, d.origEnd == null ? null : start + len, false)
+                    } else if (d.kind === 'trim-start') {
+                        const upper = (d.origEnd ?? duration.value) - 1 / fps.value
+                        updateSegment(s, Math.max(0, Math.min(upper, applySnap(d.origStart + delta, d.index))), s.end, false)
+                    } else if (d.kind === 'trim-end') {
+                        const lower = d.origStart + 1 / fps.value
+                        updateSegment(s, s.start, Math.max(lower, Math.min(duration.value, applySnap((d.origEnd ?? d.origStart) + delta, d.index))), false)
+                    }
+                }
+                /**
+                 * Ends any drag. Called on pointerup, pointercancel and window blur, so a
+                 * pointer released off-window (or a lost capture) cannot leave the
+                 * timeline stuck in a half-dragged state.
+                 */
+                function endDrag() {
+                    const active = drag.value
+                    if (!active) return
+                    drag.value = null
+                    if (active.kind === 'resize') { persistEditor(); return }
+                    if (active.before && active.before !== editSnapshot()) rememberEdit(active.before)
+                    sortSegments()
+                    if (active.kind === 'scrub') {
+                        clearTimeout(scrubSeekTimer); scrubSeekTimer = null
+                        // The newest request is already the one we want; just commit
+                        // the position we are showing.
+                        seekToTime(currentTime.value)
+                        if (active.resume) play()
+                    }
+                    scheduleThumbnails()
+                    persistEditor()
+                }
+
+                /** Abandon an in-flight scrub without committing a seek. */
+                function cancelDrag() {
+                    if (!drag.value) { activeSeg.value = -1; return }
+                    const resume = drag.value.resume
+                    if (drag.value.before) restoreEdit(drag.value.before)
+                    drag.value = null
+                    clearTimeout(scrubSeekTimer); scrubSeekTimer = null
+                    currentTime.value = pendingSeek ?? player.value?.currentTime ?? 0
+                    clearScrubFrame()
+                    if (resume) play()
+                }
+                function beginResize(e, object, key, axis = 'y', direction = 1) {
+                    e.preventDefault(); e.stopPropagation()
+                    const isLane = object === laneHeights.value
+                    const min = isLane ? 20 : axis === 'x' ? 180 : 70
+                    const otherWidth = key === 'library' ? layout.value[rightTab.value] : layout.value.library
+                    const max = isLane ? 240 : axis === 'x'
+                        ? Math.max(min, Math.min(600, innerWidth - otherWidth - 340))
+                        : Math.max(min, object[key] + (viewport.value?.clientHeight || 110) - 110)
+                    drag.value = { kind: 'resize', object, key, axis, direction, initial: object[key], origin: axis === 'x' ? e.clientX : e.clientY, min, max }
+                    e.currentTarget.setPointerCapture?.(e.pointerId)
+                }
+
+                // Only request visible thumbnail cells; never scan a whole recording.
+                const thumbnailCache = new Map(), thumbnailRevision = ref(0)
+                const thumbnailControllers = new Set()
+                let thumbnailTimer = null, thumbnailGeneration = 0
+                const thumbnailCells = computed(() => {
+                    if (!showThumbnails.value || !duration.value || !viewportWidth.value) return []
+                    const cellWidth = Math.max(96, laneHeights.value.thumbnails * 16 / 9)
+                    const step = Math.max(0.1, 2 ** Math.ceil(Math.log2(cellWidth / pxPerSecond.value)))
+                    const { from, to } = viewWindow.value
+                    const cells = []
+                    for (let t = Math.floor(from / step) * step; t < to && cells.length < 32; t += step) {
+                        cells.push({ t: round3(t), end: Math.min(duration.value, t + step) })
+                    }
+                    return cells
+                })
+                function thumbnailUrl(t) { thumbnailRevision.value; return thumbnailCache.get(t) || null }
+                function stopThumbnails() {
+                    clearTimeout(thumbnailTimer); thumbnailTimer = null; thumbnailGeneration++
+                    for (const c of thumbnailControllers) c.abort()
+                    thumbnailControllers.clear()
+                }
+                function scheduleThumbnails() {
+                    stopThumbnails()
+                    if (!selected.value || !showThumbnails.value || drag.value?.kind === 'scrub') return
+                    thumbnailTimer = setTimeout(loadThumbnails, 220)
+                }
+                async function loadThumbnails() {
+                    thumbnailTimer = null
+                    if (drag.value?.kind === 'scrub' || seeking.value || (playing.value && buffering.value)) return
+                    const generation = thumbnailGeneration, id = selected.value?.id
+                    const queue = thumbnailCells.value.filter(c => !thumbnailCache.has(c.t))
+                    async function worker() {
+                        while (queue.length && generation === thumbnailGeneration) {
+                            const cell = queue.shift(), controller = new AbortController()
+                            thumbnailControllers.add(controller)
+                            try {
+                                const r = await fetch('/api/media/' + id + '/frame?t=' + cell.t.toFixed(3) + '&w=160', { signal: controller.signal })
+                                if (!r.ok) continue
+                                const blob = await r.blob()
+                                if (generation !== thumbnailGeneration) return
+                                thumbnailCache.set(cell.t, URL.createObjectURL(blob))
+                                while (thumbnailCache.size > 160) {
+                                    const key = thumbnailCache.keys().next().value
+                                    URL.revokeObjectURL(thumbnailCache.get(key)); thumbnailCache.delete(key)
+                                }
+                                thumbnailRevision.value++
+                            } catch { /* Retry on the next viewport change. */ }
+                            finally { thumbnailControllers.delete(controller) }
+                        }
+                    }
+                    await Promise.all([worker(), worker()])
+                }
+
+                // ------------------------------------------------------- keyframes
+                /**
+                 * Keyframes are only fetched when they can actually be seen.
+                 *
+                 * The GOP here is ~2 s, so zoomed out they sit a fraction of a pixel
+                 * apart and are pure noise. Worse, asking for them over a wide window
+                 * makes ffprobe walk the entire source — on a 6.5 GB six-hour recording
+                 * that is a full-file scan, which is both pointless and slow enough to
+                 * stall the page. Both limits below exist to prevent that request.
+                 */
+                const KEYFRAME_MAX_WINDOW = 900.0
+                // Fetch threshold is about *snapping* (a little data is enough);
+                // the draw threshold is about *legibility*, because a 2 s GOP shown
+                // at 3 px spacing is a picket fence, not information.
+                const KEYFRAME_FETCH_PX_PER_SECOND = 1.5
+                const keyframesUseful = computed(() =>
+                    pxPerSecond.value >= KEYFRAME_FETCH_PX_PER_SECOND &&
+                    (viewWindow.value.to - viewWindow.value.from) <= KEYFRAME_MAX_WINDOW)
+                // Worst case the array holds KEYFRAME_MAX_WINDOW / 2 ticks (450 at a
+                // 2 s GOP), which is why one bound is enough.
+                const showKeyframeTicks = keyframesUseful
+
+                function scheduleKeyframeLoad() {
+                    clearTimeout(kfTimer)
+                    kfTimer = setTimeout(loadKeyframes, 320)
+                }
+                let keyframeRequest = 0
+                async function loadKeyframes() {
+                    const request = ++keyframeRequest, generation = openGeneration
+                    if (!selected.value || !showKeyframes.value || !keyframesUseful.value) {
+                        keyframes.value = []
+                        return
+                    }
+                    const { from, to } = viewWindow.value
+                    if (to - from <= 0) { keyframes.value = []; return }
+                    const key = `${Math.floor(from)}-${Math.ceil(to)}`
+                    if (kfCache.has(key)) { keyframes.value = kfCache.get(key); return }
+                    try {
+                        const r = await fetch(`/api/media/${selected.value.id}/keyframes?from=${from}&to=${to}`)
+                        if (generation !== openGeneration || request !== keyframeRequest) return
+                        if (!r.ok) { keyframes.value = []; return }
+                        const d = await r.json()
+                        if (generation !== openGeneration || request !== keyframeRequest) return
+                        kfCache.set(key, d.keyframes || [])
+                        keyframes.value = d.keyframes || []
+                    } catch (e) { if (generation === openGeneration && request === keyframeRequest) keyframes.value = [] }
+                }
+
+                // ------------------------------------------------------------ zoom
+                function setZoom(next, anchorRatio) {
+                    const el = viewport.value
+                    const ratio = anchorRatio != null ? anchorRatio
+                        : (el ? (el.scrollLeft + el.clientWidth / 2) / Math.max(1, el.scrollWidth) : 0.5)
+                    zoom.value = Math.max(1, Math.min(ZOOM_MAX, next))
+                    requestAnimationFrame(() => {
+                        if (el) el.scrollLeft = ratio * el.scrollWidth - el.clientWidth / 2
+                        scheduleKeyframeLoad()
+                    })
+                }
+                function zoomBy(factor, anchorRatio) { setZoom(zoom.value * factor, anchorRatio) }
+                function zoomFit() {
+                    zoom.value = 1
+                    requestAnimationFrame(() => { if (viewport.value) viewport.value.scrollLeft = 0 })
+                }
+                /** Ctrl/⌘ + wheel zooms at the cursor; Shift = keyframe; Alt = frame. */
+                function onWheel(e) {
+                    const el = viewport.value
+                    if (!el) return
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault()
+                        const box = el.getBoundingClientRect()
+                        const ratio = (e.clientX - box.left + el.scrollLeft) / Math.max(1, el.scrollWidth)
+                        zoomBy(e.deltaY < 0 ? 1.25 : 1 / 1.25, ratio)
+                    } else if (e.shiftKey) {
+                        e.preventDefault(); pause(); jumpKeyframe(e.deltaY < 0 ? 1 : -1)
+                    } else if (e.altKey) {
+                        e.preventDefault(); stepFrames(e.deltaY < 0 ? 1 : -1)
+                    }
+                    // a plain wheel falls through to native scrolling
+                }
+                function onScroll() {
+                    scrollLeft.value = viewport.value?.scrollLeft || 0
+                    schedulePersist()
+                    scheduleKeyframeLoad()
+                }
+
+                // ------------------------------------------------------- shortcuts
+                function onKeyDown(e) {
+                    const tag = (e.target && e.target.tagName) || ''
+                    if (e.isComposing || e.target?.isContentEditable || tag === 'TEXTAREA' || tag === 'SELECT' ||
+                        (tag === 'INPUT' && !['button', 'submit', 'reset', 'checkbox', 'radio'].includes(e.target.type))) return
+                    if (!detail.value) return
+                    const key = e.key
+                    const mod = e.ctrlKey || e.metaKey
+                    const command = key.toLowerCase()
+                    if (mod && ['z', 'y', 's'].includes(command)) {
+                        e.preventDefault(); e.stopImmediatePropagation()
+                        if (command === 's') return saveProject()
+                        return command === 'y' || e.shiftKey ? redoEdit() : undoEdit()
+                    }
+                    if (mod && !['ArrowLeft', 'ArrowRight'].includes(key)) return
+                    if (![' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ',', '<', '.', '>', 'Backspace', 'Delete', 'Escape', '_', '+', 'i', 'o', 'b', 'e', 'j', 'k', 'l'].includes(key.length === 1 ? command : key)) return
+                    // Capture before focused buttons/links synthesize a click or scroll.
+                    e.preventDefault(); e.stopImmediatePropagation()
+                    if (e.repeat && [' ', 'i', 'o', 'b', 'e', '+', 'Delete'].includes(key)) return
+                    if (e.altKey && key === 'ArrowLeft') { e.preventDefault(); return jumpKeyframe(-1) }
+                    if (e.altKey && key === 'ArrowRight') { e.preventDefault(); return jumpKeyframe(1) }
+                    if (e.shiftKey && key === 'ArrowLeft') { e.preventDefault(); return seekToTime(segments.value[activeSeg.value]?.start ?? 0) }
+                    if (e.shiftKey && key === 'ArrowRight') { e.preventDefault(); return seekToTime(segments.value[activeSeg.value]?.end ?? duration.value) }
+                    switch (key) {
+                        case ' ': e.preventDefault(); return togglePlay()
+                        case 'ArrowLeft': e.preventDefault(); return stepSeconds(mod ? -10 : -1)
+                        case 'ArrowRight': e.preventDefault(); return stepSeconds(mod ? 10 : 1)
+                        case ',': case '<': e.preventDefault(); return stepFrames(-1)
+                        case '.': case '>': e.preventDefault(); return stepFrames(1)
+                        case 'ArrowUp': e.preventDefault(); return jumpSegment(-1)
+                        case 'ArrowDown': e.preventDefault(); return jumpSegment(1)
+                        case 'i': case 'I': e.preventDefault(); return setSegmentBound('start')
+                        case 'o': case 'O': e.preventDefault(); return setSegmentBound('end')
+                        case 'Backspace': e.preventDefault(); return clearSegmentEnd()
+                        case 'b': case 'B': e.preventDefault(); return splitAtPlayhead()
+                        case 'e': case 'E': e.preventDefault(); return exportSegments()
+                        case 'j': case 'J': e.preventDefault(); return nudgeRate(-1)
+                        case 'k': case 'K': e.preventDefault(); return setRate(1)
+                        case 'l': case 'L': e.preventDefault(); return nudgeRate(1)
+                        case '_': case '+': e.preventDefault(); return addSegmentAtPlayhead()
+                        case 'Delete': e.preventDefault(); return activeSeg.value >= 0 ? removeSegment(activeSeg.value) : null
+                        case 'Escape': e.preventDefault(); return cancelDrag()
+                        default: return
+                    }
+                }
+
+                // ------------------------------------------------------------ lanes
+                const chatBuckets = computed(() => {
+                    const chats = lanes.value?.chats || []
+                    if (!chats.length || !duration.value) return []
+                    const width = Math.max(200, Math.min(2400, Math.round(contentWidth.value)))
+                    const bucket = duration.value / width
+                    const counts = new Array(width).fill(0)
+                    for (const t of chats) {
+                        const i = Math.min(width - 1, Math.max(0, Math.floor(t / bucket)))
+                        counts[i]++
+                    }
+                    const max = Math.max(1, ...counts)
+                    const out = []
+                    for (let i = 0; i < width; i++) {
+                        if (counts[i]) out.push({ t: i * bucket, left: (i / width) * 100, w: 100 / width, h: counts[i] / max })
+                    }
+                    return out
+                })
+                const levelBuckets = computed(() => {
+                    const segs = lanes.value?.toyLevels || []
+                    if (!segs.length || !duration.value) return []
+                    const width = Math.max(200, Math.min(2400, Math.round(contentWidth.value)))
+                    const bucket = duration.value / width
+                    const peaks = new Array(width).fill(0)
+                    for (const s of segs) {
+                        const from = Math.min(width - 1, Math.max(0, Math.floor(s.start / bucket)))
+                        const to = Math.min(width - 1, Math.max(0, Math.floor((s.end - 1e-6) / bucket)))
+                        for (let i = from; i <= to; i++) if (s.power > peaks[i]) peaks[i] = s.power
+                    }
+                    const out = []
+                    for (let i = 0; i < width; i++) {
+                        if (peaks[i]) out.push({ t: (i * bucket), left: (i / width) * 100, w: 100 / width, power: peaks[i] })
+                    }
+                    return out
+                })
+                const giftMarks = computed(() => {
+                    const gifts = lanes.value?.gifts || []
+                    if (!gifts.length || !duration.value) return []
+                    const maxAmount = Math.max(1, ...gifts.map(g => g.amount || 0))
+                    const minWidth = Math.max(0.05, Math.min(1.0, 3 / Math.max(pxPerSecond.value, 1e-9) / duration.value * 100))
+                    return gifts.map(g => ({
+                        t: g.t, left: timeToPct(g.t), w: minWidth,
+                        h: 0.2 + 0.8 * Math.log10(1 + (g.amount || 0)) / Math.log10(1 + maxAmount),
+                        color: g.source === 'king' ? '#a855f7'
+                            : (g.source || '').startsWith('show:') ? '#ec4899'
+                            : (g.amount || 0) > 0 ? '#f59e0b' : '#64748b',
+                        title: `${tc(g.t)} · ${g.amount || 0} · ${g.source || '-'} · ${g.user || '-'}`
+                    }))
+                })
+                const audioOverviewUrl = computed(() => {
+                    if (!showAudio.value || !selected.value) return null
+                    return `/api/media/${selected.value.id}/waveform`
+                })
+                const spectrogramUrl = computed(() => {
+                    if (!showSpec.value || !selected.value) return null
+                    const { from, to } = viewWindow.value
+                    if (to - from < 1) return null
+                    return `/api/media/${selected.value.id}/spectrogram?from=${from.toFixed(1)}&to=${to.toFixed(1)}&w=2048&h=256`
+                })
+                const tableEvents = computed(() => (lanes.value?.events || []).slice(0, 400))
+
+                // ------------------------------------------------------ suggestions
+                let suggestionRequest = 0
+                async function loadSuggestions() {
+                    const request = ++suggestionRequest, generation = openGeneration
+                    if (!selected.value || !selected.value.hasEvents) { suggestions.value = []; return }
+                    suggestLoading.value = true
+                    try {
+                        const p = new URLSearchParams({
+                            nudge: String(eventOffset.value),
+                            preset: prefs.value.preset, mergeGap: String(prefs.value.mergeGap),
+                            minBlock: String(prefs.value.minBlock), padBefore: String(prefs.value.padBefore),
+                            padAfter: String(prefs.value.padAfter), minScore: String(prefs.value.minScore)
+                        })
+                        const r = await fetch(`/api/media/${selected.value.id}/suggestions?` + p)
+                        const result = r.ok ? await r.json() : []
+                        if (generation === openGeneration && request === suggestionRequest) suggestions.value = result
+                    } catch (e) { if (generation === openGeneration) message.value = '建议加载失败：' + e.message }
+                    finally { if (generation === openGeneration && request === suggestionRequest) suggestLoading.value = false }
+                }
+                function onPrefsChanged() {
+                    clearTimeout(suggestTimer)
+                    suggestTimer = setTimeout(loadSuggestions, 320)
+                }
+                function acceptSuggestion(b, record = true) {
+                    const s = newSegment(b.start, b.end, b.reasons?.[0]?.detail || 'suggested')
+                    const error = segmentError(s)
+                    if (error) { message.value = error; return false }
+                    if (record) rememberEdit()
+                    segments.value.push(s); sortSegments(); rightTab.value = 'segments'
+                    return true
+                }
+                function acceptAll() {
+                    const before = editSnapshot()
+                    let accepted = 0
+                    const remaining = suggestions.value.filter(b => { if (acceptSuggestion(b, false)) { accepted++; return false } return true })
+                    if (accepted) rememberEdit(before)
+                    suggestions.value = remaining
+                    message.value = '已接受 ' + accepted + ' 个建议，跳过 ' + remaining.length + ' 个冲突建议'
+                }
+                function addSegmentAtPlayhead() {
+                    const pending = segments.value.find(s => s.id === pendingMarkerId.value && s.end == null)
+                    if (pending) {
+                        if (updateSegment(pending, currentTime.value, null)) { activeSeg.value = segments.value.indexOf(pending); sortSegments() }
+                    } else {
+                        const marker = newSegment(currentTime.value, null, '')
+                        const error = segmentError(marker)
+                        if (error) { message.value = error; return }
+                        rememberEdit()
+                        segments.value.push(marker); activeSeg.value = segments.value.length - 1
+                        pendingMarkerId.value = marker.id; sortSegments(); message.value = ''
+                    }
+                    rightTab.value = 'segments'
+                }
+
+                // ----------------------------------------------------------- export
+                async function exportSegments() {
+                    if (!validateProject()) return
+                    const usable = exportable.value
+                    if (!usable.length) { message.value = '没有可导出的片段'; return }
+                    message.value = '提交导出…'
+                    const r = await fetch('/api/export', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            items: [{ mediaId: selected.value.id, segments: usable }],
+                            outputDir: outputDir.value || null, snap: 'before'
+                        })
+                    })
+                    const data = await r.json()
+                    if (!r.ok) { message.value = data.error || '导出失败'; return }
+                    exportJob.value = data
+                    rightTab.value = 'export'
+                    pollExport(data.id)
+                }
+                let exportPoll = null
+                async function pollExport(id) {
+                    clearTimeout(exportPoll)
+                    const generation = openGeneration
+                    const tick = async () => {
+                        try {
+                            const r = await fetch('/api/export/' + id)
+                            if (!r.ok) return
+                            const job = await r.json()
+                            if (generation !== openGeneration) return
+                            exportJob.value = job
+                            if (['RUNNING', 'QUEUED'].includes(job.state)) exportPoll = setTimeout(tick, 1200)
+                        } catch { /* The saved job can be reopened after reconnecting. */ }
+                    }
+                    tick()
+                }
+                async function loadProject(id = selected.value?.id, generation = openGeneration) {
+                    if (!selected.value) return
+                    const r = await fetch('/api/media/' + id + '/project')
+                    if (!r.ok) return
+                    const d = await r.json()
+                    if (generation === openGeneration && d.segments && d.segments.length) {
+                        segments.value = d.segments.map(s => ({ ...newSegment(s.start, s.end, s.name), ...s }))
+                        message.value = '已载入 ' + d.segments.length + ' 个片段'
+                    }
+                }
+                async function saveProject() {
+                    if (!selected.value) return
+                    if (!validateProject()) return
+                    const r = await fetch('/api/media/' + selected.value.id + '/project', {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mediaId: selected.value.id, mediaFileName: selected.value.fileName, segments: segments.value })
+                    })
+                    message.value = r.ok ? '项目已保存到输出目录' : '保存失败'
+                }
+                function validateProject() {
+                    for (const s of segments.value) {
+                        const error = segmentError(s, [s])
+                        if (error) { message.value = error; return false }
+                    }
+                    return true
+                }
+
+                // ---------------------------------------------------------- player
+                function attachPlayer() {
+                    const el = player.value
+                    if (!el || !selected.value) return
+                    const target = currentTime.value
+                    detachPlayer()
+                    pendingSeek = target
+                    seeking.value = true
+                    // Lossless mode: hand the browser the source file itself and let it
+                    // range-request. No transcode and no quality loss, at the cost of
+                    // full source bitrate on the wire.
+                    if (quality.value === PROXY_QUALITY) {
+                        el.src = `/api/media/${selected.value.id}/proxy.mp4?h=${proxyHeight.value}&f=${proxyFps.value}`
+                        playerState.value = `本地代理 ${proxyHeight.value}p（浏览器解码）`
+                        return
+                    }
+                    if (quality.value === RAW_QUALITY) {
+                        // Works, but the recording is not faststart: expect a long stall
+                        // while the browser fetches the trailing index.
+                        el.src = `/api/media/${selected.value.id}/raw`
+                        playerState.value = '无损直取（源文件，索引在尾部，首次较慢）'
+                        return
+                    }
+                    if (el.canPlayType('application/vnd.apple.mpegurl') && !window.Hls) {
+                        el.src = `/api/media/${selected.value.id}/preview.m3u8?q=${quality.value}`
+                        playerState.value = 'native HLS'
+                        return
+                    }
+                    if (!window.Hls || !window.Hls.isSupported()) {
+                        playerState.value = '浏览器不支持 HLS 预览'
+                        return
+                    }
+                    const instance = new window.Hls({
+                        maxBufferLength: 20, maxMaxBufferLength: 40, backBufferLength: 30,
+                        enableWorker: true, autoStartLoad: false, startPosition: target
+                    })
+                    instance.on(window.Hls.Events.MANIFEST_PARSED, () => instance.startLoad(pendingSeek ?? target))
+                    instance.on(window.Hls.Events.FRAG_BUFFERED, refreshBuffered)
+                    instance.loadSource(`/api/media/${selected.value.id}/preview.m3u8?q=${quality.value}`)
+                    instance.attachMedia(el)
+                    instance.on(window.Hls.Events.ERROR, (_, data) => { if (data && data.fatal) playerState.value = '预览错误: ' + data.details })
+                    hls = instance
+                    playerState.value = '低清预览 (' + quality.value + ')'
+                }
+                function detachPlayer() {
+                    clearTimeout(scrubSeekTimer); scrubSeekTimer = null
+                    drag.value = null
+                    pendingSeek = null
+                    seeking.value = false
+                    buffering.value = false
+                    // The player is being emptied, so nothing is playing any more.
+                    //
+                    // This has to be cleared by hand: dropping `src` (or `hls.destroy()`)
+                    // does not fire a `pause` event, so `onPaused` never runs and the flag
+                    // keeps whatever the *previous* file left behind. Switching files while
+                    // playing then left the transport showing "pause" for a video that was
+                    // sitting still, and the next space press called `pause()` on an
+                    // already-paused element — so it took two presses to start playing.
+                    playing.value = false
+                    clearScrubFrame()
+                    buffered.value = []
+                    if (hls) { try { hls.destroy() } catch (e) { /* already gone */ } hls = null }
+                    const el = player.value
+                    if (el) { el.removeAttribute('src'); try { el.load() } catch (e) { /* ignore */ } }
+                }
+                function setQuality(qy) {
+                    const resume = player.value && !player.value.paused
+                    quality.value = qy
+                    if (selected.value) attachPlayer()
+                    if (resume) play()
+                }
+                /**
+                 * The video element only becomes authoritative once a seek settles.
+                 *
+                 * While hls.js is fetching the fragment for a far seek, `video.currentTime`
+                 * still reports the *old* position — often 0 — so feeding it straight
+                 * into the playhead made it snap back to the start the moment a drag
+                 * ended. Only arrival at the requested target releases the playhead.
+                 */
+                function onTimeUpdate() {
+                    const el = player.value
+                    if (!el || drag.value || seeking.value) return
+                    currentTime.value = el.currentTime
+                }
+                const onPlaying = () => { playing.value = true }
+                const onPaused = () => { playing.value = false }
+                function onCanPlay() { buffering.value = false; onSeeked() }
+                function onMetadata() {
+                    if (player.value) player.value.playbackRate = rate.value
+                    applyPendingSeek()
+                    refreshBuffered()
+                }
+
+                /**
+                 * The browser's own cache: ranges it can play with no new request.
+                 * Drawn on the timeline so the client-side caching is visible.
+                 */
+                function refreshBuffered() {
+                    const el = player.value
+                    if (!el || !el.buffered) { buffered.value = []; return }
+                    const out = []
+                    for (let i = 0; i < el.buffered.length; i++) {
+                        out.push([el.buffered.start(i), el.buffered.end(i)])
+                    }
+                    if (JSON.stringify(buffered.value) !== JSON.stringify(out)) buffered.value = out
+                    onSeeked()
+                }
+                const bufferedMarks = computed(() =>
+                    buffered.value
+                        .filter(([a, b]) => b > a)
+                        .map(([a, b]) => ({ left: timeToPct(a), width: widthToPct(a, b) })))
+
+                /**
+                 * Every event-derived layer is recomputed from the shifted events, so a
+                 * change re-fetches the lanes and the suggestions. The player, the
+                 * keyframes, the buffered bar and the cached-frame marks are properties
+                 * of the *media*, not of the events, and deliberately do not move.
+                 */
+                let offsetTimer = null
+                function reloadEventLayers() {
+                    if (!selected.value || !selected.value.hasEvents) return
+                    clearTimeout(offsetTimer)
+                    offsetTimer = setTimeout(async () => {
+                        const id = selected.value.id
+                        lanesLoading.value = true
+                        try {
+                            const r = await fetch(`/api/media/${id}/lanes?nudge=${eventOffset.value}`)
+                            if (selected.value && selected.value.id === id) lanes.value = r.ok ? await r.json() : null
+                        } finally { lanesLoading.value = false }
+                        if (selected.value && selected.value.id === id) await loadSuggestions()
+                    }, 250)
+                }
+                function setEventOffset(seconds) {
+                    const v = Math.max(EVENT_OFFSET_MIN, Math.min(EVENT_OFFSET_MAX, Number(seconds) || 0))
+                    eventOffset.value = Math.round(v * 10) / 10
+                    reloadEventLayers()
+                }
+                function resetEventOffset() { setEventOffset(DEFAULT_EVENT_OFFSET) }
+                /** True while the lane offset is the calibrated default (so the control reads "normal"). */
+                const isDefaultOffset = computed(() => Math.abs(eventOffset.value - DEFAULT_EVENT_OFFSET) < 1e-9)
+
+                // ------------------------------------------------------ proxy mode
+                async function refreshProxy() {
+                    if (!selected.value) return
+                    const generation = openGeneration, height = proxyHeight.value, frames = proxyFps.value
+                    try {
+                        const r = await fetch(`/api/media/${selected.value.id}/proxy?h=${proxyHeight.value}&f=${proxyFps.value}`)
+                        if (r.ok) {
+                            const value = await r.json()
+                            if (generation === openGeneration && height === proxyHeight.value && frames === proxyFps.value) proxy.value = value
+                        }
+                    } catch (e) { /* transient */ }
+                }
+                async function buildProxy() {
+                    if (!selected.value) return
+                    const r = await fetch(`/api/media/${selected.value.id}/proxy?h=${proxyHeight.value}&f=${proxyFps.value}`, { method: 'POST' })
+                    if (r.ok) proxy.value = await r.json()
+                    clearInterval(proxyPoll)
+                    proxyPoll = setInterval(async () => {
+                        await refreshProxy()
+                        if (proxy.value && proxy.value.status !== 'RUNNING') {
+                            clearInterval(proxyPoll)
+                            if (proxy.value.status === 'READY' && quality.value === PROXY_QUALITY) attachPlayer()
+                        }
+                    }, 2000)
+                }
+                async function deleteProxy(all = false) {
+                    if (!selected.value) return
+                    const q = all ? '' : `?h=${proxyHeight.value}&f=${proxyFps.value}`
+                    await fetch(`/api/media/${selected.value.id}/proxy${q}`, { method: 'DELETE' })
+                    await refreshProxy()
+                }
+                function reproxyIfPlaying() {
+                    refreshProxy().then(() => {
+                        if (quality.value === PROXY_QUALITY) setQuality(PROXY_QUALITY)
+                    })
+                }
+                function setProxyHeight(h) { proxyHeight.value = h; reproxyIfPlaying() }
+                function setProxyFps(f) { proxyFps.value = f; reproxyIfPlaying() }
+
+                // --------------------------------------------------------- library
+                async function loadHealth() {
+                    try { health.value = await (await fetch('/api/health')).json() } catch (e) { health.value = null }
+                }
+                /**
+                 * Loads one page of the library.
+                 *
+                 * `append` extends the list for infinite scroll; otherwise the page
+                 * replaces it. A generation counter is checked after the await because the
+                 * filter can change while a page is in flight, and a late response must not
+                 * overwrite the newer result.
+                 */
+                async function loadLibrary(append = false) {
+                    const generation = ++libraryGeneration
+                    if (append) libraryLoadingMore.value = true; else loading.value = true
+                    try {
+                        const offset = append ? libraryOffset.value : 0
+                        const p = new URLSearchParams({
+                            sort: sort.value, limit: String(LIBRARY_PAGE), offset: String(offset)
+                        })
+                        if (q.value.trim()) p.set('q', q.value.trim())
+                        if (roomFilter.value) p.set('room', roomFilter.value)
+                        if (eventsOnly.value) p.set('hasEvents', 'true')
+                        const r = await (await fetch('/api/library?' + p)).json()
+                        if (generation !== libraryGeneration) return
+                        const page = r.items || []
+                        if (!append) {
+                            // The list was replaced, so every index now points somewhere else.
+                            anchorIndex = -1
+                        }
+                        items.value = append ? items.value.concat(page) : page
+                        libraryOffset.value = items.value.length
+                        total.value = r.total || 0
+                        libraryDone.value = items.value.length >= total.value || page.length === 0
+                        rooms.value = r.rooms || []
+                    } finally {
+                        if (generation === libraryGeneration) {
+                            loading.value = false
+                            libraryLoadingMore.value = false
+                        }
+                    }
+                }
+
+                /** Re-reads the list from page 1 (filter or sort changed, or after a rescan). */
+                async function reloadLibrary() {
+                    libraryOffset.value = 0
+                    libraryDone.value = false
+                    // Filter/sort changed: ids stay but their positions do not, so a stale
+                    // anchor would extend the range across unrelated recordings.
+                    clearChecked()
+                    await loadLibrary(false)
+                }
+
+                /** Infinite scroll: pulls the next page when the list nears its end. */
+                function onLibraryScroll(e) {
+                    if (libraryDone.value || loading.value || libraryLoadingMore.value) return
+                    const el = e.target
+                    if (el.scrollHeight - el.scrollTop - el.clientHeight < 600) loadLibrary(true)
+                }
+                async function loadConfig() {
+                    try {
+                        const c = await (await fetch('/api/config')).json()
+                        deleteEnabled.value = !!c.deleteEnabled
+                        deleteBlockedReason.value = c.deleteBlockedReason || ''
+                    } catch (e) { deleteEnabled.value = false }
+                }
+
+                async function loadSettings() {
+                    try {
+                        settings.value = await (await fetch('/api/settings')).json()
+                    } catch (e) { /* keep the last known value */ }
+                }
+
+                async function setDeleteAfterExport(value) {
+                    savingSettings.value = true
+                    try {
+                        const r = await fetch('/api/settings', {
+                            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ deleteSourceAfterExport: value })
+                        })
+                        if (r.ok) settings.value = await r.json()
+                    } finally { savingSettings.value = false }
+                }
+
+                /** Total bytes of a pending selection, for the confirmation copy. */
+                function pendingBytes(list) {
+                    return (list || []).reduce((n, it) => n + (it.sizeBytes || 0), 0)
+                }
+
+                /**
+                 * Selection anchor: the row a shift-range extends from.
+                 *
+                 * Held as an index rather than an id so a range is a slice of the list the
+                 * user is actually looking at. It is reset whenever the list is replaced —
+                 * after a filter change or a delete the old index points at a different
+                 * recording, and extending from it would select an arbitrary run.
+                 */
+                let anchorIndex = -1
+
+                /** The current selection as a Set of ids, in list order. */
+                function checkedItems() { return items.value.filter(it => checked.value.has(it.id)) }
+
+                function clearChecked() {
+                    checked.value = new Set()
+                    anchorIndex = -1
+                }
+
+                function toggleCheckAll() {
+                    if (checked.value.size === items.value.length) {
+                        clearChecked()
+                    } else {
+                        checked.value = new Set(items.value.map(it => it.id))
+                        // No anchor: the whole list is selected, so there is no meaningful
+                        // row for a later shift-click to extend from.
+                        anchorIndex = -1
+                    }
+                }
+
+                /** Selects the inclusive run between the anchor and [index]. */
+                function selectRange(index) {
+                    if (anchorIndex < 0 || anchorIndex >= items.value.length) {
+                        anchorIndex = index
+                        checked.value = new Set([items.value[index].id])
+                        return
+                    }
+                    const from = Math.min(anchorIndex, index)
+                    const to = Math.max(anchorIndex, index)
+                    checked.value = new Set(items.value.slice(from, to + 1).map(it => it.id))
+                }
+
+                /**
+                 * Checkbox click. Shift extends a range from the anchor, Cmd/Ctrl toggles one
+                 * row, and a plain click selects only that row and becomes the new anchor —
+                 * the behaviour every file manager trains people to expect.
+                 */
+                function toggleChecked(index, event) {
+                    if (event && event.shiftKey) { selectRange(index); return }
+                    const id = items.value[index].id
+                    if (event && (event.metaKey || event.ctrlKey)) {
+                        const next = new Set(checked.value)
+                        if (next.has(id)) next.delete(id); else next.add(id)
+                        checked.value = next
+                    } else {
+                        checked.value = new Set([id])
+                    }
+                    anchorIndex = index
+                }
+
+                /**
+                 * Click on a library row.
+                 *
+                 * Shift/Cmd/Ctrl turn the click into a selection gesture instead of an open,
+                 * so a range can be picked without aiming at the small checkbox. A plain
+                 * click still opens the recording — that is the primary action here and
+                 * changing it would break the existing flow.
+                 */
+                function onRowClick(index, event) {
+                    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                        event.preventDefault()
+                        toggleChecked(index, event)
+                        return
+                    }
+                    open(items.value[index])
+                }
+
+                /** Opens the confirmation for either one recording or the current selection. */
+                function askDelete(list) {
+                    const targets = (Array.isArray(list) ? list : [list]).filter(Boolean)
+                    if (!targets.length) return
+                    deleteError.value = ''
+                    deletePrompt.value = { items: targets }
+                }
+
+                async function confirmDelete() {
+                    const targets = deletePrompt.value ? deletePrompt.value.items : []
+                    if (!targets.length) return
+                    deleting.value = true
+                    deleteError.value = ''
+                    const gone = new Set()
+                    const failures = []
+                    for (const it of targets) {
+                        try {
+                            const r = await fetch('/api/media/' + it.id, { method: 'DELETE' })
+                            if (r.ok) { gone.add(it.id); continue }
+                            const body = await r.json().catch(() => null)
+                            failures.push(it.fileName + ': ' + ((body && (body.detail || body.error)) || ('HTTP ' + r.status)))
+                        } catch (e) {
+                            failures.push(it.fileName + ': ' + e.message)
+                        }
+                    }
+                    deleting.value = false
+                    // Drop the rows the server confirmed gone, whatever else failed.
+                    const removedHere = items.value.filter(it => gone.has(it.id)).length
+                    items.value = items.value.filter(it => !gone.has(it.id))
+                    const next = new Set(checked.value)
+                    gone.forEach(id => next.delete(id))
+                    checked.value = next
+                    // Row indices shifted, so an anchor from before the delete now points at
+                    // a different recording; drop it rather than extend from the wrong place.
+                    anchorIndex = -1
+                    total.value = Math.max(0, total.value - gone.size)
+                    // Deleting shifts every later row one position earlier on the server, so
+                    // the loaded window must shrink with it. Without this, the next "load
+                    // more" would start at the old offset and silently skip one recording.
+                    libraryOffset.value = Math.max(0, libraryOffset.value - removedHere)
+                    // A deleted recording must not stay open behind the dialog.
+                    if (selected.value && gone.has(selected.value.id)) closeEditor()
+                    if (failures.length) {
+                        // Keep the dialog open so the reason stays readable and the failed
+                        // rows are still visible in the list behind it.
+                        deleteError.value = failures.join('\n')
+                        deletePrompt.value = { items: targets.filter(it => !gone.has(it.id)) }
+                        if (!deletePrompt.value.items.length) deletePrompt.value = null
+                    } else {
+                        deletePrompt.value = null
+                        deleteError.value = ''
+                    }
+                }
+
+                async function rescan() {
+                    scanning.value = true
+                    const gen = health.value ? health.value.generation : 0
+                    await fetch('/api/library/scan', { method: 'POST' })
+                    const started = Date.now()
+                    while (Date.now() - started < 600000) {
+                        await new Promise(r => setTimeout(r, 1500))
+                        await loadHealth()
+                        if (health.value && health.value.generation !== gen && !health.value.scanning) break
+                    }
+                    scanning.value = false
+                    await loadConfig()
+                    await loadSettings()
+                    await reloadLibrary()
+                }
+                const editorLoading = ref(false)
+                function preferencesSnapshot() {
+                    return { layout: layout.value, laneHeights: laneHeights.value, laneFlags: laneFlags.value,
+                        showThumbnails: showThumbnails.value, showAudio: showAudio.value, showSpec: showSpec.value,
+                        showKeyframes: showKeyframes.value, snap: snap.value, q: q.value, sort: sort.value,
+                        roomFilter: roomFilter.value, eventsOnly: eventsOnly.value, prefs: prefs.value, lastId: selected.value?.id }
+                }
+                function persistEditor() {
+                    clearTimeout(persistTimer); persistTimer = null
+                    if (restoring) return
+                    try {
+                        localStorage.setItem('xhcut:preferences:v1', JSON.stringify(preferencesSnapshot()))
+                        if (selected.value && detail.value) {
+                            localStorage.setItem('xhcut:editor:v1:' + selected.value.id, JSON.stringify({
+                                segments: segments.value, active: activeSeg.value, pending: pendingMarkerId.value,
+                                time: currentTime.value, zoom: zoom.value, scroll: viewport.value?.scrollLeft ?? scrollLeft.value,
+                                scrollTop: viewport.value?.scrollTop || 0,
+                                tab: rightTab.value, rate: rate.value, quality: quality.value, eventOffset: eventOffset.value,
+                                proxyHeight: proxyHeight.value, proxyFps: proxyFps.value, outputDir: outputDir.value,
+                                exportJobId: exportJob.value?.id, undo: undoStack.value.slice(-20), redo: redoStack.value.slice(-20)
+                            }))
+                        }
+                        storageNotice.value = ''
+                    } catch { storageNotice.value = '浏览器无法保存编辑状态，请使用「保存 .llc」备份' }
+                }
+                function schedulePersist() {
+                    if (restoring || persistTimer) return
+                    persistTimer = setTimeout(persistEditor, 500)
+                }
+                function restorePreferences() {
+                    const saved = readStored('xhcut:preferences:v1')
+                    if (!saved) return
+                    for (const [key, value] of Object.entries(saved.layout || {})) {
+                        if (key in layout.value && Number.isFinite(value)) layout.value[key] = clamp(value, 70, 600)
+                    }
+                    for (const [key, value] of Object.entries(saved.laneHeights || {})) {
+                        if (key in laneHeights.value && Number.isFinite(value)) laneHeights.value[key] = clamp(value, 20, 240)
+                    }
+                    for (const key of Object.keys(laneFlags.value)) if (typeof saved.laneFlags?.[key] === 'boolean') laneFlags.value[key] = saved.laneFlags[key]
+                    for (const [key, target] of Object.entries({ showThumbnails, showAudio, showSpec, showKeyframes, snap, eventsOnly })) {
+                        if (typeof saved[key] === 'boolean') target.value = saved[key]
+                    }
+                    q.value = typeof saved.q === 'string' ? saved.q : ''
+                    roomFilter.value = typeof saved.roomFilter === 'string' ? saved.roomFilter : ''
+                    if (['heat', 'date', 'size', 'duration'].includes(saved.sort)) sort.value = saved.sort
+                    if (saved.prefs) for (const key of Object.keys(prefs.value)) {
+                        if (typeof saved.prefs[key] === typeof prefs.value[key]) prefs.value[key] = saved.prefs[key]
+                    }
+                }
+                function restoreDraft(saved) {
+                    if (!saved) return
+                    if (Array.isArray(saved.segments)) segments.value = saved.segments.filter(s => s && Number.isFinite(s.start) && (s.end == null || Number.isFinite(s.end))).map(s => ({ ...newSegment(s.start, s.end, s.name), ...s }))
+                    activeSeg.value = Number.isInteger(saved.active) ? clamp(saved.active, -1, segments.value.length - 1) : -1
+                    pendingMarkerId.value = segments.value.some(s => s.id === saved.pending && s.end == null) ? saved.pending : null
+                    currentTime.value = Number.isFinite(saved.time) ? clamp(saved.time, 0, duration.value) : 0
+                    zoom.value = Number.isFinite(saved.zoom) ? clamp(saved.zoom, 1, ZOOM_MAX) : 1
+                    rightTab.value = ['suggest', 'segments', 'export'].includes(saved.tab) ? saved.tab : 'segments'
+                    if (QUALITY_ORDER.includes(saved.quality)) quality.value = saved.quality
+                    if (PROXY_HEIGHTS.includes(saved.proxyHeight)) proxyHeight.value = saved.proxyHeight
+                    if (PROXY_FPS.some(f => f[0] === saved.proxyFps)) proxyFps.value = saved.proxyFps
+                    if (Number.isFinite(saved.rate)) rate.value = clamp(saved.rate, 0.1, 16)
+                    eventOffset.value = Number.isFinite(saved.eventOffset)
+                        ? Math.round(clamp(saved.eventOffset, EVENT_OFFSET_MIN, EVENT_OFFSET_MAX) * 10) / 10
+                        : DEFAULT_EVENT_OFFSET
+                    outputDir.value = typeof saved.outputDir === 'string' ? saved.outputDir : ''
+                    undoStack.value = Array.isArray(saved.undo) ? saved.undo.filter(s => typeof s === 'string').slice(-20) : []
+                    redoStack.value = Array.isArray(saved.redo) ? saved.redo.filter(s => typeof s === 'string').slice(-20) : []
+                    if (saved.exportJobId) pollExport(saved.exportJobId)
+                }
+                /**
+                 * Returns the editor to its empty state after the open recording was deleted.
+                 *
+                 * `openGeneration` is bumped first: an `open()` for this very recording may
+                 * still be awaiting `/api/media/{id}`, and without the bump its continuation
+                 * would repopulate `detail`/`lanes` for a file that no longer exists.
+                 */
+                function closeEditor() {
+                    openGeneration++
+                    persistEditor()
+                    clearTimeout(exportPoll)
+                    detachPlayer(); stopThumbnails()
+                    for (const url of thumbnailCache.values()) URL.revokeObjectURL(url)
+                    thumbnailCache.clear(); thumbnailRevision.value++
+                    for (const url of frameCache.values()) URL.revokeObjectURL(url)
+                    frameCache.clear(); frameRevision.value++
+                    clearInterval(proxyPoll)
+                    selected.value = null; detail.value = null; lanes.value = null
+                    segments.value = []; suggestions.value = []; exportJob.value = null
+                    activeSeg.value = -1; pendingMarkerId.value = null; currentTime.value = 0
+                    keyframes.value = []; kfCache.clear(); serverCachedTimes.value = []
+                    buffered.value = []; proxy.value = null; scrubFrameUrl.value = null
+                    undoStack.value = []; redoStack.value = []
+                    // Drop ?id= so a reload does not try to reopen the deleted recording.
+                    const url = new URL(location.href)
+                    url.searchParams.delete('id'); url.searchParams.delete('at'); url.searchParams.delete('zoom')
+                    history.replaceState(null, '', url)
+                }
+
+                async function open(item) {
+                    persistEditor()
+                    const generation = ++openGeneration
+                    clearTimeout(exportPoll)
+                    restoring = true; editorLoading.value = true
+                    detachPlayer(); stopThumbnails()
+                    for (const url of thumbnailCache.values()) URL.revokeObjectURL(url)
+                    thumbnailCache.clear(); thumbnailRevision.value++
+                    selected.value = item
+                    detail.value = null; lanes.value = null; lanesLoading.value = false
+                    segments.value = []; suggestions.value = []; exportJob.value = null
+                    activeSeg.value = -1; pendingMarkerId.value = null; currentTime.value = 0
+                    undoStack.value = []; redoStack.value = []
+                    keyframes.value = []; kfCache.clear()
+                    for (const url of frameCache.values()) URL.revokeObjectURL(url)
+                    frameCache.clear(); frameRevision.value++
+                    serverCachedTimes.value = []
+                    buffered.value = []; proxy.value = null; clearInterval(proxyPoll)
+                    eventOffset.value = DEFAULT_EVENT_OFFSET
+                    scrubFrameUrl.value = null; seeking.value = false
+                    zoom.value = 1; scrollLeft.value = 0; message.value = ''
+                    const saved = readStored('xhcut:editor:v1:' + item.id)
+                    try {
+                        const r = await fetch('/api/media/' + item.id)
+                        if (!r.ok) throw new Error('录像无法打开 (' + r.status + ')')
+                        const data = await r.json()
+                        if (generation !== openGeneration) return
+                        detail.value = data
+                        if (saved && Array.isArray(saved.segments)) restoreDraft(saved)
+                        else await loadProject(item.id, generation)
+                        if (generation !== openGeneration) return
+                        await nextTick()
+                        observeViewport()
+                        // The CSS runtime and ResizeObserver need a layout frame before
+                        // the new scroll container accepts a nonzero scroll offset.
+                        await new Promise(requestAnimationFrame)
+                        if (generation !== openGeneration) return
+                        if (viewport.value) {
+                            viewport.value.scrollLeft = Number.isFinite(saved?.scroll) ? saved.scroll : 0
+                            viewport.value.scrollTop = Number.isFinite(saved?.scrollTop) ? saved.scrollTop : 0
+                        }
+                        onScroll()
+                        attachPlayer()
+                        const url = new URL(location.href)
+                        url.searchParams.set('id', item.id); url.searchParams.delete('at'); url.searchParams.delete('zoom')
+                        history.replaceState(null, '', url)
+                        restoring = false; editorLoading.value = false
+                        persistEditor()
+                        if (item.hasEvents) {
+                            lanesLoading.value = true
+                            fetch('/api/media/' + item.id + '/lanes?nudge=' + eventOffset.value).then(r => r.ok ? r.json() : null).then(data => {
+                                if (generation === openGeneration) lanes.value = data
+                            }).catch(() => {}).finally(() => { if (generation === openGeneration) lanesLoading.value = false })
+                        }
+                        await Promise.all([loadSuggestions(), loadKeyframes(), loadCachedFrameIndex(), refreshProxy()])
+                        scheduleThumbnails()
+                    } catch (e) {
+                        if (generation === openGeneration) message.value = e.message
+                    } finally {
+                        if (generation === openGeneration) { restoring = false; editorLoading.value = false }
+                    }
+                }
+
+                // ----------------------------------------------------------- wire
+                let searchTimer = null
+                watch([q, sort, roomFilter, eventsOnly], () => {
+                    // Any filter change invalidates the accumulated pages, so the list
+                    // restarts from the top rather than appending to a stale selection.
+                    clearTimeout(searchTimer); searchTimer = setTimeout(reloadLibrary, 250)
+                })
+                watch([zoom, showKeyframes], () => scheduleKeyframeLoad())
+                // Re-fire when the gate *becomes* satisfiable.
+                //
+                // Keyframes are gated on pixels-per-second, which depends on the
+                // measured viewport width. That width is not known until the timeline
+                // exists and a ResizeObserver reports, so the first load — the one
+                // `open()` kicks off at zoom 1 — always bails, and a plain
+                // zoom/scroll watcher can miss the moment the requirement is finally
+                // met. Watching the gate itself closes that hole.
+                watch(keyframesUseful, (usable) => { if (usable) scheduleKeyframeLoad() })
+
+                watch([segments, activeSeg, pendingMarkerId, layout, laneHeights, rightTab, quality, rate, proxyHeight, proxyFps, outputDir, laneFlags, showThumbnails, showAudio, showSpec, snap, showKeyframes, prefs, q, sort, roomFilter, eventsOnly, eventOffset], schedulePersist, { deep: true, flush: 'post' })
+                watch([currentTime, zoom, scrollLeft], schedulePersist)
+                watch(() => thumbnailCells.value.map(c => c.t).join(','), scheduleThumbnails)
+                watch([seeking, buffering], () => {
+                    if (!seeking.value && !buffering.value) scheduleThumbnails()
+                })
+
+                onMounted(async () => {
+                    history.scrollRestoration = 'manual'
+                    window.addEventListener('pagehide', persistEditor)
+                    document.addEventListener('visibilitychange', () => { if (document.hidden) persistEditor() })
+                    setInterval(refreshBuffered, 250)
+                    window.addEventListener('pointermove', onPointerMove)
+                    window.addEventListener('pointerup', endDrag)
+                    window.addEventListener('pointercancel', endDrag)
+                    window.addEventListener('blur', endDrag)
+                    window.addEventListener('keydown', onKeyDown, true)
+                    window.addEventListener('keyup', e => {
+                        if (e.code === 'Space' && detail.value && !e.target?.isContentEditable && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target?.tagName)) {
+                            e.preventDefault(); e.stopImmediatePropagation()
+                        }
+                    }, true)
+                    const initialParams = new URLSearchParams(location.search)
+                    restorePreferences()
+                    await loadHealth()
+                    await loadConfig()
+                    await loadSettings()
+                    await reloadLibrary()
+                    setInterval(loadHealth, 10000)
+                    restoring = false
+                    const params = initialParams
+                    const wanted = params.get('id') || readStored('xhcut:preferences:v1')?.lastId
+                    if (wanted) {
+                        const hit = items.value.find(i => i.id === wanted)
+                        if (hit) await open(hit)
+                        else {
+                            const r = await fetch('/api/media/' + wanted)
+                            if (r.ok) {
+                                const d = await r.json()
+                                await open({ id: d.id, fileName: d.fileName, relPath: d.relPath, hasEvents: !!d.hasEvents, durationSeconds: d.durationSeconds })
+                            }
+                        }
+                        // Deep links: ?at=<seconds> parks the playhead, &zoom=<n> opens
+                        // at that magnification — handy for sharing a moment.
+                        const at = parseFloat(params.get('at') || '')
+                        if (isFinite(at)) { await nextTick(); seekToTime(at, { center: true }) }
+                        const z = parseFloat(params.get('zoom') || '')
+                        if (isFinite(z) && z > 1) { setZoom(z); setTimeout(() => centerOn(isFinite(at) ? at : 0), 60) }
+                    }
+                })
+
+                return {
+                    layout, laneHeights, showThumbnails, thumbnailCells, thumbnailUrl, beginResize, editorLoading, storageNotice,
+                    deleteEnabled, deleteBlockedReason, checked, deletePrompt, deleting, deleteError,
+                    settings, savingSettings, loadSettings, setDeleteAfterExport,
+                    loadConfig, pendingBytes, toggleChecked, clearChecked, checkedItems, toggleCheckAll,
+                    askDelete, confirmDelete, closeEditor, onRowClick,
+                    LIBRARY_PAGE, libraryOffset, libraryDone, libraryLoadingMore,
+                    loadLibrary, reloadLibrary, onLibraryScroll,
+                    eventOffset, EVENT_OFFSET_MIN, EVENT_OFFSET_MAX, DEFAULT_EVENT_OFFSET,
+                    isDefaultOffset, setEventOffset, resetEventOffset,
+                    mergeCandidates, mergeSegments, undoStack, redoStack, undoEdit, redoEdit, editSegmentInput,
+                    health, items, rooms, total, loading, scanning, selected, detail, lanes, lanesLoading,
+                    q, sort, roomFilter, eventsOnly,
+                    player, playerState, quality, setQuality, onTimeUpdate, onPlaying, onPaused, onCanPlay, onMetadata, buffering, showAudio, showSpec,
+                    segments, suggestions, suggestLoading, prefs, rightTab, activeSeg, exportJob, outputDir, message,
+                    loadSuggestions, onPrefsChanged, acceptSuggestion, acceptAll, addSegmentAtPlayhead,
+                    setSegmentBound, clearSegmentEnd, splitAtPlayhead, removeSegment, exportSegments, saveProject, exportable,
+                    viewport, track, zoom, currentTime, playing, rate, snap, showKeyframes, keyframes, laneFlags,
+                    fps, duration, viewWindow, timeToPct, widthToPct, rulerTicks, chatBuckets, levelBuckets, giftMarks, keyframesUseful, showKeyframeTicks, cachedMarks, viewportWidth,
+                    audioOverviewUrl, spectrogramUrl, tableEvents,
+                    seekToTime, centerOn, stepFrames, stepSeconds, jumpKeyframe, jumpSegment,
+                    togglePlay, setRate, nudgeRate, setZoom, zoomBy, zoomFit, onWheel, onScroll,
+                    beginScrub, beginClipDrag, onSeeked, cancelDrag, scrubFrameUrl, seeking, open, rescan,
+                    proxy, bufferedMarks, buildProxy, deleteProxy, refreshBuffered,
+                    PROXY_HEIGHTS, proxyHeight, setProxyHeight, PROXY_FPS, proxyFps, setProxyFps,
+                    QUALITY_ORDER, qualityLabel, RAW_QUALITY,
+                    fmtDur, fmtSize, fmtDate, tc, POWER_LABEL, POWER_COLOR, CONF_LABEL, CONF_COLOR
+                }
+            },
+
+            template: `
+            <header class="flex items-center gap-3 px-4 py-2 border-b border-gray-800 bg-[#12151a] shrink-0">
+                <div class="font-semibold tracking-wide text-lg">XhCut</div>
+                <div class="text-xs text-gray-500 mono">{{ health ? health.version : '...' }}</div>
+                <div v-if="health" class="text-xs text-gray-400">
+                    <span class="text-gray-500">indexed</span> {{ health.indexed }}
+                    <span v-if="health.lastScanMillis" class="text-gray-600 mono">{{ (health.lastScanMillis/1000).toFixed(1) }}s</span>
+                </div>
+                <div class="flex-1"></div>
+                <div v-if="health" class="text-xs mono" :class="health.scanning ? 'text-amber-400' : 'text-emerald-500'">
+                    {{ health.scanning ? '扫描中…' : 'idle' }}
+                </div>
+                <button @click="rescan" :disabled="scanning"
+                        class="text-xs px-3 py-1 rounded border border-gray-700 hover:bg-gray-800 disabled:opacity-50">
+                    {{ scanning ? '扫描中…' : '重新扫描' }}
+                </button>
+            </header>
+
+            <div v-if="storageNotice" role="status" class="px-3 py-1 text-xs text-amber-300">{{ storageNotice }}</div>
+
+            <!-- Permanent-delete confirmation. Deleting cannot be undone, so the dialog
+                 names every file, totals the bytes, and makes the confirm a deliberate
+                 click rather than a keyboard reflex. -->
+            <div v-if="deletePrompt" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6"
+                 @click.self="deleting ? null : (deletePrompt = null)">
+                <div class="bg-[#12151a] border border-rose-900 rounded-lg shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]">
+                    <div class="px-4 py-3 border-b border-gray-800">
+                        <div class="font-semibold text-rose-300">永久删除 {{ deletePrompt.items.length }} 条录像？</div>
+                        <div class="text-xs text-gray-400 mt-1">
+                            源文件、同名 .event 与全部缓存（预览分片 / 波形 / 抽帧 / 代理）一起删除。此操作不可恢复。
+                        </div>
+                    </div>
+                    <div class="px-4 py-2 overflow-y-auto scroll text-xs mono flex-1">
+                        <div v-for="it in deletePrompt.items" :key="it.id" class="py-1 border-b border-gray-900 last:border-0">
+                            <div class="truncate" :title="it.relPath">{{ it.fileName }}</div>
+                            <div class="text-gray-500">{{ fmtSize(it.sizeBytes) }} · {{ fmtDur(it.durationSeconds) }}</div>
+                        </div>
+                    </div>
+                    <div v-if="deleteError" class="px-4 py-2 text-xs text-rose-300 whitespace-pre-wrap border-t border-rose-900/60 max-h-32 overflow-y-auto scroll">{{ deleteError }}</div>
+                    <div class="px-4 py-3 border-t border-gray-800 flex items-center gap-2">
+                        <span class="text-xs text-gray-500">共 {{ fmtSize(pendingBytes(deletePrompt.items)) }}</span>
+                        <span class="flex-1"></span>
+                        <button class="tbtn" :disabled="deleting" @click="deletePrompt = null; deleteError = ''">取消</button>
+                        <button class="tbtn text-rose-200 border-rose-800 bg-rose-950/60 hover:bg-rose-900/60"
+                                :disabled="deleting" @click="confirmDelete">
+                            {{ deleting ? '删除中…' : '永久删除' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="flex flex-1 min-h-0 overflow-hidden">
+                <!-- ============================ library ============================ -->
+                <aside data-panel="library" :style="{ width: layout.library + 'px' }" class="shrink-0 border-r border-gray-800 flex flex-col min-h-0 min-w-0">
+                    <div class="p-3 space-y-2 border-b border-gray-800">
+                        <input v-model="q" placeholder="搜索文件 / 房间…"
+                               class="w-full bg-[#0f1216] border border-gray-700 rounded px-3 py-1.5 text-sm outline-none focus:border-sky-600" />
+                        <div class="flex gap-2">
+                            <select v-model="sort" class="flex-1 bg-[#0f1216] border border-gray-700 rounded px-2 py-1 text-xs">
+                                <option value="heat">按玩具热度</option>
+                                <option value="date">按时间</option>
+                                <option value="size">按大小</option>
+                                <option value="duration">按时长</option>
+                                <option value="room">按房间</option>
+                                <option value="name">按文件名</option>
+                            </select>
+                            <select v-model="roomFilter" class="flex-1 bg-[#0f1216] border border-gray-700 rounded px-2 py-1 text-xs">
+                                <option value="">全部房间</option>
+                                <option v-for="r in rooms" :key="r.room" :value="r.room">{{ r.room }} ({{ r.count }})</option>
+                            </select>
+                        </div>
+                        <label class="flex items-center gap-2 text-xs text-gray-400 select-none">
+                            <input type="checkbox" v-model="eventsOnly" class="accent-sky-600" />
+                            只看有 .event 的录制
+                            <span class="flex-1"></span>
+                            <span class="mono text-gray-500">{{ items.length }}/{{ total }}</span>
+                        </label>
+                        <div v-if="deleteEnabled && items.length" class="flex items-center gap-2 text-xs">
+                            <label class="flex items-center gap-1.5 text-gray-400 select-none">
+                                <input type="checkbox" class="accent-sky-600"
+                                       :checked="checked.size === items.length && items.length > 0"
+                                       @change="toggleCheckAll" />
+                                全选
+                            </label>
+                            <span v-if="checked.size" class="mono text-gray-500">已选 {{ checked.size }}</span>
+                            <span class="text-gray-600 hidden sm:inline">Shift 连选 · Ctrl 点选</span>
+                            <span class="flex-1"></span>
+                            <button v-if="checked.size" class="tbtn"
+                                    :class="'text-rose-300 border-rose-800 hover:bg-rose-950/50'"
+                                    @click="askDelete(checkedItems())">删除所选</button>
+                            <button v-if="checked.size" class="tbtn" @click="clearChecked()">取消</button>
+                        </div>
+                    </div>
+                    <div class="flex-1 overflow-y-auto scroll" @scroll.passive="onLibraryScroll">
+                        <div v-if="loading && !items.length" class="p-4 text-sm text-gray-500">加载中…</div>
+                        <div v-else-if="!items.length" class="p-4 text-sm text-gray-500">没有索引到录制文件。</div>
+                        <div v-for="(it, idx) in items" :key="it.id" @click="onRowClick(idx, $event)"
+                             class="group px-3 py-2 border-b border-gray-900 cursor-pointer hover:bg-[#171b21]"
+                             :class="checked.has(it.id) ? 'bg-sky-950/40' : (selected && selected.id === it.id ? 'row-active' : '')">
+                            <div class="flex items-center gap-2">
+                                <input v-if="deleteEnabled" type="checkbox" class="accent-sky-600 shrink-0"
+                                       :checked="checked.has(it.id)"
+                                       @click.stop="toggleChecked(idx, $event)"
+                                       :title="'Shift 点击选一段'" />
+                                <span class="text-[13px] truncate flex-1" :title="it.relPath">{{ it.fileName }}</span>
+                                <span v-if="it.hasEvents" class="text-[10px] px-1.5 py-px rounded bg-sky-900/70 text-sky-300 shrink-0">event</span>
+                                <button v-if="deleteEnabled" @click.stop="askDelete(it)"
+                                        class="tbtn shrink-0 opacity-0 group-hover:opacity-100 text-rose-300 border-rose-900 hover:bg-rose-950/60"
+                                        title="永久删除这条录像（含 .event 与缓存），不可恢复">删除</button>
+                            </div>
+                            <div class="flex items-center gap-3 mt-1 text-[11px] text-gray-500 mono">
+                                <span>{{ fmtDur(it.durationSeconds) }}</span>
+                                <span>{{ fmtSize(it.sizeBytes) }}</span>
+                                <span class="truncate">{{ it.room }}</span>
+                                <span class="flex-1"></span>
+                                <span>{{ fmtDate(it.modifiedAt) }}</span>
+                            </div>
+                            <div v-if="it.heat" class="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
+                                <span class="px-1.5 py-px rounded bg-emerald-900/60 text-emerald-300">玩具 {{ Math.round(it.heat.toySeconds) }}s</span>
+                                <span v-if="it.heat.specialCommands" class="px-1.5 py-px rounded bg-fuchsia-900/60 text-fuchsia-300">特殊 {{ it.heat.specialCommands }}</span>
+                                <span v-if="it.heat.tipTotal" class="px-1.5 py-px rounded bg-amber-900/60 text-amber-300">礼 {{ it.heat.tipTotal }}</span>
+                                <span v-if="it.heat.chats" class="px-1.5 py-px rounded bg-gray-800 text-gray-400">聊 {{ it.heat.chats }}</span>
+                            </div>
+                        </div>
+                        <div v-if="items.length" class="p-3 text-center text-xs text-gray-500">
+                            <span v-if="libraryLoadingMore">加载中…</span>
+                            <button v-else-if="!libraryDone" class="tbtn" @click="loadLibrary(true)">
+                                加载更多（已显示 {{ items.length }} / {{ total }}）
+                            </button>
+                            <span v-else class="text-gray-600">已显示全部 {{ total }} 条</span>
+                        </div>
+                    </div>
+                </aside>
+
+                <!-- =========================== workspace =========================== -->
+                <div class="splitter vertical" role="separator" aria-label="调整文件面板宽度" @pointerdown="beginResize($event, layout, 'library', 'x')"></div>
+                <main :inert="editorLoading" class="flex-1 flex flex-col min-h-0 min-w-0">
+                    <div v-if="!detail" class="flex-1 flex items-center justify-center text-gray-600 text-sm">
+                        {{ editorLoading ? '正在恢复编辑页面…' : (message || '从左侧选择一个录制文件') }}
+                    </div>
+                    <template v-else>
+                        <div class="px-4 py-1.5 border-b border-gray-800 shrink-0">
+                            <div class="flex items-center gap-3">
+                                <span class="text-sm truncate">{{ detail.fileName }}</span>
+                                <span class="text-[11px] text-gray-500 mono">{{ tc(duration) }}</span>
+                                <span class="text-[11px] text-gray-500 mono">{{ fps.toFixed(2) }}fps</span>
+                                <span v-if="lanes" class="text-[11px] px-1.5 py-px rounded"
+                                      :style="{ background: CONF_COLOR[lanes.stats.confidence] + '33', color: CONF_COLOR[lanes.stats.confidence] }">
+                                    时间置信度 {{ CONF_LABEL[lanes.stats.confidence] }}
+                                </span>
+                                <span class="flex-1"></span>
+                                <span v-if="lanes" class="text-[10px] text-gray-500 mono">
+                                    玩具 {{ Math.round(lanes.stats.toyBusySeconds) }}s · 礼物 {{ lanes.stats.tipTotal }} · 特殊 {{ lanes.stats.specialCommandCount }}
+                                </span>
+                                <button v-if="deleteEnabled && selected" @click="askDelete(selected)"
+                                        class="tbtn text-rose-300 border-rose-900 hover:bg-rose-950/60"
+                                        title="永久删除这条录像（含 .event 与缓存），不可恢复">删除此录像</button>
+                                <span v-else-if="selected && !deleteEnabled"
+                                      class="text-[10px] text-gray-600" :title="deleteBlockedReason">
+                                    删除不可用（媒体根只读）
+                                </span>
+                            </div>
+                        </div>
+
+                        <div data-panel="video" class="shrink-0 bg-black relative" :style="{ height: layout.video + 'px' }">
+                            <video ref="player" class="w-full h-full" playsinline
+                                   @timeupdate="onTimeUpdate" @play="onPlaying" @playing="onCanPlay" @pause="onPaused"
+                                   @waiting="buffering = true" @canplay="onCanPlay" @ended="onPaused"
+                                   @seeked="onSeeked" @progress="refreshBuffered"
+                                   @loadedmetadata="onMetadata" @durationchange="refreshBuffered"></video>
+                            <!-- scrub preview: a still frame of wherever the playhead is -->
+                            <img v-if="scrubFrameUrl" :src="scrubFrameUrl" alt=""
+                                 class="absolute inset-0 w-full h-full pointer-events-none"
+                                 style="object-fit: contain; background: #000" />
+                            <div class="absolute top-2 left-2 text-[11px] mono px-2 py-0.5 rounded bg-black/70 text-gray-300">
+                                {{ tc(currentTime) }} <span class="text-gray-500">/ {{ tc(duration) }}</span>
+                                <span v-if="playerState" class="ml-2 text-amber-400">{{ playerState }}</span>
+                            </div>
+                            <div v-if="seeking || (playing && buffering)" class="absolute bottom-2 left-2 text-xs px-2 py-1 rounded bg-black/70 text-sky-300 pointer-events-none">
+                                {{ seeking ? '正在加载所选位置…' : '正在缓冲…' }}
+                            </div>
+                        </div>
+
+                        <div class="splitter horizontal" role="separator" aria-label="调整预览高度" @pointerdown="beginResize($event, layout, 'video')"></div>
+                        <!-- transport: grouped by function, LosslessCut-style -->
+                        <div class="px-3 py-1.5 border-b border-gray-800 flex items-center gap-1.5 text-xs shrink-0 flex-wrap">
+                            <button @click="jumpSegment(-1)" title="上一片段 (↑)" class="tbtn">⏮</button>
+                            <button @click="jumpKeyframe(-1)" title="上一关键帧 (Alt+←)" class="tbtn">◀|</button>
+                            <button @click="stepFrames(-1)" title="上一帧 (,)" class="tbtn">◀</button>
+                            <button @click="togglePlay" :title="playing ? '暂停 (空格)' : '播放 (空格)'"
+                                    class="w-9 h-7 rounded bg-sky-600 hover:bg-sky-500 text-white">
+                                {{ playing ? '❚❚' : '▶' }}
+                            </button>
+                            <button @click="stepFrames(1)" title="下一帧 (.)" class="tbtn">▶</button>
+                            <button @click="jumpKeyframe(1)" title="下一关键帧 (Alt+→)" class="tbtn">|▶</button>
+                            <button @click="jumpSegment(1)" title="下一片段 (↓)" class="tbtn">⏭</button>
+
+                            <span class="w-px h-5 bg-gray-700 mx-1"></span>
+
+                            <button @click="setSegmentBound('start')" title="设置片段起点 (I)" class="tbtn">⇤ 起点</button>
+                            <input class="tcbox" readonly
+                                   :value="activeSeg >= 0 && segments[activeSeg] ? tc(segments[activeSeg].start) : tc(currentTime)" />
+                            <span class="text-gray-600">|</span>
+                            <input class="tcbox" readonly
+                                   :value="activeSeg >= 0 && segments[activeSeg] && segments[activeSeg].end != null ? tc(segments[activeSeg].end) : '--:--:--.---'" />
+                            <button @click="setSegmentBound('end')" title="设置片段终点 (O)" class="tbtn">终点 ⇥</button>
+                            <button @click="clearSegmentEnd" title="清除终点，变为标记 (Backspace)" class="tbtn">标记</button>
+                            <button @click="splitAtPlayhead" title="在光标处分割 (B)" class="tbtn">分割</button>
+                            <button @click="addSegmentAtPlayhead" title="新增片段" class="tbtn">＋片段</button>
+
+                            <span class="w-px h-5 bg-gray-700 mx-1"></span>
+
+                            <span class="text-gray-500">速度</span>
+                            <button @click="nudgeRate(-1)" title="减速 (J)" class="tbtn">−</button>
+                            <select :value="rate" @change="setRate(Number($event.target.value))" aria-label="播放速度" class="bg-gray-900 border border-gray-700 rounded text-xs mono">
+                                <option v-for="r in [0.25,0.5,0.75,1,1.25,1.5,2,3,4,8,16]" :value="r">{{ r }}×</option>
+                                <option v-if="![0.25,0.5,0.75,1,1.25,1.5,2,3,4,8,16].includes(rate)" :value="rate">{{ rate.toFixed(2) }}×</option>
+                            </select>
+                            <button @click="nudgeRate(1)" title="加速 (L)" class="tbtn">＋</button>
+                            <button @click="setRate(1)" title="恢复 1× (K)" class="tbtn">1×</button>
+
+                            <span class="flex-1"></span>
+                            <span v-if="quality === PROXY_QUALITY" class="flex items-center gap-1.5">
+                                <span class="text-gray-500">分辨率</span>
+                                <button v-for="h in PROXY_HEIGHTS" :key="h" @click="setProxyHeight(h)"
+                                        class="px-1.5 py-0.5 rounded border"
+                                        :class="proxyHeight === h ? 'border-emerald-500 text-emerald-400' : 'border-gray-700 hover:bg-gray-800'">
+                                    {{ h }}p
+                                </button>
+                                <span class="text-gray-500">帧率</span>
+                                <button v-for="f in PROXY_FPS" :key="f[0]" @click="setProxyFps(f[0])"
+                                        class="px-1.5 py-0.5 rounded border"
+                                        :class="proxyFps === f[0] ? 'border-emerald-500 text-emerald-400' : 'border-gray-700 hover:bg-gray-800'">
+                                    {{ f[1] }}
+                                </button>
+                                <template v-if="proxy && proxy.status === 'READY'">
+                                    <span class="text-emerald-400">就绪</span>
+                                    <span class="text-gray-500 mono">{{ (proxy.bytes / 1048576).toFixed(0) }}MB</span>
+                                    <button @click="deleteProxy(false)" class="tbtn" title="删除此档代理">删除</button>
+                                    <button @click="deleteProxy(true)" class="tbtn" title="删除该录像的全部代理">全部</button>
+                                </template>
+                                <template v-else-if="proxy && proxy.status === 'RUNNING'">
+                                    <span class="text-amber-400">生成中 {{ Math.round(proxy.progress * 100) }}%</span>
+                                    <span class="w-24 h-1.5 bg-gray-800 rounded overflow-hidden inline-block">
+                                        <span class="block h-full bg-amber-500" :style="{ width: (proxy.progress * 100) + '%' }"></span>
+                                    </span>
+                                </template>
+                                <template v-else-if="proxy && proxy.status === 'FAILED'">
+                                    <span class="text-red-400">生成失败</span>
+                                    <button @click="buildProxy" class="tbtn">重试</button>
+                                </template>
+                                <template v-else>
+                                    <button @click="buildProxy" class="tbtn">生成 {{ proxyHeight }}p {{ proxyFps || '全帧' }}</button>
+                                </template>
+                            </span>
+                            <span class="text-gray-500">预览</span>
+                            <button v-for="qy in QUALITY_ORDER" :key="qy" @click="setQuality(qy)"
+                                    :title="qy === RAW_QUALITY ? '直接播放源文件，不转码，画质无损（占用完整源码率）' : ''"
+                                    class="px-1.5 py-0.5 rounded border"
+                                    :class="quality === qy
+                                        ? (qy === RAW_QUALITY ? 'border-emerald-500 text-emerald-400 bg-emerald-950/40' : 'border-sky-600 text-sky-400 bg-sky-950/40')
+                                        : 'border-gray-700 hover:bg-gray-800'">
+                                {{ qualityLabel(qy) }}
+                            </button>
+                        </div>
+
+                        <!-- timeline toolbar -->
+                        <div class="px-3 py-1 border-b border-gray-800 flex items-center gap-2 text-xs shrink-0 flex-wrap">
+                            <span class="text-gray-500">缩放</span>
+                            <button @click="zoomBy(1/1.5)" class="tbtn">−</button>
+                            <span class="mono w-16 text-center text-gray-300">{{ zoom < 10 ? zoom.toFixed(2) : Math.round(zoom) }}×</span>
+                            <button @click="zoomBy(1.5)" class="tbtn">＋</button>
+                            <button @click="zoomFit" class="tbtn">全部</button>
+                            <button @click="setZoom(zoom * 4)" class="tbtn">×4</button>
+                            <button @click="centerOn(currentTime)" class="tbtn">居中</button>
+                            <span class="text-gray-600">Ctrl/⌘+滚轮 缩放 · Shift+滚轮 关键帧 · Alt+滚轮 逐帧</span>
+
+                            <span class="w-px h-5 bg-gray-700 mx-1"></span>
+                            <label class="flex items-center gap-1 text-gray-400 select-none">
+                                <input type="checkbox" v-model="snap" class="accent-sky-600" /> 吸附
+                            </label>
+                            <label class="flex items-center gap-1 text-gray-400 select-none">
+                                <input type="checkbox" v-model="showKeyframes" class="accent-sky-600" /> 关键帧
+                            <span class="mono" :class="keyframes.length ? 'text-sky-400' : 'text-gray-600'">{{ keyframes.length }}</span>
+                            <span v-if="showKeyframes && !showKeyframeTicks" class="text-gray-600">(放大后显示)</span>
+                            </label>
+                            <span class="flex-1"></span>
+                            <span class="flex items-center gap-1.5 rounded px-1.5 py-0.5"
+                                  :class="isDefaultOffset ? '' : 'bg-amber-900/40 ring-1 ring-amber-600'"
+                                  title="把该录像的所有 event 统一平移（-3 ~ +17 秒）。车道与建议全部按偏移后的时间重算。默认值为标定出的 +7.0s">
+                                <span class="text-gray-500">事件偏移</span>
+                                <input type="range" :min="EVENT_OFFSET_MIN" :max="EVENT_OFFSET_MAX" step="0.1"
+                                       :value="eventOffset" @input="setEventOffset($event.target.value)" class="w-28" />
+                                <span class="mono w-14 text-center"
+                                      :class="isDefaultOffset ? 'text-gray-400' : 'text-amber-300'">
+                                    {{ eventOffset > 0 ? '+' : '' }}{{ eventOffset.toFixed(1) }}s
+                                </span>
+                                <button v-if="!isDefaultOffset" @click="resetEventOffset" class="tbtn"
+                                        title="回到标定的默认偏移 +7.0s">归位</button>
+                            </span>
+                            <label class="flex items-center gap-1 text-gray-400"><input type="checkbox" v-model="showThumbnails" /> 缩略图</label>
+                            <label v-for="l in [['toy','玩具'],['gifts','礼物'],['level','等级'],['chat','聊天']]" :key="l[0]"
+                                   class="flex items-center gap-1 text-gray-400 select-none">
+                                <input type="checkbox" v-model="laneFlags[l[0]]" class="accent-sky-600" /> {{ l[1] }}
+                            </label>
+                            <label class="flex items-center gap-1 text-gray-400 select-none">
+                                <input type="checkbox" v-model="showAudio" class="accent-sky-600" /> 电平
+                            </label>
+                            <label class="flex items-center gap-1 text-gray-400 select-none">
+                                <input type="checkbox" v-model="showSpec" class="accent-sky-600" /> 频谱
+                            </label>
+                        </div>
+
+                        <!-- ========================== timeline ========================== -->
+                        <div ref="viewport" @wheel="onWheel" @scroll="onScroll"
+                             data-panel="timeline" class="flex-1 overflow-auto scroll select-none" style="min-height: 110px; overflow: auto">
+                            <div :style="{ width: (zoom * 100) + '%', minWidth: '100%' }" class="relative">
+
+                                <!-- ruler, doubled as a scrub surface -->
+                                <div data-lane="ruler" class="lane scrub-zone" :style="{ height: laneHeights.ruler + 'px' }" @pointerdown.prevent="beginScrub">
+                                    <div class="lane-resize" role="separator" aria-label="调整刻度尺轨道高度" @pointerdown="beginResize($event, laneHeights, 'ruler')"></div>
+                                    <div v-for="tk in rulerTicks" :key="'t'+tk.t" class="tick" :style="{ left: timeToPct(tk.t) + '%' }"></div>
+                                    <template v-for="tk in rulerTicks" :key="'mm'+tk.t">
+                                        <div v-for="(mt, mi) in tk.minors" :key="'mn'+mi" class="tick minor" :style="{ left: timeToPct(mt) + '%' }"></div>
+                                    </template>
+                                    <div v-for="tk in rulerTicks" :key="'l'+tk.t" class="absolute text-[10px] text-gray-500 mono"
+                                         :style="{ left: timeToPct(tk.t) + '%', top: '4px', paddingLeft: '4px' }">{{ tk.label }}</div>
+                                    <div v-for="(k, i) in keyframes" :key="'k'+i" class="kf" :style="{ left: timeToPct(k) + '%' }"></div>
+                                    <div v-for="(p, i) in cachedMarks" :key="'cf'+i" class="kf cached" :style="{ left: p + '%' }"
+                                         title="该时间戳的帧已缓存"></div>
+                                    <!-- browser-side cache: what can be played with no request -->
+                                    <div v-for="(b, i) in bufferedMarks" :key="'bf'+i" class="buffered"
+                                         :style="{ left: b.left + '%', width: b.width + '%' }"
+                                         title="浏览器已缓冲（本地缓存）"></div>
+                                </div>
+
+                                <div v-if="showThumbnails" data-lane="thumbnails" class="lane" :style="{ height: laneHeights.thumbnails + 'px' }" @pointerdown.prevent="beginScrub">
+                                    <div v-for="cell in thumbnailCells" :key="cell.t" class="thumbnail" :style="{ left: timeToPct(cell.t) + '%', width: widthToPct(cell.t, cell.end) + '%' }" :title="tc(cell.t)">
+                                        <img v-if="thumbnailUrl(cell.t)" :src="thumbnailUrl(cell.t)" alt="时间轴缩略图" draggable="false" />
+                                        <span class="mono">{{ fmtDur(cell.t) }}</span>
+                                    </div>
+                                    <div class="lane-label">缩略图</div>
+                                    <div class="lane-resize" role="separator" aria-label="调整缩略图轨道高度" @pointerdown="beginResize($event, laneHeights, 'thumbnails')"></div>
+                                </div>
+
+                                <!-- clip track -->
+                                <div data-lane="clips" ref="track" class="lane" :style="{ height: laneHeights.clips + 'px' }" @pointerdown.prevent="beginScrub">
+                                    <div class="lane-resize" role="separator" aria-label="调整片段轨道高度" @pointerdown="beginResize($event, laneHeights, 'clips')"></div>
+                                    <div class="lane-label">片段 {{ segments.length }}</div>
+                                    <div v-if="!segments.length"
+                                         class="absolute inset-0 flex items-center justify-center text-[10px] text-gray-600 pointer-events-none">
+                                        接受右侧建议，或在光标处按 I / O 设置起止
+                                    </div>
+                                    <div v-for="(s, i) in segments" :key="s.id" class="clip"
+                                         :class="[s.selected ? 'selected' : 'unselected', { active: activeSeg === i, marker: s.end == null }]"
+                                         :style="s.end == null
+                                             ? { left: timeToPct(s.start) + '%', width: '0.2%' }
+                                             : { left: timeToPct(s.start) + '%', width: Math.max(0.12, widthToPct(s.start, s.end)) + '%' }"
+                                         :title="tc(s.start) + ' → ' + (s.end == null ? '标记' : tc(s.end)) + (s.name ? ' · ' + s.name : '')"
+                                         @pointerdown="beginClipDrag($event, i, 'move')"
+                                         @dblclick.stop="activeSeg = i; seekToTime(s.start)">
+                                        <div class="handle h-l" @pointerdown.stop="beginClipDrag($event, i, 'trim-start')"></div>
+                                        <div class="handle h-r" @pointerdown.stop="beginClipDrag($event, i, 'trim-end')"></div>
+                                        <span class="badge">{{ i + 1 }}</span>
+                                        <span class="label">
+                                            <template v-if="s.end == null">◆ {{ s.name || '标记' }}</template>
+                                            <template v-else-if="(s.end - s.start) * pxPerSecond > 110">
+                                                {{ s.name || '片段' }} · {{ (s.end - s.start).toFixed(1) }}s
+                                            </template>
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div data-lane="toy" v-show="laneFlags.toy" class="lane" :style="{ height: laneHeights.toy + 'px' }">
+                                    <div class="lane-resize" role="separator" aria-label="调整玩具轨道高度" @pointerdown="beginResize($event, laneHeights, 'toy')"></div>
+                                    <div class="lane-label">玩具运行</div>
+                                    <div v-for="(iv, i) in (lanes ? lanes.toyIntervals : [])" :key="'ty'+i" :style="{ left: timeToPct(iv.start) + '%', width: Math.max(0.05, widthToPct(iv.start, iv.end)) + '%', background: '#0f766ecc' }" :title="tc(iv.start) + ' → ' + tc(iv.end) + ' (' + Math.round(iv.end-iv.start) + 's) ' + POWER_LABEL[iv.power] + (iv.action ? ' · ' + iv.action : '') + ' · 点击跳转'" @click="seekToTime(iv.start, {center:true})" class="mark rounded-sm cursor-pointer hover:brightness-125"></div>
+                                    <div v-for="(sp, i) in (lanes ? lanes.toySpecials : [])" :key="'sp'+i" :style="{ left: timeToPct(sp.t) + '%', width: '2px', background: '#e879f9' }" :title="tc(sp.t) + ' · ' + sp.action + ' · 点击跳转'" @click="seekToTime(sp.t, {center:true})" class="mark cursor-pointer hover:brightness-150"></div>
+                                </div>
+
+                                <div data-lane="gifts" v-show="laneFlags.gifts" class="lane" :style="{ height: laneHeights.gifts + 'px' }">
+                                    <div class="lane-resize" role="separator" aria-label="调整礼物轨道高度" @pointerdown="beginResize($event, laneHeights, 'gifts')"></div>
+                                    <div class="lane-label">礼物 / 场次</div>
+                                    <div v-for="(g, i) in giftMarks" :key="'g'+i" :style="{ left: g.left + '%', width: g.w + '%', bottom: '0', top: 'auto', height: (g.h * 100) + '%', background: g.color }" :title="g.title + ' · 点击跳转'" @click="seekToTime(g.t, {center:true})" class="mark cursor-pointer hover:brightness-150"></div>
+                                </div>
+
+                                <div data-lane="level" v-show="laneFlags.level" class="lane" :style="{ height: laneHeights.level + 'px' }">
+                                    <div class="lane-resize" role="separator" aria-label="调整等级轨道高度" @pointerdown="beginResize($event, laneHeights, 'level')"></div>
+                                    <div class="lane-label">玩具等级</div>
+                                    <div v-for="(b, i) in levelBuckets" :key="'lv'+i" :style="{ left: b.left + '%', width: b.w + '%', bottom: '0', top: 'auto', height: (b.power / 4 * 100) + '%', background: POWER_COLOR[b.power] + 'dd' }" :title="tc(b.t) + ' · ' + POWER_LABEL[b.power] + ' · 点击跳转'" @click="seekToTime(b.t, {center:true})" class="mark cursor-pointer hover:brightness-150"></div>
+                                </div>
+
+                                <div data-lane="chat" v-show="laneFlags.chat" class="lane" :style="{ height: laneHeights.chat + 'px' }">
+                                    <div class="lane-resize" role="separator" aria-label="调整聊天轨道高度" @pointerdown="beginResize($event, laneHeights, 'chat')"></div>
+                                    <div class="lane-label">聊天密度</div>
+                                    <div v-for="(b, i) in chatBuckets" :key="'ch'+i" :style="{ left: b.left + '%', width: b.w + '%', bottom: '0', top: 'auto', height: (b.h * 100) + '%', background: '#38bdf8aa' }" :title="tc(b.t) + ' · 点击跳转'" @click="seekToTime(b.t, {center:true})" class="mark cursor-pointer hover:brightness-150"></div>
+                                </div>
+
+                                <div data-lane="audio" v-show="showAudio" class="lane" :style="{ height: laneHeights.audio + 'px' }">
+                                    <div class="lane-resize" role="separator" aria-label="调整音频轨道高度" @pointerdown="beginResize($event, laneHeights, 'audio')"></div>
+                                    <div class="lane-label">音频电平</div>
+                                    <img v-if="audioOverviewUrl" :src="audioOverviewUrl" alt=""
+                                         class="absolute inset-0 w-full h-full"
+                                         style="object-fit: fill; image-rendering: pixelated; opacity: .9" />
+                                </div>
+
+                                <div data-lane="spec" v-show="showSpec" class="lane" :style="{ height: laneHeights.spec + 'px' }">
+                                    <div class="lane-resize" role="separator" aria-label="调整频谱轨道高度" @pointerdown="beginResize($event, laneHeights, 'spec')"></div>
+                                    <div class="lane-label">频谱</div>
+                                    <img v-if="spectrogramUrl" :src="spectrogramUrl" alt=""
+                                         class="absolute inset-0 w-full h-full"
+                                         style="object-fit: fill; image-rendering: pixelated; opacity: .9" />
+                                </div>
+
+                                <!-- playhead spanning every lane -->
+                                <div class="playhead" :style="{ left: timeToPct(currentTime) + '%' }">
+                                    <div class="playhead-head" @pointerdown.stop.prevent="beginScrub"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="tableEvents.length" class="splitter horizontal" role="separator" aria-label="调整事件面板高度" @pointerdown="beginResize($event, layout, 'events', 'y', -1)"></div>
+                        <div v-if="tableEvents.length" :style="{ height: layout.events + 'px' }" class="shrink-0 border-t border-gray-800 overflow-y-auto scroll">
+                            <table class="w-full text-[11px] mono">
+                                <thead class="sticky top-0 bg-[#12151a] text-gray-500">
+                                    <tr>
+                                        <th class="text-left px-2 py-1 font-normal">时间</th>
+                                        <th class="text-left px-2 py-1 font-normal">类型</th>
+                                        <th class="text-left px-2 py-1 font-normal">详情</th>
+                                        <th class="text-left px-2 py-1 font-normal">置信</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(e, i) in tableEvents" :key="i"
+                                        @click="e.t != null && seekToTime(e.t, {center:true})"
+                                        class="border-b border-gray-900 hover:bg-[#171b21] cursor-pointer">
+                                        <td class="px-2 py-0.5 text-gray-400">{{ e.t == null ? '--:--' : fmtDur(e.t) }}</td>
+                                        <td class="px-2 py-0.5">
+                                            <span :style="{ color: e.kind === 'TOY_CMD' ? '#34d399' : e.kind === 'TIP' ? '#fbbf24'
+                                                                  : e.kind === 'SHOW' ? '#f472b6' : e.kind === 'GOAL' ? '#a78bfa' : '#9ca3af' }">
+                                                {{ e.kind }}
+                                            </span>
+                                        </td>
+                                        <td class="px-2 py-0.5 text-gray-300 truncate" style="max-width: 28rem">
+                                            <template v-if="e.action">{{ e.action }} <span v-if="e.seconds">({{ e.seconds }}s)</span></template>
+                                            <template v-else-if="e.amount">{{ e.amount }} <span class="text-gray-500">{{ e.source || '' }}</span></template>
+                                            <template v-else>{{ e.text || e.goalText || '' }}</template>
+                                        </td>
+                                        <td class="px-2 py-0.5" :style="{ color: CONF_COLOR[e.confidence] }">{{ CONF_LABEL[e.confidence] }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </template>
+                </main>
+
+                <!-- ======================= right rail ======================= -->
+                <div v-if="detail" class="splitter vertical" role="separator" aria-label="调整当前标签页面板宽度" @pointerdown="beginResize($event, layout, rightTab, 'x', -1)"></div>
+                <aside v-if="detail" :inert="editorLoading" data-panel="tabs" :style="{ width: layout[rightTab] + 'px' }" class="shrink-0 border-l border-gray-800 flex flex-col min-h-0 min-w-0">
+                    <div class="flex border-b border-gray-800 text-xs shrink-0">
+                        <button v-for="t in [['suggest','建议'],['segments','片段'],['export','导出']]" :key="t[0]"
+                                @click="rightTab = t[0]" class="flex-1 px-3 py-2"
+                                :class="rightTab === t[0] ? 'bg-[#171b21] text-sky-400 border-b-2 border-sky-500' : 'text-gray-400 hover:bg-[#141821]'">
+                            {{ t[1] }}
+                            <span v-if="t[0]==='suggest' && suggestions.length" class="ml-1 text-gray-500">{{ suggestions.length }}</span>
+                            <span v-if="t[0]==='segments' && segments.length" class="ml-1 text-gray-500">{{ segments.length }}</span>
+                        </button>
+                    </div>
+                    <div v-if="message" class="px-3 py-1 text-[11px] text-amber-300 border-b border-gray-800">{{ message }}</div>
+
+                    <div v-show="rightTab === 'suggest'" class="flex-1 overflow-y-auto scroll">
+                        <div class="p-3 space-y-2 border-b border-gray-800">
+                            <div class="flex items-center gap-2 text-xs">
+                                <select v-model="prefs.preset" @change="onPrefsChanged"
+                                        class="flex-1 bg-[#0f1216] border border-gray-700 rounded px-2 py-1 text-xs">
+                                    <option value="toypure">纯玩具运行（只看玩具是否在跑）</option>
+                                    <option value="toy">玩具/gift 时刻</option>
+                                    <option value="show">私密场次</option>
+                                    <option value="chatty">聊天活跃</option>
+                                    <option value="everything">全部</option>
+                                </select>
+                                <button @click="loadSuggestions" class="tbtn">重算</button>
+                            </div>
+                            <label v-for="sl in [['mergeGap','黏合空洞 (s)',1,120],['minBlock','最短片段 (s)',5,300],['padBefore','前置 (s)',0,60],['padAfter','后置 (s)',0,60],['minScore','最低分',0,3]]"
+                                   :key="sl[0]" class="block text-[11px] text-gray-400">
+                                <span class="flex justify-between"><span>{{ sl[1] }}</span><span class="mono text-gray-500">{{ prefs[sl[0]] }}</span></span>
+                                <input type="range" :min="sl[2]" :max="sl[3]" :step="sl[0]==='minScore' ? 0.05 : 1"
+                                       v-model.number="prefs[sl[0]]" @input="onPrefsChanged" class="w-full" />
+                            </label>
+                            <button @click="acceptAll" :disabled="!suggestions.length"
+                                    class="w-full text-xs px-3 py-1.5 rounded bg-sky-800 hover:bg-sky-700 disabled:opacity-40">
+                                全部接受（{{ suggestions.length }}）
+                            </button>
+                        </div>
+                        <div v-if="suggestLoading" class="p-3 text-xs text-gray-500">计算中…</div>
+                        <div v-else-if="!suggestions.length" class="p-3 text-xs text-gray-500">没有建议。降低「最低分」或「最短片段」。</div>
+                        <div v-for="(b, i) in suggestions" :key="i" class="px-3 py-2 border-b border-gray-900 hover:bg-[#171b21]">
+                            <div class="flex items-center gap-2">
+                                <button @click="seekToTime(b.start, {center:true})" class="mono text-[12px] text-sky-400 hover:underline">
+                                    {{ fmtDur(b.start) }} → {{ fmtDur(b.end) }}
+                                </button>
+                                <span class="text-[10px] text-gray-500 mono">{{ Math.round(b.end-b.start) }}s</span>
+                                <span class="flex-1"></span>
+                                <span class="text-[10px] mono px-1.5 py-px rounded bg-gray-800 text-gray-300">{{ b.score.toFixed(1) }}</span>
+                                <button @click="acceptSuggestion(b)" class="text-[11px] px-2 py-0.5 rounded border border-sky-700 text-sky-300 hover:bg-sky-900/40">接受</button>
+                            </div>
+                            <div class="flex flex-wrap gap-1 mt-1">
+                                <span v-for="(r, j) in b.reasons" :key="j" class="text-[10px] px-1.5 py-px rounded"
+                                      :style="{ background: (r.kind==='TOY' ? '#0f766e55' : r.kind==='TIP' ? '#b4530955'
+                                              : r.kind==='SPECIAL' ? '#a21caf55' : r.kind==='SHOW' ? '#be185d55' : '#37415155') }">
+                                    {{ r.detail }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-show="rightTab === 'segments'" class="flex-1 flex flex-col min-h-0">
+                        <div class="p-2 flex flex-wrap items-center gap-1 border-b border-gray-800 text-[11px] shrink-0">
+                            <button @click="addSegmentAtPlayhead" class="tbtn">＋片段</button>
+                            <button @click="saveProject" class="tbtn">保存 .llc</button>
+                            <button @click="mergeSegments" :disabled="mergeCandidates.length < 2" class="tbtn disabled:opacity-40" title="合并勾选的有终点片段，包含中间间隔；不覆盖未勾选片段">合并勾选</button>
+                            <button @click="undoEdit" :disabled="!undoStack.length" class="tbtn disabled:opacity-40" title="撤销 (Ctrl/⌘+Z)">撤销</button>
+                            <button @click="redoEdit" :disabled="!redoStack.length" class="tbtn disabled:opacity-40" title="重做 (Ctrl/⌘+Shift+Z)">重做</button>
+                            <span class="flex-1"></span>
+                            <span class="text-gray-500 mono">{{ exportable.length }} 可导出</span>
+                        </div>
+                        <div class="flex-1 overflow-y-auto scroll">
+                            <div v-if="!segments.length" class="p-3 text-xs text-gray-500">
+                                还没有片段。接受建议，或在时间轴上按 I / O 设置起止。
+                            </div>
+                            <div v-for="(sg, i) in segments" :key="sg.id" @click="activeSeg = i; seekToTime(sg.start, {center:true})"
+                                 class="px-2 py-1.5 border-b border-gray-900 cursor-pointer hover:bg-[#171b21]"
+                                 :class="{ 'row-active': activeSeg === i }">
+                                <div class="flex items-center gap-1.5">
+                                    <span class="text-[10px] mono w-5 text-gray-500">{{ i + 1 }}</span>
+                                    <input type="checkbox" v-model="sg.selected" class="accent-sky-600" @click.stop />
+                                    <input :value="sg.start" type="number" step="0.001" min="0" :max="duration" aria-label="片段开始时间" @change="editSegmentInput(i, 'start', $event)" @click.stop
+                                           class="w-[4.4rem] bg-[#0f1216] border border-gray-700 rounded px-1 py-0.5 text-[11px] mono" />
+                                    <span class="text-gray-600 text-[11px]">→</span>
+                                    <input :value="sg.end" type="number" step="0.001" min="0" :max="duration" aria-label="片段结束时间" placeholder="标记" @change="editSegmentInput(i, 'end', $event)" @click.stop
+                                           class="w-[4.4rem] bg-[#0f1216] border border-gray-700 rounded px-1 py-0.5 text-[11px] mono" />
+                                    <span class="text-[10px] text-gray-500 mono w-9 text-right">
+                                        {{ sg.end ? Math.round(sg.end - sg.start) + 's' : '标记' }}
+                                    </span>
+                                    <button @click.stop="removeSegment(i)" class="text-[11px] text-red-400 hover:text-red-300">✕</button>
+                                </div>
+                                <input v-model="sg.name" placeholder="名称" @click.stop
+                                       class="w-full mt-1 bg-[#0f1216] border border-gray-800 rounded px-1 py-0.5 text-[11px] text-gray-300" />
+                            </div>
+                        </div>
+                        <div class="p-2 border-t border-gray-800 shrink-0">
+                            <div class="flex items-center gap-2 text-[11px]">
+                                <input v-model="outputDir" placeholder="输出目录（默认服务端配置）"
+                                       class="flex-1 bg-[#0f1216] border border-gray-700 rounded px-2 py-1" />
+                                <button @click="exportSegments" class="px-3 py-1 rounded bg-emerald-800 hover:bg-emerald-700 whitespace-nowrap">
+                                    导出 ({{ exportable.length }})
+                                </button>
+                            </div>
+                            <div class="text-[10px] text-gray-500 mt-1">始终 -c copy 无损剪切；切点自动对齐关键帧</div>
+                        </div>
+                    </div>
+
+                    <div v-show="rightTab === 'export'" class="flex-1 flex flex-col min-h-0">
+                        <!-- Persisted instance-wide, so it survives a browser change and
+                             applies to every recording. Disabled without a writable media
+                             root, since deleting a source is then impossible anyway. -->
+                        <label class="px-3 py-2 border-b border-gray-800 flex items-start gap-2 text-[11px] select-none"
+                               :class="settings.deleteSourceAfterExport ? 'text-rose-300' : 'text-gray-400'">
+                            <input type="checkbox" class="accent-rose-600 mt-0.5"
+                                   :checked="!!settings.deleteSourceAfterExport"
+                                   :disabled="savingSettings || !deleteEnabled"
+                                   @change="setDeleteAfterExport($event.target.checked)" />
+                            <span>
+                                导出后删除源文件
+                                <span class="block text-gray-500 mt-0.5">
+                                    该录像的片段导出完成后删除源文件——<strong>只导出片段也会删除整条录像</strong>，
+                                    未导出的部分一并丢失，此操作不可恢复。本次未成功导出任何片段时不会删除。
+                                    {{ deleteEnabled ? '' : '（媒体根只读，暂不可用）' }}
+                                </span>
+                                <span v-if="settings.error" class="block text-rose-400 mt-0.5">{{ settings.error }}</span>
+                            </span>
+                        </label>
+                        <div v-if="!exportJob" class="p-3 text-xs text-gray-500">还没有导出任务。</div>
+                        <template v-else>
+                            <div class="px-3 py-2 border-b border-gray-800 text-[11px]">
+                                <div class="flex items-center gap-2">
+                                    <span class="mono">{{ exportJob.id }}</span>
+                                    <span class="px-1.5 py-px rounded"
+                                          :class="exportJob.state === 'DONE' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'">
+                                        {{ exportJob.state }}
+                                    </span>
+                                    <span class="flex-1"></span>
+                                    <span class="mono text-gray-400">{{ exportJob.completed }}/{{ exportJob.total }}</span>
+                                </div>
+                                <div v-for="(it, i) in exportJob.items" :key="i" class="mt-1 flex items-center gap-2">
+                                    <span class="text-[10px] px-1 py-px rounded"
+                                          :class="it.state === 'DONE' ? 'bg-emerald-900/50 text-emerald-300'
+                                                : it.state === 'FAILED' ? 'bg-red-900/50 text-red-300' : 'bg-gray-800 text-gray-400'">
+                                        {{ it.state }}
+                                    </span>
+                                    <span class="truncate flex-1 text-gray-300">{{ it.outputName || it.sourceName }}</span>
+                                    <span v-if="it.snapDelta" class="text-[10px] text-amber-400 mono">{{ it.snapDelta.toFixed(2) }}s</span>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-y-auto scroll p-2 text-[10px] mono text-gray-400 space-y-px">
+                                <div v-for="(l, i) in exportJob.log" :key="i">{{ l }}</div>
+                            </div>
+                        </template>
+                    </div>
+                </aside>
+            </div>
+            `
+        }
+        createApp(app).mount('#app')
+    </script>
+</body>
+
+</html>
