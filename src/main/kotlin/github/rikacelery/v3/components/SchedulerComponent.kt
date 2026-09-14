@@ -849,8 +849,21 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 currentKind = ""
                 lastIndex = null
             }
+            // A status change that arrives mid-teardown used to be recorded and then ignored,
+            // which left a room that went public again sitting public and idle until the
+            // platform happened to send another frame — it never would, because it had already
+            // said so. The session is finishing either way, so the status decides what comes
+            // next, and that is known now rather than after the teardown completes.
+            //
+            // The follow-up is queued rather than driven inline: taking a transition from
+            // inside an action is re-entrant driving, which the FSM rejects outright.
             on(SchedulerEvent.RoomStatusChanged) to KEEP action { d ->
-                if (d?.roomStatus != null) roomStatus = d.roomStatus
+                val st = d?.roomStatus ?: return@action
+                roomStatus = st
+                self(
+                    if (canRecord(st)) SchedulerEvent.BeginPreconfig
+                    else SchedulerEvent.BackToArmed
+                )
             }
             on(SchedulerEvent.StreamStatusChanged) to KEEP action { d ->
                 if (d?.streamStatus != null) streamStatus = d.streamStatus
