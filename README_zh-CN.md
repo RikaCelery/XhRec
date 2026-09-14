@@ -15,19 +15,31 @@ java -jar build/libs/XhRec-all.jar
 
 ## CLI 选项
 
-| 选项             | 描述              | 默认值                |
-|------------------|------------------|----------------------|
-| `-f`, `--file`   | 房间列表配置文件      | `list.conf`          |
-| `-o`, `--output` | 输出目录            | `out`                |
-| `-t`, `--tmp`    | 临时目录            | `tmp`                |
-| `-p`, `--port`   | HTTP 服务端口       | `8090`               |
-| `-s`, `--tls`    | 启用/禁用 TLS       | `true`               |
-| `-u`, `--users`  | 用户文件            | `users.txt`          |
-| `-post`          | 后处理器配置文件     | `postprocessor.json` |
+每个选项都可以通过 `XHREC_` 前缀的环境变量设置，而不必使用命令行参数——这对
+于 Docker 部署很有用，可以直接设置 `environment:` 条目，而不需要修改容器的启
+动命令。如果同时设置了命令行参数和环境变量，命令行参数优先；环境变量优先于
+内置默认值。
+
+| 选项              | 环境变量               | 描述                | 默认值                |
+|-------------------|----------------------|--------------------|----------------------|
+| `-f`, `--file`    | `XHREC_FILE`         | 房间列表配置文件      | `list.conf`          |
+| `-o`, `--output`  | `XHREC_OUTPUT`       | 输出目录             | `out`                |
+| `-t`, `--tmp`     | `XHREC_TMP`          | 临时目录             | `tmp`                |
+| `-p`, `--port`    | `XHREC_PORT`         | HTTP 服务端口        | `8090`               |
+| `-s`, `--tls`     | `XHREC_TLS`          | 使用自签名证书启用 HTTPS | `true`            |
+| `-u`, `--users`   | `XHREC_USERS`        | 用户文件             | `users.txt`          |
+| `-post`           | `XHREC_POST`         | 后处理器配置文件      | `postprocessor.json` |
+
 
 ```shell
 java -jar build/libs/XhRec-all.jar -p 12340 -f list.conf -post postprocessor.json -t /tmp/xhrec -o /out
 ```
+
+Docker Compose 配置（见 [`docker/docker-compose.yml`](docker/docker-compose.yml)）
+设置了 `XHREC_OUTPUT`、`XHREC_FILE` 和 `XHREC_USERS`，使其指向容器挂载的目录，
+因为应用内置的默认值是相对路径，不会自动指向这些挂载点。`postprocessor.json`
+和 `xhrec.json` 在此处不通过环境变量设置——入口脚本会改为将它们软链接到位，
+这样也能规避 `-post` 参数已知的解析问题（详见 `docker/entrypoint.sh`）。
 
 ## 配置
 

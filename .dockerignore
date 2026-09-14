@@ -13,6 +13,7 @@ logs
 .idea
 .vscode
 .github
+.forgejo
 docs
 
 # Local secrets and machine-specific state (gitignored, but not by Docker)

@@ -12,16 +12,27 @@ services:
     restart: unless-stopped
     ports:
       - 8090:8090
-    dns:
-      - 9.9.9.9
-      - 149.112.112.112
     environment:
-      - TZ=America/Chicago  # Update to your local time zone
+      TZ: "America/Chicago"  # Update to your local time zone
+      # --- Required: point the app at the mounted volumes below. The
+      # app's own built-in defaults are relative paths under /app and
+      # do NOT know about these mounts, so these three must be set. ---
+      XHREC_OUTPUT: /app/recordings
+      XHREC_FILE: /app/config/list.conf
+      XHREC_USERS: /app/config/users.txt
+      XHREC_POST: /app/config/postprocessor.json
+      # --- Optional: uncomment to override the app's own defaults. ---
+      # XHREC_TLS: true          # Enable/disable HTTPS with a self-signed cert (default: true)
+      # XHREC_PORT: 8090         # Must match the ports mapping and Dockerfile EXPOSE above if changed
+      # XHREC_TMP: tmp           # Scratch space for in-progress downloads; relative to /app (ephemeral) by default
+
     volumes:
       # Mount configuration files/templates directory
       - ./config:/app/config
       # Mount directory where recorded video streams are saved
       - ./recordings:/app/recordings
+      # Optional tmp dir for in-progress downloads
+      # ./tmp/:/app/tmp
     logging:
       driver: "json-file"
       options:

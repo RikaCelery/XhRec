@@ -5,6 +5,7 @@ import github.rikacelery.v3.components.*
 import github.rikacelery.v3.data.RoomSettings
 import github.rikacelery.v3.data.SizeStrSerializer
 import github.rikacelery.v3.utils.SensitiveStringRegistry
+import github.rikacelery.v3.utils.getOptionOrEnv
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.postprocessors.*
 import kotlinx.coroutines.Dispatchers
@@ -70,13 +71,13 @@ class Bootstrap(
             exitProcess(1)
         }
         return CliConfig(
-            listConfPath = cmd.getOptionValue("file", "list.conf"),
-            outputDir = cmd.getOptionValue("output", "out"),
-            tmpDir = cmd.getOptionValue("tmp", "tmp"),
-            port = cmd.getOptionValue("port", "8090").toInt(),
-            tls = cmd.getOptionValue("tls", "true").toBoolean(),
-            usersPath = cmd.getOptionValue("users", "users.txt"),
-            postProcessorPath = cmd.getOptionValue("post", "postprocessor.json")
+            listConfPath = cmd.getOptionOrEnv("file", "list.conf"),
+            outputDir = cmd.getOptionOrEnv("output", "out"),
+            tmpDir = cmd.getOptionOrEnv("tmp", "tmp"),
+            port = cmd.getOptionOrEnv("port", "8090").toInt(),
+            tls = cmd.getOptionOrEnv("tls", "true").toBoolean(),
+            usersPath = cmd.getOptionOrEnv("users", "users.txt"),
+            postProcessorPath = cmd.getOptionOrEnv("post", "postprocessor.json")
         )
     }
 
