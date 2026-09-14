@@ -144,8 +144,9 @@ class SchedulerPreconfigRefreshTest {
     private suspend fun withProbe(playlistStatus: HttpStatusCode, block: suspend (Harness) -> Unit) {
         val refreshes = AtomicInteger()
         val cdn = HttpClient(MockEngine { request ->
+            val requestUrl = request.url.encodedPath
             when {
-                request.url.toString().endsWith("/api/front/v1/broadcasts/model") ->
+                requestUrl.matches(Regex(".*/api/front/v2/broadcasts/\\d+$")) ->
                     respond("""{"item":{"status":"public"}}""", headers = jsonHeaders)
 
                 request.url.encodedPath.startsWith("/master/") -> respond(masterPlaylist)
