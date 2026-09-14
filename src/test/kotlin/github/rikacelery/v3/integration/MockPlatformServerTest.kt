@@ -52,25 +52,35 @@ class MockPlatformServerTest {
             assertEquals(mock.token, initial.jsonPath("initial.client.websocket.token"))
             assertEquals("tester", initial.jsonPath("initial.client.user.username"))
 
-            val broadcast = client.get("${mock.baseUrl}/api/front/v1/broadcasts/model").bodyAsText()
+            val broadcast = client.get("${mock.baseUrl}/api/front/v2/broadcasts/${room.id}").bodyAsText()
             assertEquals("public", broadcast.jsonPath("item.status"))
             assertEquals(7L, broadcast.jsonPath("item.modelId").toLong())
 
             mock.setRoomStatus(room.id, "private")
             assertEquals(
                 "private",
-                client.get("${mock.baseUrl}/api/front/v1/broadcasts/model").bodyAsText().jsonPath("item.status")
+                client.get("${mock.baseUrl}/api/front/v2/broadcasts/${room.id}").bodyAsText().jsonPath("item.status")
             )
 
-            val missing = client.get("${mock.baseUrl}/api/front/v1/broadcasts/ghost")
+            val missing = client.get("${mock.baseUrl}/api/front/v2/broadcasts/4")
             assertEquals(HttpStatusCode.NotFound, missing.status)
             assertTrue(missing.bodyAsText().contains("description"))
 
-            val cam = client.get("${mock.baseUrl}/api/front/v2/models/7/cam").bodyAsText()
+            val cam = client.get("${mock.baseUrl}/api/front/v2/models/${room.id}/cam").bodyAsText()
             assertEquals("", cam.jsonPath("cam.modelToken"))
             assertEquals("100", cam.jsonPath("user.user.ticketRate"))
         }
     }
+    @Test
+    fun `returns model id when provided with model username`() = withMock { mock ->
+        mock.addRoom(7, "model", status = "public")
+        mock.setFavorites(42, listOf(7, 8))
+        withClient { client ->
+            val model = client.get("${mock.baseUrl}/api/front/users/user-ids/model").bodyAsText()
+            assertEquals("7", model.jsonPath("id"))
+        }
+    }
+
 
     @Test
     fun `serves account favorites and the model username`() = withMock { mock ->
@@ -129,15 +139,15 @@ class MockPlatformServerTest {
         mock.addRoom(7, "model", status = "public")
         withClient { client ->
             client.get(mock.masterUrl(7))
-            client.get("${mock.baseUrl}/api/front/v1/broadcasts/model?probe=1")
+            client.get("${mock.baseUrl}/api/front/v2/broadcasts/1?probe=1")
         }
         val paths = mock.requests().map { it.path }
         assertTrue(paths.contains("/hls/7/master/7_auto.m3u8"), "$paths")
-        assertTrue(paths.contains("/api/front/v1/broadcasts/model"), "$paths")
+        assertTrue(paths.contains("/api/front/v2/broadcasts/1"), "$paths")
         assertTrue(mock.requests().all { it.path.startsWith("/") })
         assertEquals(
             mapOf("probe" to "1"),
-            mock.requests().first { it.path == "/api/front/v1/broadcasts/model" }.query
+            mock.requests().first { it.path == "/api/front/v2/broadcasts/1" }.query
         )
     }
 
