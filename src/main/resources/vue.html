@@ -579,7 +579,7 @@
             </div>
             <div class="p-4 overflow-x-auto overflow-y-auto terminal-scroll font-mono text-xs flex-1">
                 <div v-if="allUrls.length === 0" class="text-slate-500 italic">{{ $t('Waiting for connection...') }}</div>
-                <div v-for="(info, idx) in allUrls" :key="idx"
+                <div v-for="(info, idx) in allUrls" :key="info.url"
                     class="mb-1 text-slate-300 whitespace-nowrap hover:bg-[#2a2a2a] px-1 rounded transition-colors">
                     <span
                         class="text-indigo-400 font-bold w-48 inline-block overflow-hidden text-ellipsis align-bottom">{{info.prefix.trim()}}</span>
@@ -1027,6 +1027,7 @@
                     settingsTime: 0,    // time limit shown in that dialog (seconds, 0 = unlimited)
                     settingsSize: '',   // size limit shown in that dialog (e.g. "1G", empty = unlimited)
                     allUrls: [],
+                    allUrlsSeen: new Set(),
                     imagePreview: false,
                     // roomId -> {count, columns, rows, cellWidth, cellHeight, samples:[{index, at}]}
                     // served by /preview/index; drives both the latest image and the strip geometry.
@@ -1586,7 +1587,8 @@
                         this.favoritesLoading = false;
                     }
                 },
-                async addRoom(active) {                    const name = this.addInput.split("/").slice(-1)[0].split("?")[0];
+                async addRoom(active) {
+                    const name = this.addInput.split("/").slice(-1)[0].split("?")[0];
                     if (!name) {
                         this.showToast(this.$t("Please enter a room name or URL"), "error");
                         return;
@@ -1674,7 +1676,22 @@
                         }
 
                         this.roomInfo = newRoomInfo;
-                        this.allUrls = newAllUrls;
+                        const MAX_NETWORK_LOG_LINES = 500;
+                        for (const entry of newAllUrls) {
+                            if (this.allUrlsSeen.has(entry.url)) {
+                                // Still in-flight (or re-seen): refresh its live timing in place
+                                // rather than treating it as a new line.
+                                const idx = this.allUrls.findIndex(e => e.url === entry.url);
+                                if (idx !== -1) this.allUrls[idx] = entry;
+                            } else {
+                                this.allUrlsSeen.add(entry.url);
+                                this.allUrls.unshift(entry);
+                                if (this.allUrls.length > MAX_NETWORK_LOG_LINES) {
+                                    const removed = this.allUrls.pop();
+                                    this.allUrlsSeen.delete(removed.url);
+                                }
+                            }
+                        }
                     } catch (e) {
                         // Suppress polling error logs to keep console clean
                     }
