@@ -390,9 +390,18 @@ class DownloaderComponent(
                 }
 
                 val result = if (directDeferred.isCompleted) {
-                    // Direct already finished with a non-success result. Give the proxy a real
-                    // chance instead of letting select() immediately return the direct failure.
-                    withTimeoutOrNull(minOf(raceThresholdMs, budgetMs).milliseconds) { proxyDeferred.await() }
+                    // Direct already finished with a non-success result, so nothing is being
+                    // raced any more: the proxy is the only candidate left and gets the whole
+                    // attempt budget.
+                    //
+                    // It used to get only the race threshold, which is the wrong window — that
+                    // one exists to choose *between* two candidates, not to bound the single
+                    // one that remains. With the shipped 2 ms default the proxy had to answer
+                    // within 2 ms or the segment was written off as "proxy timeout", so a
+                    // perfectly healthy proxy was failed repeatedly: observed 16 attempts,
+                    // every `px_*` client requested, no result at all, whenever the direct
+                    // path failed quickly rather than merely being slow.
+                    withTimeoutOrNull(budgetMs.milliseconds) { proxyDeferred.await() }
                         ?: DownloadResult.Failed(idx, resolvedUrl, "proxy timeout", transportError = true)
                             .also { history.record(resolvedUrl, "PROXY", it.reason) }
                 } else {
