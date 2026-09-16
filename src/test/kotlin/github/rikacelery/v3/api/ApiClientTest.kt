@@ -154,6 +154,31 @@ class ApiClientTest {
     }
 
     @Test
+    fun `model id is resolved from model name`() = runTest {
+        var requestedUrl = ""
+        val mockClient = HttpClient(MockEngine { request ->
+            requestedUrl = request.url.toString()
+            respond(
+                content = """{"id":1001}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                )
+        })
+        try {
+            val client =
+                    ApiClient(listOf("platform.test"), singleClientProvider(mockClient)) {
+                        "http://$it"
+                    }
+
+            assertEquals(1001L, client.roomIdFromName("model-one"))
+            assertEquals("http://platform.test/api/front/users/user-ids/model-one", requestedUrl)
+        } finally {
+            mockClient.close()
+        }
+    }
+
+
+    @Test
     fun `model name is null when cam info carries no username`() = runTest {
         val mockClient = HttpClient(MockEngine {
             respond(
