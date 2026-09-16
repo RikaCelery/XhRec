@@ -90,7 +90,7 @@ class RuntimeInjectionTest {
             component.internalAdd(7, "model", RoomSettings())
             component.start()
             runCurrent()
-            assertEquals("http://127.0.0.1:18080/api/front/v1/broadcasts/model", requestEvents.receive())
+            assertEquals("http://127.0.0.1:18080/api/front/v2/broadcasts/7", requestEvents.receive())
             assertEquals(1, requests.size)
 
             advanceTimeBy(19)
@@ -110,7 +110,7 @@ class RuntimeInjectionTest {
             runCurrent()
             requestEvents.receive()
             assertEquals(3, requests.size)
-            assertTrue(requests.all { it == "http://127.0.0.1:18080/api/front/v1/broadcasts/model" })
+            assertTrue(requests.all { it == "http://127.0.0.1:18080/api/front/v2/broadcasts/7" })
         } finally {
             component.stop()
             client.close()
@@ -181,8 +181,9 @@ class RuntimeInjectionTest {
         val client = HttpClient(MockEngine { request ->
             val url = request.url.toString()
             requests += url
+            val requestUrl = request.url.encodedPath
             when {
-                url.endsWith("/api/front/v1/broadcasts/model") -> respond(
+                requestUrl.matches(Regex(".*/api/front/v2/broadcasts/\\d+$")) -> respond(
                     """{"item":{"status":"public"}}""",
                     headers = jsonHeaders
                 )

@@ -413,9 +413,28 @@ class MockPlatformServer(
                 )
             }
 
-            get("/api/front/v1/broadcasts/{name}") {
-                val name = call.parameters["name"].orEmpty()
-                val room = roomsByName[name]
+            get("/api/front/users/user-ids/{name}") {
+                val name = call.parameters["name"]
+                val room = name?.let { roomsByName[it] }
+                if (room == null) {
+                    call.respondJson(
+                            buildJsonObject { put("description", "model not found") },
+                            HttpStatusCode.NotFound
+                    )
+                    return@get
+                }
+
+                call.respondJson(
+                    buildJsonObject {
+                        put("id", room.id)
+                    }
+                )
+            }
+
+
+            get("/api/front/v2/broadcasts/{roomId}") {
+                val room = call.parameters["roomId"]?.toLongOrNull()?.let { rooms[it] }
+                // val room = roomsByName[name]
                 if (room == null) {
                     call.respondJson(
                         buildJsonObject { put("description", "model not found") },
