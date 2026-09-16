@@ -54,7 +54,6 @@ import io.ktor.http.contentType
 import io.ktor.http.formUrlEncode
 import io.ktor.http.Parameters
 import io.ktor.server.testing.ApplicationTestBuilder
-import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -577,7 +576,7 @@ class TestHttpClientProvider : HttpClientProvider, AutoCloseable {
 internal fun withFixture(
     tuning: RuntimeTuning = XhrecIntegrationFixture.testTuning(),
     block: suspend (XhrecIntegrationFixture) -> Unit
-) = testApplication {
+) = testApplicationWithBudget {
     XhrecIntegrationFixture(this, tuning = tuning).use { fx ->
         fx.start()
         fx.installRoutes()
