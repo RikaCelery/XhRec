@@ -1,6 +1,7 @@
 package github.rikacelery.v3.integration
 
 import github.rikacelery.v3.components.SessionState
+import github.rikacelery.v3.events.DownloadStarted
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.RecordingStarted
@@ -75,6 +76,65 @@ class StatusFlowIntegrationTest {
                     "no segment may be fetched while status=$status"
                 )
             }
+        }
+    }
+
+    /**
+     * A room that becomes recordable again while the previous episode is still tearing down.
+     *
+     * This is the window the old `rotateStatuses` rotation fell into by accident: `Stopping`
+     * recorded the new status and then went back to `Armed`, where nothing starts a recording on
+     * its own. The platform does not repeat itself — it already sent the frame — and
+     * `RoomStatusChanged` is published only when the status really changes, so the room sat there
+     * looking public with nothing being recorded until the next show moved it.
+     *
+     * The segment bodies are held so the cut has to wait for one in flight. That is what makes the
+     * teardown window observable in `Stopping` instead of a few milliseconds wide, and the status
+     * change is then delivered inside it.
+     */
+    @Test
+    fun `a room that goes public again during teardown records the new show`() = testApplicationWithBudget {
+        XhrecIntegrationFixture(this).use { fx ->
+            fx.start()
+            fx.installRoutes()
+            fx.ready()
+            fx.mock.addRoom(1001, "model", status = "off")
+
+            fx.get("/add?name=model").expectOk("Room added: model")
+            fx.get("/activate?id=1001").expectOk("Activated")
+            fx.mock.startSegments(1001, 40.milliseconds)
+            fx.awaitRoomSubscribed(1001)
+            fx.mock.setStreamStatus(1001, "distributing")
+            fx.mock.setRoomStatus(1001, "public")
+            fx.awaitEventCount<RecordingStarted>(1, 30.seconds) { it.roomId == 1001L }
+
+            // A media segment has to be flowing before anything below means a held download.
+            fx.awaitEvent<SegmentDownloaded>(15.seconds) { it.roomId == 1001L && it.idx > 0 }
+            val newest = fx.mock.room(1001).availableSegments
+            // Well under the attempt timeout, so the held fetch *succeeds* and the cut settles as
+            // soon as it lands; 700 ms is still seventy times the 10 ms the poll below races, and
+            // a loaded machine only makes the window easier to catch.
+            (newest..newest + 8).forEach { fx.mock.delaySegment(1001, it, 700.milliseconds) }
+
+            // The cut waits for whatever is already in flight, so start one of the held fetches
+            // first: that is what makes the teardown window wide enough to land a change in,
+            // instead of hoping a poll catches a few milliseconds or nothing at all.
+            val fetchesBefore = fx.events.filterIsInstance<DownloadStarted>().count { it.roomId == 1001L }
+            fx.await(10.seconds, "a held segment to be in flight") {
+                Unit.takeIf {
+                    fx.events.filterIsInstance<DownloadStarted>().count { e -> e.roomId == 1001L } > fetchesBefore
+                }
+            }
+
+            fx.mock.setRoomStatus(1001, "off")
+            fx.await(10.seconds, "the scheduler to be stopping") {
+                Unit.takeIf { fx.schedulerStates()["1001"] == "Stopping" }
+            }
+
+            // The show resumes mid-teardown. Nothing else will remind the scheduler.
+            fx.mock.setRoomStatus(1001, "public")
+
+            fx.awaitEventCount<RecordingStarted>(2, 30.seconds) { it.roomId == 1001L }
         }
     }
 
