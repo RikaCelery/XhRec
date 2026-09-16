@@ -3,6 +3,7 @@
 [简体中文](README_zh-CN.md)
 
 Kotlin application for automatic live stream recording, with a browser extension for one-click control.
+The repository ships two components: **XhRec**, the recorder, and **[XhCut](#xhcut--the-cutter)**, a remote rough-cut tool for the recordings it produces.
 
 ## Quick Start
 
@@ -12,6 +13,33 @@ java -jar build/libs/XhRec-all.jar
 ```
 
 Then open `https://localhost:8090` for the dashboard.
+
+## XhCut — the cutter
+
+XhCut is a remote rough-cut tool for the recordings XhRec produces. `./gradlew build` builds both
+components, and every release attaches `XhCut-all.jar` next to `XhRec-all.jar`.
+
+It is built for six-hour originals on a slow link: file access and **every ffmpeg computation happen
+on the recording host**, and the browser only pulls the low-bitrate preview, so the source never has
+to be copied to the machine you edit from.
+
+- Timeline with auxiliary lanes: parses XhRec's `.event` sidecar and maps platform events
+  (toys / gifts / level-ups …) onto media time
+- Lossless cuts: always `-c copy`, with `-ss` aligned to a keyframe first
+- On-demand HLS preview that follows the scrubber; an export queue and `.llc` JSON5 project files
+- Level and spectrogram images for finding material: the audio is normalized, so a quietly recorded
+  show is not a flat line, and the spectrogram uses a log frequency axis
+- Media library: Shift range selection, deleting material you do not want, a cache size cap, and an
+  optional "delete the source after export"
+
+```shell
+java -jar cutter/build/libs/cutter-all.jar -m /media/nas/out -o /media/nas/cuts -c /mnt/xhcut_cache
+# a release ships the same jar as XhCut-all.jar; then open http://<host>:8092/
+```
+
+The three locations are required, and the CLI says so instead of falling back to a path inside its
+own image; the container supplies them as `XHCUT_MEDIA` / `XHCUT_OUT` / `XHCUT_CACHE`. Deployment,
+keyboard shortcuts and the design notes behind the timeline are in [`cutter/README.md`](cutter/README.md).
 
 ## CLI Options
 
