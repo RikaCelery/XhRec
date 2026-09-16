@@ -3,8 +3,8 @@ package github.rikacelery.v3.integration
 import github.rikacelery.v3.components.SessionState
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
+import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.SegmentDownloaded
-import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import org.junit.jupiter.params.ParameterizedTest
@@ -40,7 +40,7 @@ class StatusFlowIntegrationTest {
         autoPayTicket: Boolean,
         autoPaySpy: Boolean,
         expectRecording: Boolean
-    ) = testApplication {
+    ) = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -74,7 +74,7 @@ class StatusFlowIntegrationTest {
     }
 
     @Test
-    fun `recorded file equals mock init and segment bytes`() = testApplication {
+    fun `recorded file equals mock init and segment bytes`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -105,7 +105,7 @@ class StatusFlowIntegrationTest {
     }
 
     @Test
-    fun `out-of-order downloads are still written in order`() = testApplication {
+    fun `out-of-order downloads are still written in order`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -139,7 +139,7 @@ class StatusFlowIntegrationTest {
     }
 
     @Test
-    fun `finished stream status stops the recording`() = testApplication {
+    fun `finished stream status stops the recording`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -155,7 +155,7 @@ class StatusFlowIntegrationTest {
     }
 
     @Test
-    fun `automatic status rotation produces one file per episode`() = testApplication {
+    fun `automatic status rotation produces one file per episode`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -167,21 +167,56 @@ class StatusFlowIntegrationTest {
             fx.mock.startSegments(1001, 40.milliseconds)
             fx.awaitRoomSubscribed(1001)
 
-            val rotation = fx.mock.rotateStatuses(1001, listOf("public", "off"), 900.milliseconds)
-            try {
-                fx.awaitSession(1001, SessionState.Recording, timeout = 20.seconds)
-                val files = fx.awaitEventCount<FileReady>(2, 30.seconds) { it.roomId == 1001L }
-                assertEquals(2, files.size, "each off phase must close one file")
-                assertTrue(files.all { it.reason == EndReason.StreamEnd }, files.map { it.reason }.toString())
-                assertTrue(files.all { it.file.length() > 0 })
-            } finally {
-                rotation.cancelAndJoin()
+            // Two episodes, each driven to completion before the next begins.
+            //
+            // A timed rotation (`rotateStatuses(..., 900.milliseconds)`) flips the status
+            // whether or not the previous episode has finished, and a "public" that lands
+            // mid-teardown is absorbed: no session starts from it, so the following "off"
+            // closes nothing and only one file is ever produced. On a loaded machine that is
+            // the common case rather than the rare one, which is why this test was the
+            // long-standing intermittent failure.
+            //
+            // Waiting for each step's effect costs nothing that matters — the waits below are
+            // a failure budget, not a stopwatch — and makes the sequence deterministic.
+            repeat(2) { episode ->
+                val segmentsBefore = fx.events.count { it is SegmentDownloaded && it.roomId == 1001L }
+                fx.mock.setRoomStatus(1001, "public")
+                // Count the episodes, do not sample the current state: `awaitSession(Recording)`
+                // returns immediately while the *previous* episode is still winding down, which
+                // makes the "off" land in the teardown window below.
+                fx.awaitEventCount<RecordingStarted>(episode + 1, 60.seconds) { it.roomId == 1001L }
+                // Cut the episode only once it has content. A session cut before its first
+                // segment closes a zero-byte file, and the writer deletes those instead of
+                // publishing `FileReady` — so the "off" phase closes no file at all, and the
+                // episode looks lost although the recorder did exactly the right thing. Waiting
+                // for one downloaded segment removes that race without weakening the assertion
+                // below: the segment's bytes are ordered into the writer before the cut's
+                // `StreamEnd`, so the file cannot be empty by the time it is closed.
+                fx.await(60.seconds, "episode $episode to download a first segment") {
+                    Unit.takeIf {
+                        fx.events.count { e -> e is SegmentDownloaded && e.roomId == 1001L } > segmentsBefore
+                    }
+                }
+                fx.mock.setRoomStatus(1001, "off")
+                fx.awaitEventCount<FileReady>(episode + 1, 60.seconds) { it.roomId == 1001L }
+                // Let the scheduler finish its teardown before the next episode is requested.
+                // Asking for "public" while it is still `Stopping` leans on the queued follow-up
+                // landing after `BackToArmed`; when those two order the other way the request is
+                // consumed by the teardown and the next episode never starts.
+                fx.await(60.seconds, "the scheduler to settle after episode $episode") {
+                    Unit.takeIf { fx.schedulerStates()["1001"] == "Armed" }
+                }
             }
+
+            val files = fx.events.filterIsInstance<FileReady>().filter { it.roomId == 1001L }
+            assertEquals(2, files.size, "each off phase must close one file")
+            assertTrue(files.all { it.reason == EndReason.StreamEnd }, files.map { it.reason }.toString())
+            assertTrue(files.all { it.file.length() > 0 })
         }
     }
 
     @Test
-    fun `two rooms record isolated bytes`() = testApplication {
+    fun `two rooms record isolated bytes`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
