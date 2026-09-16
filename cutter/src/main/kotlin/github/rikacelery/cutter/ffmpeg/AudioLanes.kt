@@ -70,7 +70,7 @@ class AudioLanes(
             val command = listOf(
                 config.ffmpeg, "-hide_banner", "-v", "error",
                 "-i", source.absolutePath,
-                "-filter_complex", "[0:a]aresample=$RESAMPLE,$WAVE_FILTER_PREFIX${width}x$OVERVIEW_HEIGHT$WAVE_FILTER_SUFFIX",
+                "-filter_complex", "[0:a]aresample=$RESAMPLE,$NORMALIZE,$WAVE_FILTER_PREFIX${width}x$OVERVIEW_HEIGHT$WAVE_FILTER_SUFFIX",
                 "-frames:v", "1",
                 "-f", "image2",
                 "-y", target.absolutePath
@@ -100,7 +100,7 @@ class AudioLanes(
                 "-ss", num(from),
                 "-t", num(duration),
                 "-i", source.absolutePath,
-                "-filter_complex", "[0:a]aresample=$RESAMPLE,$WAVE_FILTER_PREFIX${w}x$WINDOW_HEIGHT$WAVE_FILTER_SUFFIX",
+                "-filter_complex", "[0:a]aresample=$RESAMPLE,$NORMALIZE,$WAVE_FILTER_PREFIX${w}x$WINDOW_HEIGHT$WAVE_FILTER_SUFFIX",
                 "-frames:v", "1",
                 "-f", "image2",
                 "-y", target.absolutePath
@@ -131,7 +131,7 @@ class AudioLanes(
                 "-ss", num(from),
                 "-t", num(duration),
                 "-i", source.absolutePath,
-                "-filter_complex", "[0:a]aresample=$RESAMPLE,showspectrumpic=s=${w}x$h:legend=0:scale=log",
+                "-filter_complex", "[0:a]aresample=$RESAMPLE,$NORMALIZE,showspectrumpic=s=${w}x$h:legend=0:scale=log:fscale=log",
                 "-frames:v", "1",
                 "-f", "image2",
                 "-y", target.absolutePath
@@ -190,6 +190,16 @@ class AudioLanes(
          * level image lands at the decode floor instead of above it.
          */
         const val RESAMPLE = 10000
+
+        /**
+         * Dynamic range normalization, so a quiet recording is visible at all.
+         *
+         * Without it a show recorded 20-30 dB down drew a flat line: `showwavespic` maps sample
+         * values straight to pixels, so the level image was one faint band no matter how much
+         * signal the audio carried. The same normalization is applied to the spectrogram, where a
+         * quiet input otherwise renders as an almost black picture.
+         */
+        const val NORMALIZE = "dynaudnorm"
 
         const val WAVE_FILTER_PREFIX = "showwavespic=s="
         const val WAVE_FILTER_SUFFIX =

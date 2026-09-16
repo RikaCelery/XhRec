@@ -74,8 +74,10 @@ data class CutConfig(
                 .addOption("c", "cache", true, "Cache directory")
                 .addOption("m", "media", true, "Media root (repeatable, comma separated)")
                 .addOption("tz", "timezone", true, "Timezone for file-name stamps (default $DEFAULT_ZONE)")
-                .addOption("ffmpeg", true, "ffmpeg binary")
-                .addOption("ffprobe", true, "ffprobe binary")
+                // Short and long form are the same word: the README documents `--ffmpeg` and
+                // `--ffprobe`, and a single-name `addOption` only ever registered `-ffmpeg`.
+                .addOption("ffmpeg", "ffmpeg", true, "ffmpeg binary")
+                .addOption("ffprobe", "ffprobe", true, "ffprobe binary")
                 .addOption("seg", "preview-segment", true, "Preview segment seconds")
                 .addOption("jobs", "preview-concurrency", true, "Concurrent preview transcodes")
                 .addOption("cache-limit-gb", true, "Cache size cap in GB")
