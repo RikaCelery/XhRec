@@ -514,6 +514,12 @@ class XhrecIntegrationFixture(
             webSocketReconnectInitial = 50.milliseconds,
             webSocketReconnectMax = 200.milliseconds,
             preconfigRetryInterval = 100.milliseconds,
+            // Both of these only gate when test-visible state lands (list.conf, a paid ticket's
+            // token); the production defaults of a second each are pure waiting inside a test.
+            configPersistDebounce = 20.milliseconds,
+            ticketTokenPollDelay = 20.milliseconds,
+            spyTokenPollDelay = 20.milliseconds,
+            spyTokenPollRetryDelay = 20.milliseconds,
             playlistPollInterval = playlistPollInterval,
             playlistFetchTimeout = 3.seconds,
             httpRestartDelay = 10.milliseconds,

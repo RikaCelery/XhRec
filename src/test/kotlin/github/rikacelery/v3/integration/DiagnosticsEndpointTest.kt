@@ -123,7 +123,9 @@ class DiagnosticsEndpointTest {
         // The window overlaps the resume mark on every poll of a healthy room. Counting that made
         // the metric grow forever without ever meaning anything, so it must stay at zero.
         fx.await(5.seconds, "the session to queue media segments") { baselineSet(fx) }
-        delay(600)
+        // The counter would already have moved on the next event; this only gives a wrong
+        // implementation a beat to do so.
+        delay(200)
 
         val skipped = Regex("""xhrec_segments_skipped_total\{roomId="1001"\} (\d+)""")
             .find(fx.get("/metrics").bodyAsText())?.groupValues?.get(1)?.toLong()

@@ -104,7 +104,8 @@ class DownloadIntegrityIntegrationTest {
 
             // init + segment 2 only; segment 1 is gone for good
             fx.awaitEventCount<SegmentDownloaded>(2, 20.seconds) { it.roomId == 1001L }
-            delay(500)
+            // A 404 is permanent, so the next segment would already have arrived by now.
+            delay(250)
             assertEquals(
                 2,
                 fx.events.filterIsInstance<SegmentDownloaded>().count { it.roomId == 1001L },

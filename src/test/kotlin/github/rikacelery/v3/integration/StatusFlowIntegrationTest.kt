@@ -4,6 +4,7 @@ import github.rikacelery.v3.components.SessionState
 import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.RecordingStarted
+import github.rikacelery.v3.events.RoomStatusChanged
 import github.rikacelery.v3.events.SegmentDownloaded
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -59,8 +60,12 @@ class StatusFlowIntegrationTest {
                 fx.awaitSession(1001, SessionState.Recording)
                 fx.awaitEvent<SegmentDownloaded>(15.seconds) { it.roomId == 1001L }
             } else {
-                // bounded negative: the room must stay quiet while the status is not recordable
-                delay(1500)
+                // Bounded negative, but bounded by what happened rather than by a stopwatch: wait
+                // for the status to have travelled the pipeline, give the scheduler a beat to act
+                // on it, then require that nothing was armed and nothing was fetched. The fixed
+                // 1.5 s sleep this replaces spent 7.5 s of the suite proving no more than this.
+                fx.awaitEvent<RoomStatusChanged>(10.seconds) { it.roomId == 1001L && it.newStatus == status }
+                delay(300)
                 assertTrue(
                     fx.sessions().none { it.roomId == 1001L && it.state == SessionState.Recording },
                     "room must not record while status=$status"

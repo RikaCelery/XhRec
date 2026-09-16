@@ -44,7 +44,10 @@ class PerformanceBaselineTest {
 
     @Test
     fun baseline_train_and_infer() {
-        val sizes = intArrayOf(500, 1000, 2000, 4000)
+        // The 4000-row case used to be in this curve; it dominated the class's runtime and the
+        // assertion below (trees were produced, inference stays above its floor) does not depend on
+        // it. The printed curve still shows the growth.
+        val sizes = intArrayOf(500, 1000, 2000)
         println()
         println("=== GBDT TRAIN BASELINE (regression, 40 trees, depth 4, minLeaf 6) ===")
         var lastModel: Gbdt.Model? = null
@@ -65,7 +68,9 @@ class PerformanceBaselineTest {
         assertTrue(g.predict(model, feature).isFinite(), "a prediction must be a finite number")
         repeat(1000) { g.predict(model, feature) }
 
-        val iters = 200_000
+        // Enough iterations for a throughput estimate with three orders of magnitude of headroom
+        // over the floor below; 200k just made the test slower.
+        val iters = 50_000
         val nanos = measureNanoTime {
             repeat(iters) { g.predict(model, feature) }
         }
