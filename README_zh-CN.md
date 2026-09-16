@@ -3,6 +3,7 @@
 [English](README.md)
 
 自动直播录制的 Kotlin 应用，配合浏览器扩展实现一键控制。
+本仓库包含两个组件：录制端 **XhRec**，以及剪辑它录制结果的远程粗剪工具 **[XhCut](#xhcut--剪辑端)**。
 
 ## 快速开始
 
@@ -12,6 +13,29 @@ java -jar build/libs/XhRec-all.jar
 ```
 
 打开 `https://localhost:8090` 进入控制台。
+
+## XhCut — 剪辑端
+
+XhCut 是专为剪辑 XhRec 录制结果而生的远程粗剪工具。`./gradlew build` 会一并构建两个组件，
+每次 release 都随 `XhRec-all.jar` 一起提供 `XhCut-all.jar`。
+
+它是为"低带宽剪 6 小时级原始录像"设计的：文件选取与**全部 ffmpeg 计算都在录制主机内完成**，
+浏览器只取低清预览，原始文件不必拷到你要剪辑的机器上。
+
+- 主时间轴 + 辅助车道：解析 XhRec 的 `.event`，把平台事件（玩具 / 礼物 / 等级…）映射到媒体时间
+- 无损剪切：永远 `-c copy`，并先把 `-ss` 对齐到关键帧
+- 按需 HLS 低清预览，拖动时画面即时跟随；导出队列 + `.llc` JSON5 项目读写
+- 电平图 / 频谱图辅助定位：音频做了归一化，录得轻的场次不再是平线；频谱图使用对数频率轴
+- 媒体库：Shift 区间多选、删除不想要的素材、缓存容量上限、可选"导出后删除源文件"
+
+```shell
+java -jar cutter/build/libs/cutter-all.jar -m /media/nas/out -o /media/nas/cuts -c /mnt/xhcut_cache
+# release 里同一个 jar 叫 XhCut-all.jar；然后打开 http://<主机>:8092/
+```
+
+三个位置必填，缺任一个直接报错退出（不再回退到镜像内的路径）；容器用
+`XHCUT_MEDIA` / `XHCUT_OUT` / `XHCUT_CACHE` 提供。部署方式、快捷键与时间轴背后的设计说明见
+[`cutter/README.md`](cutter/README.md)。
 
 ## CLI 选项
 
