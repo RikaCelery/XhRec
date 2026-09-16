@@ -209,9 +209,17 @@ class ApiClient(
 
     suspend fun roomFetchRoomId(roomName: String): JsonObject {
         val response = withHostFallback { host ->
-            withRetry(3) {
-                ensure2xx(host, apiClient.get(apiUrl(host, "api/front/users/user-ids/" + roomName )))
+            withRetry(
+                3,
+                stopIf = { it is ModelNotFoundException || is4xx(it) }
+            ) {
+                val res = apiClient.get(apiUrl(host, "api/front/users/user-ids/" + roomName))
+                if (res.status == HttpStatusCode.NotFound) {
+                    throw ModelNotFoundException("Model not found: $roomName")
+                }
+                ensure2xx(host, res)
             }
+
         }
         return Json.parseToJsonElement(response.bodyAsText()).jsonObject
     }
