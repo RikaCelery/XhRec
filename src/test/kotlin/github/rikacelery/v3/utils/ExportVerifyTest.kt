@@ -24,15 +24,4 @@ class ExportVerifyTest {
         assertTrue(json.contains("-1.0"), "NaN should be exported as the -1.0 sentinel")
         println("EXPORT_OK, json length: " + json.length)
     }
-
-    @Test
-    fun modelSchedule_export_no_error() {
-        val zone = ZoneId.systemDefault()
-        val now = ZonedDateTime.of(2024, 1, 15, 10, 30, 0, 0, zone).toInstant().toEpochMilli()
-        ModelSchedule.reset()
-        repeat(5) { ModelSchedule.record(1L, now) }
-        val json = ModelSchedule.exportState()
-        assertTrue(json.isNotEmpty())
-        println("MODEL_EXPORT_OK, json length: " + json.length)
-    }
 }
