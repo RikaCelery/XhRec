@@ -2,6 +2,7 @@ package github.rikacelery.v3.api
 
 import github.rikacelery.v3.data.User
 import github.rikacelery.v3.exceptions.DeletedException
+import github.rikacelery.v3.exceptions.ModelNotFoundException
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.utils.*
 import io.ktor.client.plugins.*
@@ -15,9 +16,9 @@ import org.slf4j.LoggerFactory
 private val RENAME_REGEX = Regex("Model has new name: newName=(.*)")
 
 /**
- * Parses a 404 response body of the broadcasts API. A missing/unknown description is a
- * generic failure; a rename/deleted description is a business result — both throw.
- * Returns Nothing so the caller can treat 404 as a terminal branch.
+ * Parses a 404 response body of the broadcasts API. Every branch is a business result and throws,
+ * so the caller can treat 404 as a terminal branch: a rename, a deletion, or a model that is not
+ * there. Only an unparseable body stays a generic failure.
  */
 internal fun throwBroadcast404(body: String): Nothing {
     val reason = runCatching { Json.Default.parseToJsonElement(body).String("description") }.getOrNull()
@@ -26,7 +27,7 @@ internal fun throwBroadcast404(body: String): Nothing {
         reason.matches(RENAME_REGEX) ->
             throw RenameException(RENAME_REGEX.find(reason)!!.groupValues[1])
         reason == "model already deleted" -> throw DeletedException()
-        else -> throw IllegalStateException("request api failed: " + reason)
+        else -> throw ModelNotFoundException(reason)
     }
 }
 
@@ -138,7 +139,10 @@ class ApiClient(
 
     suspend fun getRoomFromUrlOrSlug(path: String): Pair<Long, String> {
         val slug = path.substringAfterLast("/")
-        val j = withRetry(3, stopIf = { it is RenameException || it is DeletedException || is4xx(it) }) {
+        val j = withRetry(
+            3,
+            stopIf = { it is RenameException || it is DeletedException || it is ModelNotFoundException || is4xx(it) }
+        ) {
             roomFetchBroadcastInfo(slug).jsonObject
         }
         val id = j.PathSingle("item.modelId").asLong()
@@ -295,8 +299,11 @@ class ApiClient(
      * "model deleted" are business exceptions (no retry / no host failover).
      */
     suspend fun roomFetchBroadcastInfo(roomName: String): JsonObject {
-        // Rename/Deleted are domain answers and must not fail over to another host.
-        val domainBusiness: (Throwable) -> Boolean = { it is RenameException || it is DeletedException }
+        // Rename/Deleted/NotFound are domain answers: the same request on another host answers the
+        // same way, so they must neither be retried nor fail over.
+        val domainBusiness: (Throwable) -> Boolean = {
+            it is RenameException || it is DeletedException || it is ModelNotFoundException
+        }
         // 4xx should not be retried against the same host; withHostFallback still
         // fails over to the next host after the inner retry loop stops.
         val noRetry: (Throwable) -> Boolean = { domainBusiness(it) || is4xx(it) }

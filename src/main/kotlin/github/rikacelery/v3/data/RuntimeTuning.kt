@@ -16,9 +16,28 @@ data class RuntimeTuning(
      * hint.
      */
     val roomStatusRefreshWindow: Duration = 2.seconds,
+    /**
+     * How long a `PersistConfig` waits before `list.conf` is rewritten. Every room add, arm, filter
+     * or quality change publishes one, so the debounce keeps a burst from writing the file once per
+     * change; the file itself is what the dashboard and `list conf` read back.
+     */
+    val configPersistDebounce: Duration = 1.seconds,
     val webSocketReconnectInitial: Duration = 1.seconds,
     val webSocketReconnectMax: Duration = 30.seconds,
     val preconfigRetryInterval: Duration = 15.seconds,
+    /**
+     * How long the group-show ticket path waits before asking the platform once more for the model
+     * token it just paid for. The purchase and the token assignment are not atomic on the platform
+     * side, so one refetch is needed; the wait is not a guess about latency.
+     */
+    val ticketTokenPollDelay: Duration = 1.seconds,
+    /**
+     * How long the paid-spy path waits before its first poll for the token it just paid for, and
+     * between the later ones. The platform assigns the token asynchronously after the purchase, so
+     * the first poll has to be given a moment; the later ones back off harder.
+     */
+    val spyTokenPollDelay: Duration = 500.milliseconds,
+    val spyTokenPollRetryDelay: Duration = 1500.milliseconds,
     /** Watchdog for the "is the selected variant playlist fetchable?" probe of a preconfig attempt. */
     val preconfigProbeTimeout: Duration = 5.seconds,
     val playlistPollInterval: Duration = 3.seconds,

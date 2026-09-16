@@ -115,7 +115,7 @@ class RoomComponent(
                 is PersistConfig -> {
                     saveDebounceJob?.cancel()
                     saveDebounceJob = scope.launch {
-                        delay(1.seconds)
+                        delay(runtimeTuning.configPersistDebounce)
                         saveListConf()
                     }
                 }

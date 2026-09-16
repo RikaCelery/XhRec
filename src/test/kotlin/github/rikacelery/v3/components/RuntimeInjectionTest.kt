@@ -1,5 +1,8 @@
 package github.rikacelery.v3.components
 
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.withTimeoutOrNull
+import github.rikacelery.v3.integration.TEST_BUDGET
 import github.rikacelery.v3.api.ApiClient
 import github.rikacelery.v3.core.DataChannel
 import github.rikacelery.v3.core.EventBus
@@ -35,14 +38,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
@@ -60,7 +61,7 @@ import kotlin.time.Duration.Companion.seconds
 class RuntimeInjectionTest {
 
     @Test
-    fun `room polling and websocket refresh use injected timing`() = runTest(UnconfinedTestDispatcher()) {
+    fun `room polling and websocket refresh use injected timing`() = runTest(UnconfinedTestDispatcher(), timeout = TEST_BUDGET) {
         val requests = CopyOnWriteArrayList<String>()
         val requestEvents = Channel<String>(Channel.UNLIMITED)
         val client = HttpClient(MockEngine { request ->
@@ -117,7 +118,7 @@ class RuntimeInjectionTest {
     }
 
     @Test
-    fun `live events use injected websocket client url and reconnect timing`() = runTest {
+    fun `live events use injected websocket client url and reconnect timing`() = runTest(timeout = TEST_BUDGET) {
         val client = HttpClient(MockEngine {
             respond("unavailable", HttpStatusCode.ServiceUnavailable)
         })
@@ -263,7 +264,7 @@ class RuntimeInjectionTest {
     }
 
     @Test
-    fun `session uses injected playlist client poll interval and fetch timeout`() = runTest(UnconfinedTestDispatcher()) {
+    fun `session uses injected playlist client poll interval and fetch timeout`() = runTest(UnconfinedTestDispatcher(), timeout = TEST_BUDGET) {
         val requests = CopyOnWriteArrayList<String>()
         val requestEvents = Channel<String>(Channel.UNLIMITED)
         val client = HttpClient(MockEngine { request ->
@@ -387,17 +388,32 @@ class RuntimeInjectionTest {
         }
     }
 
+    // Real time on purpose, for the same reason as the failover test above. The race delay, the
+    // attempt window and the stall watchdog are wall-clock durations, while MockEngine answers on
+    // its own dispatcher: under the virtual clock the guard below could burn its whole timeout
+    // before the download had been handed a single response, and the failure said only "no
+    // StreamData" without showing the download was still perfectly healthy (observed once:
+    // direct=13, proxy=12, every proxy answering, nothing yet delivered).
     @Test
-    fun `downloader uses injected direct proxy and probe clients with short race timing`() = runTest {
+    fun `downloader uses injected direct proxy and probe clients with short race timing`() = runBlocking {
         val directRequests = CopyOnWriteArrayList<Pair<HttpMethod, String>>()
         val proxyRequests = CopyOnWriteArrayList<String>()
         // The direct path is held open by a latch rather than a 20ms sleep: the race must be decided
-        // by "direct is still busy", not by whether a real delay outran the 2ms race window, which
+        // by "direct is still busy", not by whether a real delay outran the race window, which
         // flipped under CPU load.
+        //
+        // The latch is bounded. Unbounded, it is a trap: under load the direct path can be the one
+        // that completes first, and then this handler parks on the gate forever — the test then
+        // waits on `dataChannel.receive()` for its whole budget and fails with "no StreamData",
+        // which says nothing about what happened. Releasing after a generous pause keeps the race
+        // honest (the direct attempt is still busy well past the race window) and lets a wrong
+        // outcome surface as itself.
         val directGate = CompletableDeferred<Unit>()
         val direct = HttpClient(MockEngine { request ->
             directRequests += request.method to request.url.toString()
-            if (request.method == HttpMethod.Get) directGate.await()
+            if (request.method == HttpMethod.Get) {
+                withTimeoutOrNull(DIRECT_GATE_HOLD) { directGate.await() }
+            }
             respond("direct")
         })
         val proxied = HttpClient(MockEngine { request ->
@@ -409,27 +425,39 @@ class RuntimeInjectionTest {
         val dataChannel = DataChannel()
         val oldCdnHosts = CdnSelector.hosts
         CdnSelector.updateHosts(listOf("127.0.0.1", "127.0.0.2"))
+        val testScope = CoroutineScope(coroutineContext + SupervisorJob())
         val downloader = DownloaderComponent(
             dataChannel,
             eventBus = eventBus,
-            parentScope = backgroundScope,
+            parentScope = testScope,
             httpClientProvider = provider,
+            // The windows are deliberately wider than the behaviour needs. The race is decided
+            // by the gate above ("direct is still busy"), not by these numbers, so tightening
+            // them only buys flakiness: at 2ms/100ms/200ms a MockEngine request that is merely
+            // CPU-starved outran the whole segment deadline and the download produced nothing
+            // (observed: attempts=16, direct=16, proxy=15). Wide enough to be reliable, still
+            // far too narrow for the direct path to finish and win.
             runtimeTuning = RuntimeTuning(
-                downloaderRaceDelay = 2.milliseconds,
-                downloaderAttemptTimeout = 100.milliseconds,
-                downloaderDeadline = 200.milliseconds,
-                downloaderStallTimeout = 50.milliseconds,
-                downloaderRetryBackoff = 1.milliseconds
+                downloaderRaceDelay = 50.milliseconds,
+                downloaderAttemptTimeout = 2.seconds,
+                downloaderDeadline = 5.seconds,
+                downloaderStallTimeout = 1.seconds,
+                downloaderRetryBackoff = 10.milliseconds
             )
         )
 
         try {
             downloader.start()
-            val received = async { dataChannel.receive() }
             downloader.tell(DoDownload(Download(11, listOf(Segment("http://127.0.0.1/segment.mp4", 1)), 0, 99)))
-            advanceUntilIdle()
+            // Bounded: a segment that never arrives should fail here, naming what was awaited,
+            // rather than let the whole test hit its budget with no explanation.
+            val stream = withTimeoutOrNull(DIRECT_GATE_HOLD) { dataChannel.receive() } ?: error(
+                "no StreamData within $DIRECT_GATE_HOLD: direct=${directRequests.size}, proxy=${proxyRequests.size}, " +
+                    "directKeys=${provider.directCalls.map { it.key }.distinct()}, proxyKeys=${provider.proxiedCalls.map { it.key }.distinct()}, " +
+                    "proxyUrls=${proxyRequests.take(3)}"
+            )
 
-            val stream = assertIs<StreamData>(received.await())
+            assertIs<StreamData>(stream)
             assertEquals("proxy", stream.data.decodeToString())
             assertTrue(provider.directCalls.any { it.key.startsWith("dl_") })
             assertTrue(provider.directCalls.any { it.key.startsWith("probe_") })
@@ -438,9 +466,10 @@ class RuntimeInjectionTest {
         } finally {
             // Release the direct path before tearing down: the raced loser is normally cancelled,
             // but a MockEngine handler runs in the client's own scope and can outlive that cancel —
-            // leaving it parked on the gate makes runTest fail with UncompletedCoroutinesError.
+            // leaving it parked on the gate keeps the direct client from ever closing.
             directGate.complete(Unit)
             downloader.stop()
+            testScope.cancel()
             CdnSelector.updateHosts(oldCdnHosts)
             direct.close()
             proxied.close()
@@ -497,3 +526,6 @@ class RuntimeInjectionTest {
         val jsonHeaders = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
     }
 }
+
+/** How long the direct path stays "busy" while the proxy is meant to win the race. */
+private val DIRECT_GATE_HOLD = 30.seconds

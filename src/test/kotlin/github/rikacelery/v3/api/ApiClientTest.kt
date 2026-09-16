@@ -2,6 +2,7 @@ package github.rikacelery.v3.api
 
 import github.rikacelery.v3.data.User
 import github.rikacelery.v3.exceptions.DeletedException
+import github.rikacelery.v3.exceptions.ModelNotFoundException
 import github.rikacelery.v3.exceptions.RenameException
 import github.rikacelery.v3.utils.HttpClientProvider
 import io.ktor.client.HttpClient
@@ -185,9 +186,35 @@ class ApiClientTest {
     }
 
     @Test
-    fun `404 unknown description throws IllegalStateException`() {
-        assertFailsWith<IllegalStateException> {
-            throwBroadcast404("""{"description":"something unexpected"}""")
+    fun `404 unknown description is a permanent model-not-found answer`() {
+        val failure = assertFailsWith<ModelNotFoundException> {
+            throwBroadcast404("""{"description":"model not found"}""")
+        }
+        assertTrue(failure.message!!.contains("model not found"), failure.message!!)
+    }
+
+    /**
+     * The point of [ModelNotFoundException] is that nothing retries it. Both retry layers used to
+     * treat it as a transient failure, so adding a typo'd model made nine requests and waited eight
+     * seconds of backoff before the route could answer 500.
+     */
+    @Test
+    fun `an unknown model is asked for exactly once`() = runTest {
+        var calls = 0
+        val mockClient = HttpClient(MockEngine { request ->
+            calls++
+            respond(
+                content = """{"description":"model not found"}""",
+                status = HttpStatusCode.NotFound,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            )
+        })
+        try {
+            val client = ApiClient(listOf("platform.test"), singleClientProvider(mockClient)) { "http://$it" }
+            assertFailsWith<ModelNotFoundException> { client.getRoomFromUrlOrSlug("model") }
+            assertEquals(1, calls, "a permanent 404 must not be retried or failed over")
+        } finally {
+            mockClient.close()
         }
     }
 }

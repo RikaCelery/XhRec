@@ -145,4 +145,31 @@ class ModelScheduleTest {
         assertTrue(snapshot.hourDistribution[14] > 0)
         assertTrue(snapshot.topHours.isNotEmpty())
     }
+
+    @Test
+    fun a_single_recording_still_yields_its_hour() {
+        ModelSchedule.record(room1, monday10)
+
+        val snapshot = ModelSchedule.snapshot(room1)
+
+        assertNotNull(snapshot)
+        assertEquals(1, snapshot.totalCount)
+        assertEquals(10, snapshot.topHours.first().first, "one observation is enough to rank its hour")
+    }
+
+    /**
+     * Both helpers look at "now", so the value they return depends on when the suite runs; what
+     * they owe the API is a range, not a number. Kept here rather than in a second test class:
+     * the rest of that class only re-asserted what the tests above already cover.
+     */
+    @Test
+    fun prediction_helpers_stay_inside_their_documented_range() {
+        ModelSchedule.record(room1, monday10)
+        ModelSchedule.record(room1, monday14)
+
+        val probability = assertNotNull(ModelSchedule.predictLiveSoon(room1, lookaheadHours = 2))
+        assertTrue(probability in 0.0..1.0, "a probability must stay in 0..1, got $probability")
+        val hour = assertNotNull(ModelSchedule.getNextPredictedHour(room1))
+        assertTrue(hour in 0..23, "an hour must stay in 0..23, got $hour")
+    }
 }

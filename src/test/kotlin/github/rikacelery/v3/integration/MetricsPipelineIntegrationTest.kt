@@ -30,14 +30,21 @@ class MetricsPipelineIntegrationTest {
         assertTrue(refreshed.latencyMs >= 0, "the fetch latency is measured: $refreshed")
         assertTrue(refreshed.maxSegmentId > 0, "the newest advertised id, not the init placeholder: $refreshed")
 
+        // The gauges are fed by the metrics actor, so they land a turn after the event carrying
+        // the values. Wait for the gauge to reach the id this poll advertised rather than
+        // scraping once and reading whatever the actor happened to have processed by then —
+        // which is the whole reason this assertion used to fail in a loaded full-suite run.
+        val advertised = refreshed.maxSegmentId.toLong()
+        val currentId = fx.await(10.seconds, "the segment-id gauge to carry $advertised") {
+            segmentIdGauge(fx)?.takeIf { it == advertised }
+        }
+        assertEquals(advertised, currentId, "the gauge must carry the advertised id")
+
         val metrics = fx.get("/metrics").bodyAsText()
         assertTrue(
             Regex("""xhrec_refresh_latency_ms\{roomId="1001"\} [\d.]+""").containsMatchIn(metrics),
             "the refresh gauge must be exported for a recording room"
         )
-        val currentId = Regex("""xhrec_segment_id_current\{roomId="1001"\} (\d+)""")
-            .find(metrics)?.groupValues?.get(1)?.toLong()
-        assertTrue((currentId ?: 0) > 0, "the current-segment gauge must carry the advertised id, got $currentId")
     }
 
     @Test
@@ -55,6 +62,10 @@ class MetricsPipelineIntegrationTest {
     }
 
     /** Reads `xhrec_recording` for room 1001, or null when the room is not exported yet. */
+    private suspend fun segmentIdGauge(fx: XhrecIntegrationFixture): Long? =
+        Regex("""xhrec_segment_id_current\{roomId="1001"\} (\d+)""")
+            .find(fx.get("/metrics").bodyAsText())?.groupValues?.get(1)?.toLong()
+
     private suspend fun recordingGauge(fx: XhrecIntegrationFixture): Long? =
         Regex("""xhrec_recording\{roomId="1001"\} (\d+)""")
             .find(fx.get("/metrics").bodyAsText())?.groupValues?.get(1)?.toLong()

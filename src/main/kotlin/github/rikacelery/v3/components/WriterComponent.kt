@@ -42,17 +42,56 @@ data class ActiveFile(
         private val log = LoggerFactory.getLogger(ActiveFile::class.java)
     }
 
+    /**
+     * Serialises writes against the close, the one race this class has.
+     *
+     * Media bytes are written by the data-channel loop, but platform frames are persisted from
+     * the actor mailbox, so a frame can land while that same loop is closing the file for a cut.
+     * Without the lock the loser hit `IOException: Stream Closed`, which the writer reported as
+     * `WriterFatal` — and the scheduler reacts to that by dropping the room's entry, so a benign
+     * frame racing a cut disarmed the room and it never recorded again. Losing that race now
+     * drops the frame: the sidecar it belonged to is already gone.
+     */
+    private val streamLock = Any()
+
+    @Volatile
+    private var closed = false
+
+    /** Appends media bytes; returns false once the file has been closed. */
+    fun write(bytes: ByteArray): Boolean = synchronized(streamLock) {
+        if (closed) return false
+        fos.write(bytes)
+        bytesWritten += bytes.size
+        true
+    }
+
+    /** Appends one finished sidecar line; returns false once the file has been closed. */
+    fun writeEvent(line: String): Boolean = synchronized(streamLock) {
+        if (closed) return false
+        eventFos.write(line.toByteArray())
+        true
+    }
+
+    /** Closes both streams exactly once. An in-flight write either lands or is skipped. */
+    fun closeStreams() {
+        synchronized(streamLock) {
+            if (closed) return
+            closed = true
+            try {
+                fos.close()
+            } catch (e: Exception) {
+                log.error("roomId=$roomId failed to close fos: ${e.message}", e)
+            }
+            try {
+                eventFos.close()
+            } catch (e: Exception) {
+                log.error("roomId=$roomId failed to close eventFos: ${e.message}", e)
+            }
+        }
+    }
+
     fun dispose() {
-        try {
-            fos.close()
-        } catch (e: Exception) {
-            log.error("roomId=$roomId failed to close fos: ${e.message}", e)
-        }
-        try {
-            eventFos.close()
-        } catch (e: Exception) {
-            log.error("roomId=$roomId failed to close eventFos: ${e.message}", e)
-        }
+        closeStreams()
         file.delete()
         eventFile.delete()
     }
@@ -116,10 +155,13 @@ class WriterComponent(
             put("type", event.type)
             put("recordedAt", Instant.now().toString())
             put("data", event.body)
-        }.toString()
+        }.toString() + "\n"
         try {
-            withContext(Dispatchers.IO) {
-                active.eventFos.write((line + "\n").toByteArray())
+            val written = withContext(Dispatchers.IO) { active.writeEvent(line) }
+            if (!written) {
+                // The cut that closed this sidecar won the race; the frame has nowhere to go and
+                // dropping it is the correct outcome, not a component failure. See [ActiveFile].
+                logger.trace("roomId=${event.roomId} event arrived after the sidecar was closed")
             }
         } catch (e: Exception) {
             logger.error("roomId=${event.roomId} failed to write event: ${e.message}", e)
@@ -164,10 +206,13 @@ class WriterComponent(
             var data = msg.data
             hooks.forEach { data = it.beforeWrite(msg.roomId, data) }
             logger.trace("Receive {} {}", msg.roomId, msg.meta.url)
-            withContext(Dispatchers.IO) {
-                active.fos.write(data)
+            val written = withContext(Dispatchers.IO) { active.write(data) }
+            if (!written) {
+                // The bytes belong to a cut that has already closed this file. The data channel is
+                // ordered, so this should not happen; dropping them beats reporting a component
+                // failure that would disarm the room.
+                logger.warn("roomId={} {} bytes arrived after the file was closed", msg.roomId, data.size)
             }
-            active.bytesWritten += data.size
         } catch (e: Exception) {
             logger.error("roomId=${msg.roomId} failed to write data: ${e.message}", e)
             eventBus.publish(WriterFatal(msg.roomId, e.message ?: "Unknown error"))
@@ -188,8 +233,9 @@ class WriterComponent(
                     active.dispose()
                     return@withContext
                 }
-                active.fos.close()
-                active.eventFos.close()
+                // Closes under the same lock the writes take, so a frame that is being persisted
+                // right now either lands in the sidecar or is dropped — never "Stream Closed".
+                active.closeStreams()
 
                 val endTime = Instant.now()
                 val durationMs = java.time.Duration.between(active.startTime, endTime).toMillis()

@@ -16,10 +16,13 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 import java.time.Instant
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -76,6 +79,42 @@ class WriterSmallFileTest {
             assertEquals(setOf(roomTwoFile), tmpDir.listFiles()?.toSet() ?: emptySet())
         } finally {
             writer.stop()
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    /**
+     * The invariant behind the writer's lock: a write that loses the race against the close is
+     * **refused**, not turned into an `IOException`. Reporting `WriterFatal` for it used to make
+     * the scheduler drop the room's entry, so a platform frame that happened to land next to a cut
+     * silently ended the room's recording life.
+     */
+    @Test
+    fun `a write that arrives after the close is dropped instead of failing`() {
+        val tmpDir = Files.createTempDirectory("writer-late-write-").toFile()
+        val file = File(tmpDir, "room-init.mp4")
+        val eventFile = File(tmpDir, "room-init.mp4.event")
+        val active = ActiveFile(
+            file = file,
+            eventFile = eventFile,
+            fos = FileOutputStream(file),
+            eventFos = FileOutputStream(eventFile),
+            roomId = 1,
+            roomName = "room",
+            startTime = Instant.parse("2026-01-01T00:00:00Z"),
+            quality = "highest"
+        )
+
+        try {
+            assertTrue(active.writeEvent("{\"type\":\"first\"}\n"), "a frame written before the close must land")
+            active.closeStreams()
+
+            assertFalse(active.writeEvent("{\"type\":\"late\"}\n"), "a late frame must be dropped")
+            assertFalse(active.write(byteArrayOf(1, 2, 3)), "late media bytes must be dropped")
+            assertEquals(0L, active.bytesWritten, "dropped bytes must not be counted as written")
+            assertEquals("{\"type\":\"first\"}\n", eventFile.readText(), "the sidecar keeps only what landed")
+        } finally {
+            active.dispose()
             tmpDir.deleteRecursively()
         }
     }

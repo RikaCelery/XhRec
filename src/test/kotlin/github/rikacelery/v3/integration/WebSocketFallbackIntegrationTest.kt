@@ -8,7 +8,6 @@ import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.RoomStatusChanged
 import github.rikacelery.v3.events.SegmentDownloaded
-import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -25,7 +24,7 @@ import kotlin.time.Duration.Companion.seconds
 class WebSocketFallbackIntegrationTest {
 
     @Test
-    fun `websocket push starts recording while polling is idle`() = testApplication {
+    fun `websocket push starts recording while polling is idle`() = testApplicationWithBudget {
         val tuning = XhrecIntegrationFixture.testTuning(roomPollInterval = 30.seconds)
         withFixture(tuning) { fx ->
             fx.ready()
@@ -46,7 +45,7 @@ class WebSocketFallbackIntegrationTest {
     }
 
     @Test
-    fun `nested model status and stream status frames drive the session`() = testApplication {
+    fun `nested model status and stream status frames drive the session`() = testApplicationWithBudget {
         val tuning = XhrecIntegrationFixture.testTuning(roomPollInterval = 30.seconds)
         withFixture(tuning) { fx ->
             fx.ready()
@@ -75,7 +74,7 @@ class WebSocketFallbackIntegrationTest {
     }
 
     @Test
-    fun `duplicate status frames are suppressed`() = testApplication {
+    fun `duplicate status frames are suppressed`() = testApplicationWithBudget {
         val tuning = XhrecIntegrationFixture.testTuning(roomPollInterval = 30.seconds)
         withFixture(tuning) { fx ->
             fx.ready()
@@ -97,7 +96,7 @@ class WebSocketFallbackIntegrationTest {
     }
 
     @Test
-    fun `malformed frame does not block the next valid frame`() = testApplication {
+    fun `malformed frame does not block the next valid frame`() = testApplicationWithBudget {
         val tuning = XhrecIntegrationFixture.testTuning(roomPollInterval = 30.seconds)
         withFixture(tuning) { fx ->
             fx.ready()
@@ -122,7 +121,7 @@ class WebSocketFallbackIntegrationTest {
     }
 
     @Test
-    fun `subscription set expands while recording and shrinks when removed`() = testApplication {
+    fun `subscription set expands while recording and shrinks when removed`() = testApplicationWithBudget {
         withFixture { fx ->
             fx.ready()
             fx.mock.addRoom(1001, "model", status = "off")
@@ -151,7 +150,7 @@ class WebSocketFallbackIntegrationTest {
     }
 
     @Test
-    fun `all platform traffic stays on the loopback mock`() = testApplication {
+    fun `all platform traffic stays on the loopback mock`() = testApplicationWithBudget {
         withFixture { fx ->
             fx.ready()
             fx.startRecording()
@@ -169,7 +168,7 @@ class WebSocketFallbackIntegrationTest {
     }
 
     @Test
-    fun `rejected websocket falls back to http polling`() = testApplication {
+    fun `rejected websocket falls back to http polling`() = testApplicationWithBudget {
         val tuning = XhrecIntegrationFixture.testTuning(roomPollInterval = 300.milliseconds)
         withFixture(tuning) { fx ->
             fx.ready()
@@ -198,7 +197,7 @@ class WebSocketFallbackIntegrationTest {
     }
 
     @Test
-    fun `recovery resumes pushes after a reconnect catch-up`() = testApplication {
+    fun `recovery resumes pushes after a reconnect catch-up`() = testApplicationWithBudget {
         val tuning = XhrecIntegrationFixture.testTuning(roomPollInterval = 30.seconds)
         withFixture(tuning) { fx ->
             fx.ready()

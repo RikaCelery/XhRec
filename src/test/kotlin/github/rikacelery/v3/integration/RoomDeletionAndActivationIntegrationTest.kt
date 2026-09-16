@@ -5,7 +5,6 @@ import github.rikacelery.v3.events.EndReason
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.SegmentDownloaded
-import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -26,7 +25,7 @@ import kotlin.time.Duration.Companion.seconds
 class RoomDeletionAndActivationIntegrationTest {
 
     @Test
-    fun `platform deletion while recording stops the session and clears the dashboard`() = testApplication {
+    fun `platform deletion while recording stops the session and clears the dashboard`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -63,7 +62,7 @@ class RoomDeletionAndActivationIntegrationTest {
     }
 
     @Test
-    fun `re-adding a deleted room records a fresh file with no leftover bytes`() = testApplication {
+    fun `re-adding a deleted room records a fresh file with no leftover bytes`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -115,7 +114,7 @@ class RoomDeletionAndActivationIntegrationTest {
     }
 
     @Test
-    fun `activating an already public room records immediately`() = testApplication {
+    fun `activating an already public room records immediately`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -135,7 +134,7 @@ class RoomDeletionAndActivationIntegrationTest {
     }
 
     @Test
-    fun `restarting an already public room records again immediately`() = testApplication {
+    fun `restarting an already public room records again immediately`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()

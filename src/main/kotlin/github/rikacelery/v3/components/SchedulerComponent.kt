@@ -386,7 +386,7 @@ class SchedulerEntry(
         if (token == null) {
             // We just bought the ticket, or an earlier tick did: poll once more for the model token
             // without paying again.
-            delay(1.seconds)
+            delay(component.runtimeTuning.ticketTokenPollDelay)
             token = component.apiClient.roomFetchModelToken(roomId, u)
         }
         if (token == null) {
@@ -437,7 +437,7 @@ class SchedulerEntry(
         if (token == null) {
             component.apiClient.roomRequestSpyShow(roomId, paidUser)
             for (attempt in 1..4) {
-                delay(if (attempt == 1) 500L else 1500L)
+                delay(if (attempt == 1) component.runtimeTuning.spyTokenPollDelay else component.runtimeTuning.spyTokenPollRetryDelay)
                 val cam = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
                 token = cam.PathSingle("cam.modelToken").asString().ifBlank { null }
                 if (token != null) break

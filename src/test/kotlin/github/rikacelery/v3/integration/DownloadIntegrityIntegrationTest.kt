@@ -3,7 +3,6 @@ package github.rikacelery.v3.integration
 import github.rikacelery.v3.components.SessionState
 import github.rikacelery.v3.events.FileReady
 import github.rikacelery.v3.events.SegmentDownloaded
-import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContentEquals
@@ -20,7 +19,7 @@ import kotlin.time.Duration.Companion.seconds
 class DownloadIntegrityIntegrationTest {
 
     @Test
-    fun `sliding window overlaps are downloaded exactly once`() = testApplication {
+    fun `sliding window overlaps are downloaded exactly once`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -51,7 +50,7 @@ class DownloadIntegrityIntegrationTest {
     }
 
     @Test
-    fun `init change cuts the file and restarts with the new generation`() = testApplication {
+    fun `init change cuts the file and restarts with the new generation`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -87,7 +86,7 @@ class DownloadIntegrityIntegrationTest {
     }
 
     @Test
-    fun `404 is permanent and does not block later segments`() = testApplication {
+    fun `404 is permanent and does not block later segments`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -105,7 +104,8 @@ class DownloadIntegrityIntegrationTest {
 
             // init + segment 2 only; segment 1 is gone for good
             fx.awaitEventCount<SegmentDownloaded>(2, 20.seconds) { it.roomId == 1001L }
-            delay(500)
+            // A 404 is permanent, so the next segment would already have arrived by now.
+            delay(250)
             assertEquals(
                 2,
                 fx.events.filterIsInstance<SegmentDownloaded>().count { it.roomId == 1001L },
@@ -124,7 +124,7 @@ class DownloadIntegrityIntegrationTest {
     }
 
     @Test
-    fun `transient 500 is retried until the segment succeeds`() = testApplication {
+    fun `transient 500 is retried until the segment succeeds`() = testApplicationWithBudget {
         XhrecIntegrationFixture(this).use { fx ->
             fx.start()
             fx.installRoutes()
@@ -149,7 +149,7 @@ class DownloadIntegrityIntegrationTest {
     }
 
     @Test
-    fun `stalled attempt is abandoned and retried`() = testApplication {
+    fun `stalled attempt is abandoned and retried`() = testApplicationWithBudget {
         val tuning = XhrecIntegrationFixture.testTuning(
             downloaderRaceDelay = 10.seconds,
             downloaderStallTimeout = 400.milliseconds,

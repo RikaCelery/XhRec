@@ -1,5 +1,6 @@
 package github.rikacelery.v3.components
 
+import github.rikacelery.v3.integration.testApplicationWithBudget
 import github.rikacelery.v3.core.EventBus
 import github.rikacelery.v3.core.RequestBus
 import github.rikacelery.v3.data.Room
@@ -19,10 +20,10 @@ import github.rikacelery.v3.events.OkResponse
 import github.rikacelery.v3.events.RecordingHintsResponse
 import github.rikacelery.v3.events.RoomNameResponse
 import github.rikacelery.v3.hooks.EventHook
+import github.rikacelery.v3.utils.ModelSchedule
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
-import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +31,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Test
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
@@ -45,7 +48,7 @@ import kotlin.time.Duration.Companion.milliseconds
 class HttpRoutesTest {
 
     @Test
-    fun `active add issues AddRoom before ActivateRecordingCmd`() = testApplication {
+    fun `active add issues AddRoom before ActivateRecordingCmd`() = testApplicationWithBudget {
         val harness = RouteHarness()
         try {
             harness.eventBus.installHook(object : EventHook {
@@ -70,9 +73,12 @@ class HttpRoutesTest {
             application { harness.server.installApplication(this, stopEngine = {}) }
 
             val response = client.get("/add?name=model&active=true")
+            val body = response.bodyAsText()
 
-            assertEquals(HttpStatusCode.OK, response.status)
-            assertEquals("Room added: model", response.bodyAsText())
+            // The body carries the route's own message ("Error: Request … timed out after …"), so a
+            // non-200 says what failed instead of only that it did.
+            assertEquals(HttpStatusCode.OK, response.status, body)
+            assertEquals("Room added: model", body)
             assertEquals(
                 listOf(AddRoom::class, GetRooms::class, ActivateRecordingCmd::class),
                 harness.commands.map { it::class }
@@ -87,7 +93,7 @@ class HttpRoutesTest {
     }
 
     @Test
-    fun `restart deactivates then reactivates using injected delay`() = testApplication {
+    fun `restart deactivates then reactivates using injected delay`() = testApplicationWithBudget {
         val harness = RouteHarness(RuntimeTuning(httpRestartDelay = 1.milliseconds))
         try {
             harness.eventBus.installHook(object : EventHook {
@@ -112,7 +118,7 @@ class HttpRoutesTest {
     }
 
     @Test
-    fun `the dashboard page ships the room settings dialog`() = testApplication {
+    fun `the dashboard page ships the room settings dialog`() = testApplicationWithBudget {
         val harness = RouteHarness()
         try {
             application { harness.server.installApplication(this, stopEngine = {}) }
@@ -136,7 +142,7 @@ class HttpRoutesTest {
      * that is not running, and it must go back to Recording once preconfig is done.
      */
     @Test
-    fun `the dashboard never reports a preconfiguring room as recording`() = testApplication {
+    fun `the dashboard never reports a preconfiguring room as recording`() = testApplicationWithBudget {
         val harness = RouteHarness()
         val preconfiguring = AtomicReference(listOf(1001L))
         try {
@@ -181,10 +187,48 @@ class HttpRoutesTest {
         }
     }
 
+    /**
+     * The schedule endpoint's own JSON, not a copy of it built inside the test.
+     *
+     * It replaces a test that rebuilt this response shape by hand and then asserted on its own
+     * `buildJsonObject` output, which could only fail if the JSON builder itself broke.
+     */
+    @Test
+    fun `the schedule endpoint reports the hours the room was seen live`() = testApplicationWithBudget {
+        val harness = RouteHarness()
+        try {
+            application { harness.server.installApplication(this, stopEngine = {}) }
+            ModelSchedule.reset()
+            val monday10 = ZonedDateTime.of(2024, 1, 15, 10, 0, 0, 0, ZoneId.systemDefault())
+                .toInstant().toEpochMilli()
+            val monday14 = ZonedDateTime.of(2024, 1, 15, 14, 0, 0, 0, ZoneId.systemDefault())
+                .toInstant().toEpochMilli()
+            repeat(3) { ModelSchedule.record(1001L, monday10) }
+            ModelSchedule.record(1001L, monday14)
+
+            val response = client.get("/model/schedule?id=1001")
+            val body = response.bodyAsText()
+            assertEquals(HttpStatusCode.OK, response.status, body)
+            val json = Json.parseToJsonElement(body).jsonObject
+
+            assertEquals(1001L, json["roomId"]!!.jsonPrimitive.long)
+            assertEquals(4, json["totalRecordings"]!!.jsonPrimitive.int)
+            assertEquals(24, json["hourDistribution"]!!.jsonArray.size)
+            // hour 10 was seen three times of four, so it must lead
+            assertEquals(10, json["topHours"]!!.jsonArray.first().jsonObject["hour"]!!.jsonPrimitive.int)
+        } finally {
+            ModelSchedule.reset()
+            harness.close()
+        }
+    }
+
     private class RouteHarness(runtimeTuning: RuntimeTuning = RuntimeTuning()) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val eventBus = EventBus()
-        val requestBus = RequestBus(eventBus, scope)
+        // The 5 s default is a production choice about a real deployment; these tests assert route
+        // wiring and command order against an in-process fake, and on a loaded machine a reply that
+        // normally takes microseconds can miss that window — which surfaced as an unrelated 500.
+        val requestBus = RequestBus(eventBus, scope, defaultTimeoutMs = 30_000)
         val commands = CopyOnWriteArrayList<Any>()
         val room = Room(
             id = 1001,
