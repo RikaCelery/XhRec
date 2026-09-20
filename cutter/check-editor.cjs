@@ -35,7 +35,11 @@ const base = process.env.XHCUT_TEST_URL || 'http://localhost:18092';
         const close = (actual, expected) => assert(Math.abs(actual - expected) < 0.05, `${actual} != ${expected}`);
 
         await page.waitForFunction(() => [...document.querySelectorAll('.thumbnail img')].filter(i => i.complete && i.naturalWidth).length >= 2);
-        assert(await page.locator('.thumbnail').count() <= 32);
+        // The lane is a pyramid now: it draws every rung of the ladder that has frames for
+        // the visible window, so the bound is the frame budget rather than the old
+        // one-level cell count.
+        assert(await page.locator('.thumbnail').count() <= 1200);
+        assert(await page.evaluate(() => new Set(editor.thumbnailCells.map(c => c.level)).size) >= 1);
         console.log('PASS visible timeline thumbnails');
 
         // Keep the mouse down: video fragments and blue cache bars must update now.

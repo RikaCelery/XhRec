@@ -361,7 +361,11 @@ class CutServer(
                     return@get
                 }
                 val width = (call.request.queryParameters["w"]?.toIntOrNull() ?: 320).coerceIn(64, 1920)
-                val bytes = previews.frame(entry.first, entry.second, at, width)
+                // `p=1` marks the hover preview: it shares the frame extraction lanes but
+                // not the queue the timeline's background sweep is already filling. See
+                // PreviewServer.frame for why that lane exists.
+                val priority = call.request.queryParameters["p"] == "1"
+                val bytes = previews.frame(entry.first, entry.second, at, width, priority)
                 if (bytes == null) {
                     call.respond(HttpStatusCode.InternalServerError, ErrorDto("frame unavailable"))
                     return@get
@@ -371,6 +375,36 @@ class CutServer(
                 // this covers reloads and flips between recordings.
                 call.response.header(HttpHeaders.CacheControl, "public, max-age=86400, immutable")
                 call.respondBytes(bytes, ContentType.Image.JPEG)
+            }
+
+            /**
+             * The timestamps one level of the timeline's frame pyramid covers.
+             *
+             * The client subdivides the timeline by halving, and it needs a whole
+             * visible span at a coarse step before it can usefully refine any part of
+             * it. Asking for that span one `/frame` at a time would work, but the
+             * browser opens only a handful of connections per origin, so the coarse
+             * pass would crawl behind the client's own throttling. This route lets the
+             * server sweep a level at its own concurrency: it answers with the grid it
+             * used, then keeps producing those frames, so by the time the client asks
+             * `/frame` for the ones it wants to show they are cache hits.
+             */
+            get("/api/media/{id}/frames") {
+                val entry = resolved(call.parameters["id"].orEmpty()) ?: return@get call.respondNotFound()
+                val from = call.request.queryParameters["t0"]?.toDoubleOrNull() ?: 0.0
+                val to = call.request.queryParameters["t1"]?.toDoubleOrNull() ?: 0.0
+                val step = call.request.queryParameters["step"]?.toDoubleOrNull()
+                if (step == null || step <= 0 || to <= from) {
+                    call.respond(HttpStatusCode.BadRequest, ErrorDto("bad t0/t1/step"))
+                    return@get
+                }
+                val width = (call.request.queryParameters["w"]?.toIntOrNull() ?: 160).coerceIn(64, 1920)
+                val grid = previews.frameGrid(from, to, step)
+                call.respond(FrameStripDto(width, previews.snapFrameTime(step), grid))
+                // Deliberately after the response, and in the server's scope rather than
+                // the call's: the client hangs up as soon as it has the grid, and that
+                // must not cancel the sweep it is about to load images from.
+                scope.launch { previews.prewarm(entry.first, entry.second, grid, width) }
             }
 
             /**

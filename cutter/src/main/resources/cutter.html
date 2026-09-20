@@ -70,9 +70,24 @@
         .lane-resize { position: absolute; bottom: 0; left: 0; right: 0; height: 5px; cursor: row-resize;
                        z-index: 35; touch-action: none; border-bottom: 1px solid #334155; }
         .lane-resize:hover { background: #0284c7; }
+        /* A frame fills its cell in both directions, whatever height the lane is dragged
+           to: `cover` scales it until neither axis can show the cell's background, and the
+           default centre crop decides what is dropped. No per-cell arithmetic is involved
+           — the image simply *is* the cell's box — and the other half of the contract is
+           `thumbFrameWidth`, which keeps the source wide enough that `cover` never has to
+           upscale. */
         .thumbnail { position: absolute; top: 0; bottom: 5px; border-right: 1px solid #334155; overflow: hidden; background: #17202b; }
-        .thumbnail img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
-        .thumbnail span { position: absolute; bottom: 0; left: 0; padding: 0 3px; background: #000a; font-size: 10px; }
+        .thumbnail img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        .thumbnail span { position: absolute; bottom: 0; left: 0; padding: 0 3px; background: #000a; font-size: 10px; z-index: 1; }
+        /* Hover preview: a big frame pinned to the top of the visible timeline. */
+        .hover-popup { position: fixed; z-index: 60; pointer-events: none; background: #000;
+                       border: 1px solid #475569; border-radius: 4px; overflow: hidden; box-shadow: 0 12px 28px rgba(0,0,0,.6); }
+        .hover-popup img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+        .hover-popup .hover-tc { position: absolute; left: 0; bottom: 0; padding: 1px 6px; background: #000c;
+                                 font-size: 12px; color: #e5e7eb; }
+        /* The instant the cursor is over, as a tick on the ruler. Deliberately short: it
+           marks a position, and a line spanning the panel would cut through the popup. */
+        .hover-cursor { position: absolute; top: 0; height: 34px; width: 2px; background: #fbbf24; z-index: 47; pointer-events: none; }
     </style>
 </head>
 
@@ -268,7 +283,64 @@
                 const undoStack = ref([])
                 const redoStack = ref([])
                 let restoring = true, openGeneration = 0, persistTimer = null
+                /**
+                 * Debounce on the draft write.
+                 *
+                 * Long enough that a drag across the timeline writes once instead of once
+                 * per pointermove, short enough that what it protects is a corner case
+                 * rather than the normal way out of the page. Injectable so the exit guard
+                 * can be exercised without racing this.
+                 */
+                let PERSIST_DELAY_MS = 500
+                const persistDelay = { get: () => PERSIST_DELAY_MS, set: (ms) => { PERSIST_DELAY_MS = ms } }
                 const storageNotice = ref('')
+                /**
+                 * Editor state that exists only in this tab and is not written down yet.
+                 *
+                 * The draft lives in localStorage, so a reload normally costs nothing —
+                 * but between an edit and the debounced write there is a window where
+                 * closing the tab really does lose work, and the browser's own "leave
+                 * site?" prompt is the only warning that arrives in time. This is set
+                 * synchronously by every edit and cleared only once a write succeeded, so
+                 * a failed write keeps the warning up rather than hiding the problem.
+                 */
+                const edited = ref(false)
+
+                function markEditsDirty() {
+                    edited.value = true
+                    // The listener is only attached while there is something to lose, so
+                    // an ordinary refresh with nothing pending stays silent.
+                    if (typeof window !== 'undefined') window.addEventListener('beforeunload', onBeforeUnload)
+                    // Schedule the write here rather than from a watcher: a segment is
+                    // edited in place, so the array identity a watcher sees never changes
+                    // and the edit would wait for some unrelated update to be saved.
+                    schedulePersist()
+                }
+                function clearEditsDirty() {
+                    edited.value = false
+                    if (typeof window !== 'undefined') window.removeEventListener('beforeunload', onBeforeUnload)
+                }
+
+                /**
+                 * The "unsaved data" guard.
+                 *
+                 * Chrome ignores whatever message is set here and shows its own generic
+                 * text, so the string is not the point — the return value is. Custom text
+                 * is kept because the specification still asks for one.
+                 *
+                 * Nothing is written from here on purpose. A synchronous `localStorage`
+                 * write during `beforeunload` suppresses the prompt entirely: the handler
+                 * runs, the draft is saved, and the user is never warned — the one outcome
+                 * this feature exists to prevent. The draft's real safety net is the
+                 * debounced write plus the flush on `pagehide`, so this handler only has to
+                 * answer the question the user is being asked.
+                 */
+                function onBeforeUnload(event) {
+                    if (!edited.value) return undefined
+                    event.preventDefault()
+                    event.returnValue = '本页可能有未保存的编辑数据，确定要离开吗？'
+                    return event.returnValue
+                }
 
                 // ------------------------------------------------------- derived
                 const videoStream = computed(() => (detail.value?.streams || []).find(s => s.type === 'video'))
@@ -447,11 +519,13 @@
                     return JSON.stringify({ segments: segments.value, active: activeSeg.value, pending: pendingMarkerId.value })
                 }
                 function rememberEdit(before = editSnapshot()) {
+                    markEditsDirty()
                     undoStack.value.push(before)
                     if (undoStack.value.length > 80) undoStack.value.shift()
                     redoStack.value = []
                 }
                 function restoreEdit(snapshot) {
+                    markEditsDirty()
                     const d = JSON.parse(snapshot)
                     segments.value = d.segments; activeSeg.value = d.active; pendingMarkerId.value = d.pending
                 }
@@ -486,6 +560,7 @@
                     if (error) { message.value = error; return false }
                     if (s.start === next.start && s.end === next.end) return true
                     if (record) rememberEdit()
+                    markEditsDirty()
                     Object.assign(s, next)
                     if (s.end != null && pendingMarkerId.value === s.id) pendingMarkerId.value = null
                     message.value = ''
@@ -710,6 +785,7 @@
                     drag.value = { kind: 'scrub', resume: player.value && !player.value.paused }
                     pause()
                     stopThumbnails()
+                    closeHoverPreview()
                     scrubPreview.value = true
                     el.setPointerCapture?.(e.pointerId)
                     applyScrub(e, el)
@@ -849,57 +925,864 @@
                     e.currentTarget.setPointerCapture?.(e.pointerId)
                 }
 
-                // Only request visible thumbnail cells; never scan a whole recording.
-                const thumbnailCache = new Map(), thumbnailRevision = ref(0)
-                const thumbnailControllers = new Set()
-                let thumbnailTimer = null, thumbnailGeneration = 0
-                const thumbnailCells = computed(() => {
-                    if (!showThumbnails.value || !duration.value || !viewportWidth.value) return []
-                    const cellWidth = Math.max(96, laneHeights.value.thumbnails * 16 / 9)
-                    const step = Math.max(0.1, 2 ** Math.ceil(Math.log2(cellWidth / pxPerSecond.value)))
-                    const { from, to } = viewWindow.value
-                    const cells = []
-                    for (let t = Math.floor(from / step) * step; t < to && cells.length < 32; t += step) {
-                        cells.push({ t: round3(t), end: Math.min(duration.value, t + step) })
-                    }
-                    return cells
+                // ------------------------------------------- timeline frame pyramid
+                /**
+                 * The thumbnail lane refines itself instead of guessing a resolution.
+                 *
+                 * The lane is a pyramid: every level is the cache's own time grid — the
+                 * server quantises frames to [FRAME_BUCKET] seconds — doubled, so level
+                 * `L` has a step of `bucket * 2**L` and its frames are exactly the
+                 * coarser level's frames plus the ones in between. Two things follow,
+                 * and they are the whole design:
+                 *
+                 *  - A subdivision can never miss the cache. `index * step` always lands
+                 *    on a bucket the server produced, so a level fills in completely
+                 *    instead of leaving one stubborn cell that re-requests forever.
+                 *  - Levels are independent. A coarse frame stays valid while the finer
+                 *    levels around it load, so the lane is never blank: it shows the
+                 *    best frame it has for every instant and sharpens in place.
+                 *
+                 * The lane keeps subdividing until its cells are thumb-sized, then stops
+                 * — no further level can show more than the thumbnail lane has room for.
+                 */
+                const FRAME_BUCKET = 0.1
+                /**
+                 * Smallest a cell may be drawn before subdividing further is pointless.
+                 *
+                 * A level whose cells are narrower than this shows nothing the level above
+                 * it did not, so this is what bounds the lane's work rather than any frame
+                 * count.
+                 */
+                const MIN_PX_PER_CELL = 10
+                /**
+                 * How wide a fill cell may get before it stops being fill.
+                 *
+                 * The rungs below the target exist to hold a picture under a gap, so they
+                 * want to be clearly wider than the target — but one frame standing in for
+                 * half the window is a still, not a strip, and every extra rung is another
+                 * round of requests. This is the width at which filling stops paying.
+                 */
+                const FILL_CELL_PX = 128
+                /** Hard ceiling on the lane's DOM nodes; see [thumbnailBudget]. */
+                const MAX_RENDERED_CELLS = 1200
+                /** Never fetch mush, and never ask the server for more than it will serve. */
+                const FRAME_WIDTH_MIN = 128, FRAME_WIDTH_MAX = 1920
+                /**
+                 * The width one cell's frame is fetched at.
+                 *
+                 * Two things have to be covered, and the larger of them wins:
+                 *
+                 *  - the lane's **height**. Every frame is stored as the 16:9 window the
+                 *    lane draws in, so `height * 16/9` is exactly the width whose crop
+                 *    reaches the lane's top and bottom edges.
+                 *  - the **cell's own width**, because a wide cell — a fill cell, or any
+                 *    cell at a shallow zoom — stretches its frame sideways to cover the box.
+                 *
+                 * Both are read when the frame is asked for, so dragging the lane taller
+                 * sharpens the strip instead of leaving it upscaled for the session; see
+                 * `frameReady` for how the lane notices that its frames are a rung behind.
+                 * The answer is rounded onto the power-of-two ladder the cache is built on,
+                 * so a drag crosses a rung once per doubling and settles on a handful of
+                 * widths rather than a new one per pixel.
+                 */
+                function thumbFrameWidth(cellPx) {
+                    return clamp(scale2(Math.ceil(Math.max(laneHeights.value.thumbnails, 1) * 16 / 9, cellPx || 0)),
+                        FRAME_WIDTH_MIN, FRAME_WIDTH_MAX)
+                }
+                /**
+                 * The lane's own rung — the width its height alone asks for.
+                 *
+                 * Watched rather than recomputed: crossing it is the one moment the frames
+                 * in memory stop matching the lane, and the sweep the server is running is
+                 * a sweep at the old width.
+                 */
+                const thumbLaneWidth = computed(() => thumbFrameWidth(0))
+                /**
+                 * The popup's width: a fixed rung, deliberately not a function of the lane.
+                 *
+                 * Its box is capped at [HOVER_MAX_HEIGHT], which 512 px covers many times
+                 * over, and a fixed rung is what lets a hovered instant stay cached while
+                 * the lane around it is being resized.
+                 */
+                const HOVER_WIDTH = 512
+                /**
+                 * How many frames the lane keeps decoded.
+                 *
+                 * A screenful of the ladder is its rungs summed — a few hundred — and
+                 * dropping below that would make the lane re-request what it must show,
+                 * which is both wasted work and a visibly flickering strip.
+                 */
+                const THUMB_CACHE_MAX = 1200, HOVER_CACHE_MAX = 90
+                /** Cells one plan may carry on screen, and beyond it, respectively. */
+                const MAX_PLANNED_CELLS = 320
+                const MAX_MARGIN_CELLS = 160
+                /**
+                 * Requests in flight at once.
+                 *
+                 * A browser opens about six connections to one origin; leaving the last
+                 * two spare is what keeps the hover frame from queueing behind the
+                 * sweep, on top of the server reserving a lane for it.
+                 */
+                const FETCH_CONCURRENCY = 4
+
+                function scale2(w) { return 2 ** Math.ceil(Math.log2(Math.max(16, w))) }
+
+                /** Newest request generation; anything older must not paint. */
+                let thumbGeneration = 0
+                let planTimer = null
+                const thumbAbort = new Set()
+                let thumbActive = 0
+                let thumbPlannedAt = 0
+
+                /** Key `level:time` -> { url, w } for the two pools the lane draws from. */
+                const thumbnailCache = new Map()
+                const hoverCache = new Map()
+                const thumbnailRevision = ref(0)
+                /** Thumbnail cells waiting to be fetched, deduplicated by key. */
+                const thumbQueued = new Map()
+                /** Levels already asked of the server's sweep route for this window. */
+                const sweepRequested = new Set()
+                /** Per level, the interval that has already been enumerated. */
+                const thumbEnum = new Map()
+
+                /** `bucket * 2**level`; level 0 is the cache's own grid. */
+                function levelStep(level) { return FRAME_BUCKET * 2 ** level }
+                /** Six hours in 20 s cells is level 18; nothing legitimate comes near this. */
+                const MAX_LEVEL = 24
+                /**
+                 * The coarsest level whose cells are still at least [step] seconds wide.
+                 *
+                 * Rounding to the *nearest* level sometimes picks one whose cells are a
+                 * third narrower than asked for — cells visibly smaller than the frame they
+                 * hold — so this errs coarse on purpose. Every rung of the ladder then
+                 * satisfies the size floor, and the lane never draws a sliver.
+                 */
+                /**
+                 * The coarsest level whose cells are still at least [step] seconds wide.
+                 *
+                 * Counted rather than derived from `log2`: a step that is an exact power of
+                 * two has to land *on* a rung, and floating point decides whether the ratio
+                 * comes out as 16 or 16.000000000000004 — which a logarithm rounds the
+                 * wrong way, collapsing the ladder onto one rung. Comparing exact powers of
+                 * two has no such boundary.
+                 */
+                function levelForStep(step) {
+                    let level = 0
+                    while (levelStep(level) < step && level < MAX_LEVEL) level++
+                    return level
+                }
+
+                /**
+                 * The level the lane subdivides towards: the last one whose cells are still
+                 * narrower than a thumbnail.
+                 *
+                 * Both bounds are about the *lane*, not the recording. A cell of 124 px is
+                 * a thumbnail; past that, subdividing again would only upscale a wider
+                 * frame for nothing. A cell of [MIN_PX_PER_CELL] is the floor — narrower
+                 * than that there is no picture left to see — and it is what makes the
+                 * lane's cost bounded whatever the recording's length or the zoom.
+                 */
+                const thumbnailTarget = computed(() => {
+                    const pps = pxPerSecond.value
+                    if (!(pps > 0)) return 0
+                    const thumbPx = Math.max(96, laneHeights.value.thumbnails * 16 / 9)
+                    const floor = levelForStep(MIN_PX_PER_CELL / pps)
+                    const ideal = levelForStep(thumbPx / pps)
+                    return Math.max(floor, ideal - 1)
                 })
-                function thumbnailUrl(t) { thumbnailRevision.value; return thumbnailCache.get(t) || null }
-                function stopThumbnails() {
-                    clearTimeout(thumbnailTimer); thumbnailTimer = null; thumbnailGeneration++
-                    for (const c of thumbnailControllers) c.abort()
-                    thumbnailControllers.clear()
+
+                /**
+                 * How many cells the lane may draw, derived from the rules above.
+                 *
+                 * Because every rung's cells nest inside the one above, a whole ladder
+                 * covers only about twice what its finest rung does, and that rung is
+                 * `viewport / MIN_PX_PER_CELL` cells by construction. So this is not a
+                 * guess about what fits: it is what the ladder already is, with headroom
+                 * for the margin either side of the window. [MAX_RENDERED_CELLS] is only a
+                 * backstop against arithmetic nobody anticipated.
+                 */
+                const thumbnailBudget = computed(() =>
+                    Math.min(MAX_RENDERED_CELLS, Math.ceil((viewportWidth.value || 1) * 3 / MIN_PX_PER_CELL) + 32)
+                )
+
+                function frameKey(level, t) { return level + ':' + round3(t) }
+                function thumbnailUrl(cell) {
+                    thumbnailRevision.value
+                    return thumbnailCache.get(frameKey(cell.level, cell.t))?.url || null
                 }
-                function scheduleThumbnails() {
-                    stopThumbnails()
-                    if (!selected.value || !showThumbnails.value || drag.value?.kind === 'scrub') return
-                    thumbnailTimer = setTimeout(loadThumbnails, 220)
+                /** How wide a cell is drawn right now, in CSS px. */
+                function cellPx(cell) { return (cell.end - cell.t) * (pxPerSecond.value || 0) }
+                /**
+                 * Whether the lane already holds a frame *at the width it would ask for now*.
+                 *
+                 * The pool is not a set of answers, it is the best picture the lane has for
+                 * an instant: a frame cut for a shorter lane is still drawn, because going
+                 * blank while its replacement loads is worse. What it must not do is satisfy
+                 * the plan — otherwise dragging the lane taller would leave the strip
+                 * upscaled for the rest of the session, since nothing would ever ask again.
+                 */
+                function frameReady(cell) {
+                    return thumbnailCache.get(frameKey(cell.level, cell.t))?.w === thumbFrameWidth(cellPx(cell))
                 }
-                async function loadThumbnails() {
-                    thumbnailTimer = null
-                    if (drag.value?.kind === 'scrub' || seeking.value || (playing.value && buffering.value)) return
-                    const generation = thumbnailGeneration, id = selected.value?.id
-                    const queue = thumbnailCells.value.filter(c => !thumbnailCache.has(c.t))
-                    async function worker() {
-                        while (queue.length && generation === thumbnailGeneration) {
-                            const cell = queue.shift(), controller = new AbortController()
-                            thumbnailControllers.add(controller)
-                            try {
-                                const r = await fetch('/api/media/' + id + '/frame?t=' + cell.t.toFixed(3) + '&w=160', { signal: controller.signal })
-                                if (!r.ok) continue
-                                const blob = await r.blob()
-                                if (generation !== thumbnailGeneration) return
-                                thumbnailCache.set(cell.t, URL.createObjectURL(blob))
-                                while (thumbnailCache.size > 160) {
-                                    const key = thumbnailCache.keys().next().value
-                                    URL.revokeObjectURL(thumbnailCache.get(key)); thumbnailCache.delete(key)
+                /**
+                 * Whether a cell is wide enough to carry its own timecode.
+                 *
+                 * The label is wider than a narrow cell, so drawing it regardless is what
+                 * turns a refined strip back into an unreadable smear of numbers. Only the
+                 * cells with room for it keep it, and the coarser rungs — which are wide by
+                 * construction — end up carrying the times.
+                 */
+                function showCellTime(cell) {
+                    return cellPx(cell) >= 44
+                }
+
+                /**
+                 * The visible window, widened by half a screen on each side.
+                 *
+                 * Both the lane and the plan are built from this rather than from the
+                 * grid: at a coarse level a whole recording is a handful of seconds per
+                 * pixel, so enumerating cells that are off screen is asking for frames
+                 * nothing will ever draw — and it is what would keep a six-hour recording
+                 * from fitting in the frame budget.
+                 */
+                const frameWindow = computed(() => {
+                    const { from, to } = viewWindow.value
+                    const span = Math.max(0, to - from)
+                    const margin = Math.max(2, span * 0.5)
+                    return {
+                        from: Math.max(0, from - margin),
+                        to: Math.min(duration.value || 0, to + margin),
+                        from0: from, to0: to
+                    }
+                })
+
+                function cellAt(level, t) {
+                    const start = round3(t)
+                    return { level, t: start, end: Math.min(duration.value, start + levelStep(level)) }
+                }
+
+                /** Every cell of [level] inside [window], memoised per window. */
+                function cellsForLevel(level, window) {
+                    const step = levelStep(level), stride = Math.round(step / FRAME_BUCKET)
+                    const span = window.to - window.from
+                    if (!(span > 0)) return []
+                    const lastIndex = Math.ceil(duration.value / step) * stride
+                    const rawLo = Math.floor(window.from / step) * stride
+                    const rawHi = Math.ceil(window.to / step) * stride
+                    // The memo key is the *requested* interval, not the clamped one: two
+                    // windows that both clamp to the same range would otherwise share an
+                    // answer computed for a different screen.
+                    const lo = clamp(rawLo, 0, lastIndex)
+                    const hi = clamp(rawHi, lo, lastIndex)
+                    const key = level + ':' + rawLo + ':' + rawHi
+                    const memo = thumbEnum.get(key)
+                    if (memo) return memo
+                    const cells = []
+                    for (let b = lo; b <= hi && cells.length <= MAX_RENDERED_CELLS; b += stride) {
+                        const t = round3(b * FRAME_BUCKET)
+                        if (t > duration.value) break
+                        cells.push(cellAt(level, t))
+                    }
+                    // Keyed by interval so a scroll back to the same window is free; the
+                    // cap keeps the memo from pinning every window ever scrolled past.
+                    if (thumbEnum.size > 64) thumbEnum.clear()
+                    thumbEnum.set(key, cells)
+                    return cells
+                }
+
+                /**
+                 * The coarsest level the lane will consider for its fill layers.
+                 *
+                 * Aimed at half a screenful per cell: any coarser and one frame would stand
+                 * in for more of the timeline than the user can see at once, which is a
+                 * still rather than a strip.
+                 */
+                function fillFloorLevel() {
+                    return levelForStep(FILL_CELL_PX / Math.max(pxPerSecond.value, 1e-9))
+                }
+
+                /**
+                 * The rungs the lane draws and fetches: the level it is refining towards,
+                 * then every other level down to [fillFloorLevel].
+                 *
+                 * The rungs below the target are the *fill*: much wider cells that hold a
+                 * picture under a gap while the target's frames arrive, so a screenful is
+                 * never blank. Only this ladder is ever drawn — a frame left in memory by an
+                 * earlier zoom is data, not a layer, and adopting one as fill is what paves
+                 * the strip with unreadable slivers.
+                 */
+                function planLevels() {
+                    // Level numbers grow downwards towards ever coarser cells, so the walk
+                    // runs from the target *up* to the fill floor, never past the target.
+                    const finest = thumbnailTarget.value
+                    let coarsest = fillFloorLevel()
+                    if (coarsest < finest) coarsest = finest
+                    const levels = []
+                    for (let level = finest; level < coarsest; level += 2) levels.push(level)
+                    levels.push(coarsest)
+                    return levels
+                }
+
+                /**
+                 * Cells on screen, coarse level first so a finer one paints over it.
+                 *
+                 * Two rules, and between them they are the whole visual contract:
+                 *
+                 *  - Only the ladder is drawn. A frame cached from an earlier zoom or an
+                 *    earlier window is *data*, not a layer: honouring it here is how the
+                 *    lane ends up paved with a coarse level's slivers while the level it
+                 *    actually asked for has barely started.
+                 *  - A cell is dropped once a finer rung already covers it. An instant is
+                 *    either sharp or filled in, never both. Walking finest-first makes that
+                 *    exact and cheap — every rung's cells nest inside the one above, and
+                 *    each rung is sorted, so a set of the finer rung's starts settles it.
+                 *
+                 * The finest rung gets the frame budget first and any rung that cannot fit
+                 * is folded into its coarser neighbour, so a wide view degrades into a
+                 * coarser picture instead of into a half-drawn one.
+                 */
+                const thumbnailCells = computed(() => {
+                    thumbnailRevision.value
+                    if (!showThumbnails.value || !(duration.value > 0) || !(pxPerSecond.value > 0)) return []
+                    const window = frameWindow.value
+                    const ladder = planLevels()
+                    const levels = []
+                    let budget = thumbnailBudget.value
+                    window.__ladder = ladder
+                    for (const level of ladder) {
+                        const finer = levels.length ? levels[levels.length - 1] : null
+                        const finerStep = finer ? levelStep(finer[0].level) : 0
+                        const finerKeys = finer ? new Set(finer.map(c => c.t)) : null
+                        const kept = []
+                        for (const cell of cellsForLevel(level, window)) {
+                            if (cell.end <= window.from0 || cell.t >= window.to0) continue
+                            // The finer rung is two levels down, so an overlap can only come
+                            // from a cell this one contains: a set of its starts settles it.
+                            let covered = false
+                            if (finerKeys) {
+                                for (let t = cell.t; t < cell.end - 1e-9; t = round3(t + finerStep)) {
+                                    if (finerKeys.has(t)) { covered = true; break }
                                 }
-                                thumbnailRevision.value++
-                            } catch { /* Retry on the next viewport change. */ }
-                            finally { thumbnailControllers.delete(controller) }
+                            }
+                            if (covered) continue
+                            kept.push(cell)
+                            if (kept.length >= budget) break
+                        }
+                        if (!kept.length) continue
+                        budget -= kept.length
+                        levels.push(kept)
+                        if (budget <= 0) break
+                    }
+                    const out = []
+                    for (let i = levels.length - 1; i >= 0; i--) {
+                        for (const cell of levels[i]) out.push(cell)
+                    }
+                    return out
+                })
+
+                /**
+                 * The work queue, in the order the lane wants the frames.
+                 *
+                 * The ladder is walked finest-first, and whether a coarse cell is wanted is
+                 * decided by what the lane *has* at the finer rung — cached, in flight, or
+                 * about to be asked for. Anything else asks for every rung everywhere, and
+                 * most of those frames are dropped before they are ever drawn; with the
+                 * right test, the fill rungs collapse to one frame for the whole screen,
+                 * which is exactly their job.
+                 *
+                 * The margin around the viewport comes last, so scrolling finds frames
+                 * already waiting without ever competing with what is on screen.
+                 */
+                const thumbnailPlan = computed(() => {
+                    thumbnailRevision.value
+                    if (!showThumbnails.value || !(duration.value > 0) || !(pxPerSecond.value > 0)) return []
+                    const window = frameWindow.value
+                    const visible = [], margin = []
+                    let finerKeys = null
+                    for (const level of planLevels()) {
+                        const finerStep = finerKeys ? levelStep(level - 2) : 0
+                        // This rung's times that the rung below may treat as present: frames
+                        // at the width the lane wants now, plus whatever this pass is about
+                        // to ask for. Nothing finer than that counts.
+                        const present = new Set()
+                        for (const cell of cellsForLevel(level, window)) {
+                            const key = frameKey(level, cell.t)
+                            const has = frameReady(cell) || thumbQueued.has(key)
+                            // A coarse cell is only redundant once *every* instant it covers
+                            // has a finer frame the lane can draw. Anything less and this is
+                            // the frame that holds those instants: treating a partly loaded
+                            // finer rung as full coverage is what left the strip blank while
+                            // the target level arrived, because nothing was asked to fill it.
+                            let covered = false
+                            if (finerKeys) {
+                                covered = true
+                                for (let t = cell.t; t < cell.end - 1e-9; t = round3(t + finerStep)) {
+                                    if (!finerKeys.has(t)) { covered = false; break }
+                                }
+                            }
+                            if (covered && has) { present.add(cell.t); continue }
+                            if (!covered && !has) {
+                                const task = { level, t: cell.t, end: cell.end, key, width: thumbFrameWidth(cellPx(cell)) }
+                                if (cell.end > window.from0 && cell.t < window.to0) visible.push(task)
+                                else margin.push(task)
+                            }
+                            present.add(cell.t)
+                        }
+                        finerKeys = present
+                    }
+                    const ordered = visible.slice(0, MAX_PLANNED_CELLS)
+                    for (const cell of margin) {
+                        if (ordered.length >= MAX_PLANNED_CELLS + MAX_MARGIN_CELLS) break
+                        ordered.push(cell)
+                    }
+                    return ordered
+                })
+
+                /**
+                 * Puts one decoded frame in a pool, replacing whatever was there.
+                 *
+                 * The entry carries the width it was cut at, which is what lets the plan
+                 * tell a frame that answers the lane's current height from one that merely
+                 * keeps it painted while a sharper one loads.
+                 */
+                function rememberFrame(pool, key, frame) {
+                    const stale = pool.get(key)
+                    if (stale) URL.revokeObjectURL(stale.url)
+                    pool.set(key, frame)
+                    const cap = pool === thumbnailCache ? THUMB_CACHE_MAX : HOVER_CACHE_MAX
+                    if (pool.size > cap) evictFrames(pool, cap, key)
+                    thumbnailRevision.value++
+                }
+
+                /**
+                 * Trims a pool from the rung the lane needs least.
+                 *
+                 * The target level is what the user is looking at, so it is never the one to
+                 * drop; the rungs furthest from it are. Insertion order would evict whatever
+                 * was fetched longest ago, which after a scroll is the fill layer the lane
+                 * is still drawing over its target — the lane would quietly lose its
+                 * background and go patchy.
+                 */
+                function evictFrames(pool, cap, justAdded) {
+                    const added = Number(justAdded.split(':')[0])
+                    const levels = [...new Set([...pool.keys()].map(k => Number(k.split(':')[0])))]
+                    levels.sort((a, b) => Math.abs(b - added) - Math.abs(a - added))
+                    for (const level of levels) {
+                        if (pool.size <= cap) return
+                        if (level === added) continue
+                        for (const key of [...pool.keys()]) {
+                            if (pool.size <= cap) return
+                            if (Number(key.split(':')[0]) !== level) continue
+                            URL.revokeObjectURL(pool.get(key).url)
+                            pool.delete(key)
                         }
                     }
-                    await Promise.all([worker(), worker()])
+                }
+
+                /**
+                 * Decodes one frame and returns it ready to paint.
+                 *
+                 * `createImageBitmap` is used on purpose: it rejects on a truncated or
+                 * aborted response, where an `<img>` would already be showing whatever
+                 * arrived. That matters here because a pointer moving across the lane
+                 * abandons requests in flight, and a torn frame on the lane is exactly the
+                 * artefact that would make this look broken.
+                 */
+                async function fetchFrame(level, t, width, opts = {}) {
+                    const url = '/api/media/' + selected.value.id + '/frame?t=' + t.toFixed(3) + '&w=' + width
+                        + (opts.priority ? '&p=1' : '')
+                    const response = await fetch(url, { signal: opts.signal })
+                    if (!response.ok) throw new Error('frame ' + response.status)
+                    const blob = await response.blob()
+                    if (opts.signal?.aborted) throw new Error('aborted')
+                    const bitmap = await createImageBitmap(blob)
+                    // A wide source crops rather than stretches: the cell owns 16:9 and the
+                    // extra rows would otherwise squash the picture. It is also what makes
+                    // the fill arithmetic exact — a frame cut at `w` is `w * 9/16` tall,
+                    // which is the height [thumbFrameWidth] sized it for.
+                    const target = Math.max(1, Math.round(width * 9 / 16))
+                    const canvas = document.createElement('canvas')
+                    canvas.width = width; canvas.height = target
+                    const ctx = canvas.getContext('2d')
+                    const scale = Math.max(width / bitmap.width, target / bitmap.height)
+                    const drawW = bitmap.width * scale, drawH = bitmap.height * scale
+                    ctx.drawImage(bitmap, (width - drawW) / 2, (target - drawH) / 2, drawW, drawH)
+                    bitmap.close()
+                    const cropped = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.82))
+                    if (!cropped || opts.signal?.aborted) throw new Error('aborted')
+                    return { url: URL.createObjectURL(cropped), w: width }
+                }
+
+                /**
+                 * Requests the frame to show above the pyramid, at the cursor.
+                 *
+                 * The popup is the one request with a human waiting on it, so it goes
+                 * out on the priority lane and is deduplicated against the sweep: it
+                 * never waits for a slot behind it, and it never spends a second request
+                 * on a frame the sweep is already producing.
+                 */
+                let hoverKey = null, hoverPending = false
+                function loadHoverFrame(level, t) {
+                    if (!selected.value) return
+                    const key = frameKey(level, t)
+                    if (hoverCache.has(key)) return
+                    hoverKey = key
+                    if (hoverPending) return
+                    hoverPending = true
+                    const controller = new AbortController()
+                    thumbAbort.add(controller)
+                    fetchFrame(level, t, HOVER_WIDTH, { priority: true, signal: controller.signal })
+                        .then(frame => {
+                            // A frame the cursor has already left is still worth keeping —
+                            // it is the instant the popup comes back to. Caching it under
+                            // the key it was *asked* for is what makes that possible; the
+                            // popup looks up the cell it is on now, so a stale arrival
+                            // cannot paint itself over a newer one.
+                            rememberFrame(hoverCache, key, frame)
+                        })
+                        .catch(() => { /* keep the frame already on screen */ })
+                        .finally(() => {
+                            thumbAbort.delete(controller)
+                            hoverPending = false
+                            // The cursor kept moving while this was in flight: ask for
+                            // wherever it is now. Never more than one hop behind.
+                            if (hoverKey && hoverKey !== key) {
+                                const [lvl, time] = hoverKey.split(':')
+                                if (!hoverCache.has(hoverKey)) loadHoverFrame(Number(lvl), Number(time))
+                            }
+                        })
+                }
+
+                // ------------------------------------------------- hover preview
+                /**
+                 * The frame popup, shown only while the pointer is on the thumbnail lane.
+                 *
+                 * It is deliberately not a tooltip on every lane: the only place whose
+                 * content is "the picture at this instant" is the thumbnail strip, and a
+                 * popup that followed the cursor across the clip and event lanes would be
+                 * in the way of the thing the user is actually pointing at.
+                 */
+                const hoverPreviewOpen = ref(false)
+                let hoverPreviewEnabled = false
+                /** Where the pointer is, in the two coordinate systems the overlays need. */
+                const hoverState = { time: 0, cell: 0, clientX: 0, contentX: 0 }
+                const hoverCell = ref(null)
+                const hoverTick = ref(0)
+                /** Latest pointer position over the lane, replayed when the window scrolls. */
+                let lastPointer = { clientX: 0, clientY: 0 }
+
+                /**
+                 * The grid the popup asks on: as fine as the frame cache allows, and no
+                 * finer than the pointer can actually resolve.
+                 *
+                 * The lane's own levels are far too coarse to hang a popup off — at a deep
+                 * zoom one cell is seconds wide, and snapping the preview to its start puts
+                 * the frame visibly beside the cursor. The cache's own 0.1 s grid is what a
+                 * frame *is*, so that is the floor; the 8 px term coarsens it when a step is
+                 * narrower than the pointer's own resolution, which is what stops a fast sweep
+                 * from asking for more frames per second than the cursor can express.
+                 */
+                function hoverGridSeconds() {
+                    return Math.max(FRAME_BUCKET, 8 / Math.max(pxPerSecond.value, 1e-9))
+                }
+
+                /** The instant the cursor is over, on the popup's own grid. */
+                function setHoverTime(time) {
+                    const step = hoverGridSeconds()
+                    const t = round3(Math.round(time / step) * step)
+                    if (hoverState.time === t) return
+                    hoverState.time = t
+                    // Fresh object so Vue re-renders the popup; the popup itself keeps the
+                    // previous frame on screen until the requested one can be decoded.
+                    hoverCell.value = { level: levelForStep(step), t, end: Math.min(duration.value, t + step) }
+                    hoverTick.value++
+                }
+
+                function updateHoverCell(event) {
+                    const el = viewport.value
+                    if (!el || !selected.value || !(duration.value > 0)) return
+                    const box = el.getBoundingClientRect()
+                    const t = pxToTime(event.clientX - box.left + el.scrollLeft)
+                    if (!isFinite(t)) return
+                    const at = clamp(t, 0, duration.value)
+                    setHoverTime(at)
+                    // Anchored to the *cursor*, not to the frame that gets shown. The popup's
+                    // grid is coarse on purpose — one step can be several hundred pixels at a
+                    // deep zoom — so hanging the overlay off `hoverState.time` would park it
+                    // visibly beside the pointer, drifting further the deeper the zoom.
+                    hoverState.clientX = event.clientX
+                    // The mark is a child of the scrolled content, so it needs the cursor in
+                    // content coordinates; the popup is fixed and needs it in client ones.
+                    hoverState.contentX = event.clientX - box.left + el.scrollLeft
+                    loadHoverFrame(hoverCell.value.level, hoverState.time)
+                }
+
+                function onLaneHover(event) {
+                    if (drag.value) return
+                    lastPointer = { clientX: event.clientX, clientY: event.clientY }
+                    hoverPreviewEnabled = true
+                    hoverPreviewOpen.value = showThumbnails.value
+                    updateHoverCell(event)
+                }
+                function closeHoverPreview() {
+                    hoverPreviewEnabled = false
+                    hoverPreviewOpen.value = false
+                }
+
+                /**
+                 * The best frame already in memory for the instant under the cursor.
+                 *
+                 * The popup should show *something* the moment the cursor lands, so this
+                 * falls back to any coarser level whose frame still covers this instant —
+                 * those frames are already cached from the lane's own coarse pass, so the
+                 * fallback costs nothing and the finer frame sharpens it in place.
+                 */
+                const hoverPreview = computed(() => {
+                    hoverTick.value
+                    thumbnailRevision.value
+                    const cell = hoverCell.value
+                    if (!cell) return null
+                    const exact = hoverCache.get(frameKey(cell.level, cell.t))
+                    if (exact) return exact.url
+                    // Fall back to progressively coarser frames: the popup's own grid is
+                    // far finer than the lane's rungs, so a hit at 0.1 s is unlikely while
+                    // anything is still loading, and an instant that already has a coarse
+                    // frame should show it rather than nothing.
+                    let best = null, bestLevel = -1
+                    for (let step = cell.end - cell.t, depth = 0; depth < 6; step *= 4, depth++) {
+                        const level = levelForStep(step)
+                        const t = round3(Math.floor(cell.t / step) * step)
+                        if (!(t <= cell.t && t + step > cell.t)) continue
+                        const entry = hoverCache.get(frameKey(level, t)) || thumbnailCache.get(frameKey(level, t))
+                        if (entry && level > bestLevel) { best = entry.url; bestLevel = level }
+                    }
+                    return best
+                })
+                const hoverTimecode = computed(() => { hoverTick.value; return hoverState.time })
+                /** Margin between the popup and the edges of the timeline viewport. */
+                const HOVER_MARGIN = 6
+                /** Ceiling on the popup, so it stays a preview rather than a second player. */
+                const HOVER_MAX_HEIGHT = 240
+                /**
+                 * The inline styles for the popup and its ruler mark.
+                 *
+                 * The popup is `position: fixed` and placed relative to the **thumbnail
+                 * lane**, not to any scrolling content: that is what lets it sit above the
+                 * lane, over the transport bar, without being clipped by the timeline's own
+                 * `overflow` — and what keeps it under the cursor when the lane scrolls or
+                 * the zoom changes, because its anchor is measured from the lane's current
+                 * box every time rather than derived from a scroll offset.
+                 *
+                 * Above the lane is preferred, so the ruler and the lanes stay visible.
+                 * When the timeline is already near the top of the window there is no room
+                 * up there, and the fallback is the strip of clip lane directly below the
+                 * thumbnails — never the ruler above them, which is the one thing a preview
+                 * must not hide.
+                 */
+                const hoverStyle = computed(() => {
+                    hoverTick.value
+                    const el = viewport.value
+                    const lane = thumbnailLaneBox()
+                    if (!el || !lane) return {}
+                    const lanePx = laneHeights.value.thumbnails
+                    // Measured from the top of the *timeline panel*, not of the lane: the
+                    // ruler and the editing toolbar sit in between, and a preview that
+                    // covers them hides the very context it is meant to be read against.
+                    const above = el.getBoundingClientRect().top
+                    // Sized from the lane itself — a few thumbnails tall — so the preview
+                    // relates to what the user chose to make the strip, not to how tall the
+                    // window happens to be. The ceiling is what keeps it a preview.
+                    const wanted = clamp(lanePx * 3, 96, HOVER_MAX_HEIGHT)
+                    const roomAbove = above - HOVER_MARGIN * 2
+                    let h, top
+                    if (roomAbove >= 72) {
+                        h = Math.round(Math.min(wanted, roomAbove))
+                        top = above - h - HOVER_MARGIN
+                    } else {
+                        // No room above: tuck it under the lane, sized to the lane itself, so
+                        // it reads as part of the strip instead of covering the timeline.
+                        const roomBelow = Math.max(0, innerHeight - lane.bottom - HOVER_MARGIN * 2)
+                        // Tucking *under* the lane keeps the ruler visible, which is what
+                        // matters when there is nowhere above the panel to float.
+                        h = Math.round(clamp(Math.min(wanted, roomBelow), 56, lanePx))
+                        top = lane.bottom + HOVER_MARGIN
+                    }
+                    const w = Math.round(h * 16 / 9)
+                    return {
+                        top: Math.round(top) + 'px',
+                        left: Math.round(clamp(hoverState.clientX - w / 2, HOVER_MARGIN,
+                            Math.max(HOVER_MARGIN, innerWidth - w - HOVER_MARGIN))) + 'px',
+                        width: w + 'px',
+                        height: h + 'px'
+                    }
+                })
+                /** The thumbnail lane's current box, or null when it is not on screen. */
+                function thumbnailLaneBox() {
+                    const el = document.querySelector('[data-lane="thumbnails"]')
+                    return el ? el.getBoundingClientRect() : null
+                }
+                /**
+                 * The cursor's instant, marked on the ruler.
+                 *
+                 * The mark is a child of the scrolled content, so its offset has to be in
+                 * content coordinates — which is what `hoverState.contentX` records. (The
+                 * popup above it is fixed-positioned and needs client coordinates instead;
+                 * the two anchors are deliberately different.)
+                 */
+                const hoverMarkLeft = computed(() => {
+                    hoverTick.value
+                    return hoverState.contentX + 'px'
+                })
+
+                function queueThumbTask(cell) {
+                    if (thumbQueued.has(cell.key)) return
+                    thumbQueued.set(cell.key, cell)
+                    if (thumbQueued.size > MAX_PLANNED_CELLS * 2) {
+                        // Far more than one screenful; the plan is rebuilt constantly, so
+                        // dropping the margin cells on the far side costs nothing.
+                        for (const key of thumbQueued.keys()) {
+                            if (thumbQueued.size <= MAX_PLANNED_CELLS) break
+                            if (!thumbQueued.get(key)?.visible) thumbQueued.delete(key)
+                        }
+                    }
+                    pumpThumbs()
+                }
+
+                function pumpThumbs() {
+                    for (const cell of thumbQueued.values()) {
+                        if (thumbActive >= FETCH_CONCURRENCY) return
+                        thumbQueued.delete(cell.key)
+                        startThumbTask(cell)
+                    }
+                }
+
+                function startThumbTask(cell) {
+                    const controller = new AbortController()
+                    thumbAbort.add(controller)
+                    thumbActive++
+                    fetchFrame(cell.level, cell.t, cell.width, { signal: controller.signal })
+                        .then(frame => rememberFrame(thumbnailCache, cell.key, frame))
+                        .catch(() => { /* an aborted or missing frame is simply not drawn */ })
+                        .finally(() => {
+                            thumbAbort.delete(controller)
+                            thumbActive--
+                            pumpThumbs()
+                            // The queue is finite, so a region the plan never covered —
+                            // after a seek, or a scroll between two reschedules — would
+                            // otherwise sit empty forever.
+                            scheduleThumbRefresh()
+                        })
+                }
+
+                /**
+                 * Asks the server to sweep a level while the client fetches the frames it
+                 * can show.
+                 *
+                 * The browser opens only a handful of connections per origin, so a client
+                 * that fetched a coarse level image by image would crawl. The server can
+                 * sweep it at its own concurrency and answer with the grid; by the time
+                 * the client asks for a specific frame it is a cache hit.
+                 *
+                 * The sweep is asked for the width the level's own cells will want, so the
+                 * frames it bakes are the ones the lane then reads.
+                 */
+                function requestLevelSweep(level, id) {
+                    if (!(duration.value > 0) || sweepRequested.has(level)) return
+                    const { from, to } = viewWindow.value
+                    const span = Math.max(levelStep(level), to - from)
+                    const margin = span * 0.5
+                    const t0 = Math.max(0, from - margin), t1 = Math.min(duration.value, to + margin)
+                    if (!(t1 > t0)) return
+                    sweepRequested.add(level)
+                    const width = thumbFrameWidth(levelStep(level) * (pxPerSecond.value || 0))
+                    fetch('/api/media/' + id + '/frames?t0=' + t0.toFixed(3) + '&t1=' + t1.toFixed(3)
+                        + '&step=' + levelStep(level).toFixed(3) + '&w=' + width)
+                        .then(r => { if (!r.ok) sweepRequested.delete(level) })
+                        .catch(() => sweepRequested.delete(level))
+                }
+
+                function stopThumbnails() {
+                    clearTimeout(planTimer); planTimer = null
+                    thumbGeneration++
+                    for (const c of thumbAbort) c.abort()
+                    thumbAbort.clear()
+                    thumbQueued.clear()
+                    sweepRequested.clear()
+                    thumbActive = 0
+                }
+                function clearThumbnailCaches() {
+                    for (const entry of [...thumbnailCache.values(), ...hoverCache.values()]) URL.revokeObjectURL(entry.url)
+                    thumbnailCache.clear(); hoverCache.clear(); thumbEnum.clear()
+                    hoverKey = null; hoverPending = false
+                    thumbnailRevision.value++
+                }
+                function scheduleThumbnails() {
+                    // Every reschedule is a new plan: whatever was queued belongs to a
+                    // window or zoom that no longer exists, so it is dropped rather than
+                    // continued. The frames themselves stay cached, so nothing is redone.
+                    if (planTimer) clearTimeout(planTimer)
+                    thumbGeneration++
+                    thumbQueued.clear()
+                    sweepRequested.clear()
+                    thumbPlannedAt = 0
+                    if (!selected.value || !showThumbnails.value || drag.value?.kind === 'scrub') return
+                    planTimer = setTimeout(() => {
+                        planTimer = null
+                        thumbPlannedAt = Date.now()
+                        const id = selected.value?.id
+                        if (id) {
+                            for (const level of planLevels()) requestLevelSweep(level, id)
+                        }
+                        for (const cell of thumbnailPlan.value) queueThumbTask(cell)
+                    }, 220)
+                }
+
+                /** Schedules a refresh when the plan has gone stale for a while. */
+                function scheduleThumbRefresh() {
+                    if (planTimer) return
+                    if (Date.now() - thumbPlannedAt < 400) return
+                    scheduleThumbnails()
+                }
+
+                /**
+                 * Cells of one pyramid level already in memory.
+                 *
+                 * Which level the lane stops subdividing at is the whole point of the
+                 * design, and it depends on the window, the zoom and the recording's
+                 * length at once. This reports the answer rather than the inputs.
+                 */
+                function thumbnailLevel(level) {
+                    thumbnailRevision.value
+                    let count = 0
+                    for (const key of thumbnailCache.keys()) if (Number(key.split(':')[0]) === level) count++
+                    return count
+                }
+                /** Coarse-to-fine progress, for the timeline's own diagnostics. */
+                const thumbnailProgress = computed(() => {
+                    thumbnailRevision.value
+                    const out = []
+                    for (let level = 0; level <= thumbnailTarget.value; level++) {
+                        out.push([level, levelStep(level), thumbnailLevel(level)])
+                    }
+                    return out
+                })
+                /**
+                 * Frame URLs this session holds, keyed by level.
+                 *
+                 * The lane and the hover preview deliberately keep separate pools — one is
+                 * thumbnails for a strip, the other a large frame for one instant — so a
+                 * check that wants to know what a hover *should* show has to look at both.
+                 */
+                function frameDebug() {
+                    const dump = pool => {
+                        const out = []
+                        for (const [key, entry] of pool) {
+                            const [level, t] = key.split(':')
+                            out.push({ level: Number(level), t: Number(t), url: entry.url, w: entry.w })
+                        }
+                        return out
+                    }
+                    return { hover: dump(hoverCache), thumbs: dump(thumbnailCache) }
                 }
 
                 // ------------------------------------------------------- keyframes
@@ -1626,15 +2509,29 @@
                     await reloadLibrary()
                 }
                 const editorLoading = ref(false)
+
                 function preferencesSnapshot() {
                     return { layout: layout.value, laneHeights: laneHeights.value, laneFlags: laneFlags.value,
                         showThumbnails: showThumbnails.value, showAudio: showAudio.value, showSpec: showSpec.value,
                         showKeyframes: showKeyframes.value, snap: snap.value, q: q.value, sort: sort.value,
-                        roomFilter: roomFilter.value, eventsOnly: eventsOnly.value, prefs: prefs.value, lastId: selected.value?.id }
+                        roomFilter: roomFilter.value, eventsOnly: eventsOnly.value, prefs: prefs.value,
+                        edited: edited.value, lastId: selected.value?.id }
                 }
+                /**
+                 * Writes the draft.
+                 *
+                 * The pending edit decides what this write means. Layout, scroll, zoom and
+                 * playback state save on their own schedule — dozens of times while a
+                 * segment sits half-trimmed — and treating every write as "the draft is
+                 * safe now" would clear the exit warning before the edit it warns about had
+                 * been written. So a write only counts as flushing the edits when one is
+                 * actually pending; otherwise it saves the view state and leaves the
+                 * warning standing.
+                 */
                 function persistEditor() {
                     clearTimeout(persistTimer); persistTimer = null
                     if (restoring) return
+                    const flushesEdits = edited.value
                     try {
                         localStorage.setItem('xhcut:preferences:v1', JSON.stringify(preferencesSnapshot()))
                         if (selected.value && detail.value) {
@@ -1648,11 +2545,16 @@
                             }))
                         }
                         storageNotice.value = ''
-                    } catch { storageNotice.value = '浏览器无法保存编辑状态，请使用「保存 .llc」备份' }
+                        if (flushesEdits) clearEditsDirty()
+                    } catch {
+                        // A failed write must not clear the flag: the warning is now the
+                        // only thing standing between the user and silent data loss.
+                        storageNotice.value = '浏览器无法保存编辑状态，请使用「保存 .llc」备份'
+                    }
                 }
                 function schedulePersist() {
                     if (restoring || persistTimer) return
-                    persistTimer = setTimeout(persistEditor, 500)
+                    persistTimer = setTimeout(persistEditor, PERSIST_DELAY_MS)
                 }
                 function restorePreferences() {
                     const saved = readStored('xhcut:preferences:v1')
@@ -1673,6 +2575,10 @@
                     if (saved.prefs) for (const key of Object.keys(prefs.value)) {
                         if (typeof saved.prefs[key] === typeof prefs.value[key]) prefs.value[key] = saved.prefs[key]
                     }
+                    // An edit that was pending when the tab went away is still pending on
+                    // the way back in: the draft on disk is the older one, and the warning
+                    // has to survive the reload that raised it.
+                    if (saved.edited === true) markEditsDirty()
                 }
                 function restoreDraft(saved) {
                     if (!saved) return
@@ -1706,8 +2612,8 @@
                     persistEditor()
                     clearTimeout(exportPoll)
                     detachPlayer(); stopThumbnails()
-                    for (const url of thumbnailCache.values()) URL.revokeObjectURL(url)
-                    thumbnailCache.clear(); thumbnailRevision.value++
+                    clearThumbnailCaches()
+                    closeHoverPreview()
                     for (const url of frameCache.values()) URL.revokeObjectURL(url)
                     frameCache.clear(); frameRevision.value++
                     clearInterval(proxyPoll)
@@ -1729,8 +2635,8 @@
                     clearTimeout(exportPoll)
                     restoring = true; editorLoading.value = true
                     detachPlayer(); stopThumbnails()
-                    for (const url of thumbnailCache.values()) URL.revokeObjectURL(url)
-                    thumbnailCache.clear(); thumbnailRevision.value++
+                    clearThumbnailCaches()
+                    closeHoverPreview()
                     selected.value = item
                     detail.value = null; lanes.value = null; lanesLoading.value = false
                     segments.value = []; suggestions.value = []; exportJob.value = null
@@ -1804,16 +2710,54 @@
                 // met. Watching the gate itself closes that hole.
                 watch(keyframesUseful, (usable) => { if (usable) scheduleKeyframeLoad() })
 
-                watch([segments, activeSeg, pendingMarkerId, layout, laneHeights, rightTab, quality, rate, proxyHeight, proxyFps, outputDir, laneFlags, showThumbnails, showAudio, showSpec, snap, showKeyframes, prefs, q, sort, roomFilter, eventsOnly, eventOffset], schedulePersist, { deep: true, flush: 'post' })
+                // One schedule, two meanings. An edit stays pending until a write that
+                // followed it lands, which is what the exit warning tracks; the view state
+                // around it saves on its own and must not clear that warning as a side
+                // effect. A single debounce serves both, so the write decides what it is
+                // from whether the edit flag is up when it fires — scheduling the flush
+                // from the edit itself rather than from a watcher, because a segment is
+                // edited in place and a deep watcher cannot tell that from a re-render.
+                watch(
+                    [eventOffset, prefs, activeSeg, pendingMarkerId, layout, laneHeights, rightTab, quality, rate,
+                        proxyHeight, proxyFps, outputDir, laneFlags, showThumbnails, showAudio, showSpec, snap, showKeyframes,
+                        q, sort, roomFilter, eventsOnly],
+                    schedulePersist,
+                    { deep: true, flush: 'post' }
+                )
                 watch([currentTime, zoom, scrollLeft], schedulePersist)
-                watch(() => thumbnailCells.value.map(c => c.t).join(','), scheduleThumbnails)
+                watch(() => thumbnailCells.value.map(c => c.level + ':' + c.t).join(','), scheduleThumbnails)
                 watch([seeking, buffering], () => {
                     if (!seeking.value && !buffering.value) scheduleThumbnails()
+                })
+                // The lane's contents follow the scroll, and the popup is anchored to a
+                // time — so both have to be recomputed when the window moves under a
+                // stationary cursor, not only when the cursor moves.
+                // The popup is anchored to the lane's current box, and the lane moves under
+                // a stationary cursor when the window scrolls *or* the zoom changes — so both
+                // have to re-derive the hovered cell, or the popup follows the timeline
+                // instead of the pointer.
+                watch([scrollLeft, zoom], () => { if (hoverPreviewEnabled) updateHoverCell(lastPointer) })
+                watch(showThumbnails, (on) => {
+                    if (!on) closeHoverPreview()
+                    else scheduleThumbnails()
+                })
+                watch(thumbnailTarget, scheduleThumbnails)
+                // Dragging the lane taller crosses a rung of the width ladder, and at that
+                // moment the pool holds frames cut for the old height: the lane keeps
+                // drawing them — a soft picture beats a hole — but the plan has to ask
+                // again at the new width, and the sweep the server is running is a sweep of
+                // the old one. In-flight frames are dropped with it, so a response cut for
+                // the shorter lane cannot land on top of the sharper one.
+                watch(thumbLaneWidth, () => {
+                    stopThumbnails()
+                    scheduleThumbnails()
                 })
 
                 onMounted(async () => {
                     history.scrollRestoration = 'manual'
                     window.addEventListener('pagehide', persistEditor)
+                    // The tab is going away with unsaved edits: write them on the way out.
+                    // `persistEditor` also records why the draft is worth saving at all.
                     document.addEventListener('visibilitychange', () => { if (document.hidden) persistEditor() })
                     setInterval(refreshBuffered, 250)
                     window.addEventListener('pointermove', onPointerMove)
@@ -1857,6 +2801,9 @@
 
                 return {
                     layout, laneHeights, showThumbnails, thumbnailCells, thumbnailUrl, beginResize, editorLoading, storageNotice,
+                    hoverPreviewOpen, hoverPreview, hoverTimecode, hoverStyle, hoverMarkLeft, onLaneHover, closeHoverPreview,
+                    thumbnailProgress, thumbnailLevel, thumbnailTarget, thumbnailPlan, showCellTime, edited, frameDebug,
+                    persistDelay,
                     deleteEnabled, deleteBlockedReason, checked, deletePrompt, deleting, deleteError,
                     settings, savingSettings, loadSettings, setDeleteAfterExport,
                     loadConfig, pendingBytes, toggleChecked, clearChecked, checkedItems, toggleCheckAll,
@@ -1873,7 +2820,7 @@
                     loadSuggestions, onPrefsChanged, acceptSuggestion, acceptAll, addSegmentAtPlayhead,
                     setSegmentBound, clearSegmentEnd, splitAtPlayhead, removeSegment, exportSegments, saveProject, exportable,
                     viewport, track, zoom, currentTime, playing, rate, snap, showKeyframes, keyframes, laneFlags,
-                    fps, duration, viewWindow, timeToPct, widthToPct, rulerTicks, chatBuckets, levelBuckets, giftMarks, keyframesUseful, showKeyframeTicks, cachedMarks, viewportWidth,
+                    fps, duration, viewWindow, timeToPct, widthToPct, rulerTicks, chatBuckets, levelBuckets, giftMarks, keyframesUseful, showKeyframeTicks, cachedMarks, viewportWidth, pxPerSecond,
                     audioOverviewUrl, spectrogramUrl, tableEvents,
                     seekToTime, centerOn, stepFrames, stepSeconds, jumpKeyframe, jumpSegment,
                     togglePlay, setRate, nudgeRate, setZoom, zoomBy, zoomFit, onWheel, onScroll,
@@ -2199,7 +3146,7 @@
 
                         <!-- ========================== timeline ========================== -->
                         <div ref="viewport" @wheel="onWheel" @scroll="onScroll"
-                             data-panel="timeline" class="flex-1 overflow-auto scroll select-none" style="min-height: 110px; overflow: auto">
+                             data-panel="timeline" class="flex-1 overflow-auto scroll select-none relative" style="min-height: 110px; overflow: auto">
                             <div :style="{ width: (zoom * 100) + '%', minWidth: '100%' }" class="relative">
 
                                 <!-- ruler, doubled as a scrub surface -->
@@ -2220,10 +3167,12 @@
                                          title="浏览器已缓冲（本地缓存）"></div>
                                 </div>
 
-                                <div v-if="showThumbnails" data-lane="thumbnails" class="lane" :style="{ height: laneHeights.thumbnails + 'px' }" @pointerdown.prevent="beginScrub">
-                                    <div v-for="cell in thumbnailCells" :key="cell.t" class="thumbnail" :style="{ left: timeToPct(cell.t) + '%', width: widthToPct(cell.t, cell.end) + '%' }" :title="tc(cell.t)">
-                                        <img v-if="thumbnailUrl(cell.t)" :src="thumbnailUrl(cell.t)" alt="时间轴缩略图" draggable="false" />
-                                        <span class="mono">{{ fmtDur(cell.t) }}</span>
+                                <div v-if="showThumbnails" data-lane="thumbnails" class="lane" :style="{ height: laneHeights.thumbnails + 'px' }"
+                                     @pointerdown.prevent="beginScrub" @pointermove="onLaneHover" @pointerleave="closeHoverPreview">
+                                    <div v-for="cell in thumbnailCells" :key="cell.level + ':' + cell.t" class="thumbnail"
+                                         :style="{ left: timeToPct(cell.t) + '%', width: widthToPct(cell.t, cell.end) + '%' }" :title="tc(cell.t)">
+                                        <img v-if="thumbnailUrl(cell)" :src="thumbnailUrl(cell)" alt="时间轴缩略图" draggable="false" />
+                                        <span v-if="showCellTime(cell)" class="mono">{{ fmtDur(cell.t) }}</span>
                                     </div>
                                     <div class="lane-label">缩略图</div>
                                     <div class="lane-resize" role="separator" aria-label="调整缩略图轨道高度" @pointerdown="beginResize($event, laneHeights, 'thumbnails')"></div>
@@ -2302,7 +3251,16 @@
                                 <div class="playhead" :style="{ left: timeToPct(currentTime) + '%' }">
                                     <div class="playhead-head" @pointerdown.stop.prevent="beginScrub"></div>
                                 </div>
+
                             </div>
+                            <!-- Hover preview. It is a sibling of the scrolled content, not a
+                                 child of it, so it stays put while the lanes scroll under it
+                                 and can sit *above* the ruler rather than on top of it. -->
+                            <div v-if="hoverPreviewOpen" class="hover-popup" :style="hoverStyle">
+                                <img v-if="hoverPreview" :src="hoverPreview" alt="" draggable="false" />
+                                <span class="hover-tc mono">{{ tc(hoverTimecode) }}</span>
+                            </div>
+                            <div v-if="hoverPreviewOpen" class="hover-cursor" :style="{ left: hoverMarkLeft }"></div>
                         </div>
 
                         <div v-if="tableEvents.length" class="splitter horizontal" role="separator" aria-label="调整事件面板高度" @pointerdown="beginResize($event, layout, 'events', 'y', -1)"></div>
