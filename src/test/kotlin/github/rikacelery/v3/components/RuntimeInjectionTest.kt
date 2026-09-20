@@ -35,9 +35,11 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
@@ -137,6 +139,8 @@ class RuntimeInjectionTest {
                 webSocketReconnectInitial = 2.milliseconds,
                 webSocketReconnectMax = 3.milliseconds
             ),
+            // the pools run off Default in production; virtual time drives them here instead
+            poolDispatcher = StandardTestDispatcher(testScheduler),
             wsUrlBuilder = { host ->
                 builtFor += host
                 "ws://127.0.0.1:18081/connection/websocket?source=$host".also(builtUrls::add)

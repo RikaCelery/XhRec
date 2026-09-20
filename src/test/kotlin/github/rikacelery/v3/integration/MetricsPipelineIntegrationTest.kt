@@ -31,14 +31,18 @@ class MetricsPipelineIntegrationTest {
         assertTrue(refreshed.maxSegmentId > 0, "the newest advertised id, not the init placeholder: $refreshed")
 
         // The gauges are fed by the metrics actor, so they land a turn after the event carrying
-        // the values. Wait for the gauge to reach the id this poll advertised rather than
-        // scraping once and reading whatever the actor happened to have processed by then —
-        // which is the whole reason this assertion used to fail in a loaded full-suite run.
+        // the values. Wait for the gauge to *reach* the id this poll advertised rather than scraping
+        // once and reading whatever the actor happened to have processed by then.
+        //
+        // `>=`, not `==`: the mock keeps advancing the advertised id, so another poll can land
+        // between this sample and the scrape and the gauge moves past it — waiting for equality
+        // then waits for a value that never comes back, which is how this failed whenever the
+        // component graph was fast enough to keep up.
         val advertised = refreshed.maxSegmentId.toLong()
-        val currentId = fx.await(10.seconds, "the segment-id gauge to carry $advertised") {
-            segmentIdGauge(fx)?.takeIf { it == advertised }
+        val currentId = fx.await(10.seconds, "the segment-id gauge to reach $advertised") {
+            segmentIdGauge(fx)?.takeIf { it >= advertised }
         }
-        assertEquals(advertised, currentId, "the gauge must carry the advertised id")
+        assertTrue(currentId >= advertised, "the gauge must reach the advertised id, got $currentId")
 
         val metrics = fx.get("/metrics").bodyAsText()
         assertTrue(

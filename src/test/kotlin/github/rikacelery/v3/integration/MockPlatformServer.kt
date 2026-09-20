@@ -277,6 +277,9 @@ class MockPlatformServer(
 
     fun subscribedChannels(): Set<String> = sessions.flatMap { it.subscribed.toList() }.toSet()
 
+    /** Channels each live connection currently holds, in connection order. */
+    fun channelsPerConnection(): List<Int> = sessions.map { it.subscribed.size }
+
     /** Blocks until any session subscribes to [channel]. */
     suspend fun awaitSubscription(channel: String, timeout: Duration = 2.seconds): Boolean =
         withTimeoutOrNull(timeout) {
