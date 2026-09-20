@@ -69,6 +69,42 @@ class PreviewServer(
      */
     private val framePermits = Semaphore(FRAME_CONCURRENCY)
 
+    /**
+     * A second, independent permit for frames the user is looking at *right now*.
+     *
+     * The timeline fills itself in with a background sweep, and those extractions
+     * would otherwise occupy every permit and put a hover preview behind up to
+     * [FRAME_CONCURRENCY] seeks of queue — a third of a second of pure latency on
+     * the one request that has a human waiting on it. The priority lane is strictly
+     * additive (one more process at most), never a reordering of the shared lane,
+     * so a burst of hovers cannot starve the background sweep either.
+     */
+    private val framePriorityPermits = Semaphore(1)
+
+    /**
+     * On-disk frame timestamps per `<mediaId>-<width>`, keyed in tenths of a second.
+     *
+     * `cachedFrameTimes` answers the timeline's "what is already local" marks, and
+     * every editor open asks for it. Deriving it from a directory walk alone is fine
+     * at first but grows with the cache the user builds up, so a listing is cached and
+     * later refined by the frames this process produces.
+     */
+    private val cachedTimes = ConcurrentHashMap<String, MutableSet<Long>>()
+
+    private val indexStamp = ConcurrentHashMap<String, Long>()
+
+    /**
+     * Frames a prewarm sweep has already been asked for, so repeated scrolling over the
+     * same ground does not queue the same extraction again and again.
+     */
+    private val requestedFrames: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** True the first time this frame is scheduled; later sweeps skip it. */
+    private fun rememberRequested(key: String): Boolean {
+        if (requestedFrames.size > REQUESTED_FRAMES_MAX) requestedFrames.clear()
+        return requestedFrames.add(key)
+    }
+
     private val cacheBytes = AtomicLong(0)
 
     fun segmentCount(durationSeconds: Double): Int {
@@ -203,20 +239,33 @@ class PreviewServer(
         "-y", out.absolutePath
     )
 
-    /** A single still frame, used for precise trimming and timeline thumbnails. */
-    suspend fun frame(entry: MediaEntry, source: File, atSeconds: Double, width: Int): ByteArray? {
-        val rounded = Math.round(atSeconds * 10) / 10.0
+    /**
+     * A single still frame, used for precise trimming and timeline thumbnails.
+     *
+     * [priority] puts the request in front of the background sweep: see
+     * [framePriorityPermits]. Only the client's hover preview asks for it.
+     */
+    suspend fun frame(entry: MediaEntry, source: File, atSeconds: Double, width: Int, priority: Boolean = false): ByteArray? {
+        val rounded = snapFrameTime(atSeconds)
         val key = "${entry.id}-${width}-${Math.round(rounded * 10)}"
         frameCache[key]?.let { return it }
+        frameWarmCache[key]?.let { return it }
         while (true) {
             frameInFlight[key]?.let { return it.await() }
             val fresh = CompletableDeferred<ByteArray?>()
             if (frameInFlight.putIfAbsent(key, fresh) == null) {
                 try {
-                    val bytes = framePermits.withPermit {
-                        withContext(Dispatchers.IO) { runCatching { extractFrame(source, rounded, width, key) }.getOrNull() }
+                    val semaphore = if (priority) framePriorityPermits else framePermits
+                    val bytes = semaphore.withPermit {
+                        // A hover frame may have been produced while this waited.
+                        frameCache[key] ?: frameWarmCache[key] ?: withContext(Dispatchers.IO) {
+                            runCatching { extractFrame(source, rounded, width, key) }.getOrNull()
+                        }
                     }
-                    if (bytes != null) frameCache[key] = bytes
+                    if (bytes != null) {
+                        frameCache[key] = bytes
+                        if (priority) rememberWarmFrame(key, bytes)
+                    }
                     fresh.complete(bytes)
                     return bytes
                 } catch (e: Throwable) {
@@ -229,6 +278,70 @@ class PreviewServer(
         }
     }
 
+    /**
+     * The timestamps on the [step] grid that cover `[fromSeconds, toSeconds]`.
+     *
+     * Indices are exact by construction — `index * step` where the step is a multiple
+     * of [FRAME_BUCKET_SECONDS] — which is what lets the client line a level up with
+     * the cache instead of asking for 12.300000000000001 and missing 12.3.
+     */
+    fun frameGrid(fromSeconds: Double, toSeconds: Double, stepSeconds: Double, cap: Int = MAX_STRIP_FRAMES): List<Double> {
+        val step = snapFrameTime(stepSeconds).coerceAtLeast(FRAME_BUCKET_SECONDS)
+        // Index arithmetic, not a division with a fudge factor: the grid is a *set of
+        // whole buckets*, so the ends are found by counting buckets rather than by
+        // dividing and nudging, which would swallow a cell once the step is large.
+        val stride = Math.max(1L, Math.round(step / FRAME_BUCKET_SECONDS))
+        val first = Math.max(0L, Math.round(fromSeconds / FRAME_BUCKET_SECONDS))
+        val last = Math.max(first, Math.round(toSeconds / FRAME_BUCKET_SECONDS))
+        val count = ((last - first) / stride + 1).toInt()
+        if (count <= 0) return emptyList()
+        return (0 until minOf(count, cap)).map { i -> snapFrameTime((first + i * stride) * FRAME_BUCKET_SECONDS) }
+    }
+
+    /**
+     * Produces the frames of one timeline level so later `/frame` reads are cache hits.
+     *
+     * Runs in the server's scope rather than the request's: the client is handed the
+     * grid and hangs up immediately, and a cancelled request must not leave a sweep
+     * half done. Frames already on disk, or already scheduled, are skipped, so a client
+     * that scrolls quickly queues each distinct frame once and no more.
+     */
+    suspend fun prewarm(entry: MediaEntry, source: File, times: List<Double>, width: Int) {
+        for (at in times) {
+            val key = "${entry.id}-${width}-${Math.round(snapFrameTime(at) * 10)}"
+            if (!rememberRequested(key)) continue
+            // One unreadable instant must not abandon the rest of the level: the client
+            // asked for a whole screenful and will simply draw around a gap.
+            runCatching { frame(entry, source, at, width) }
+        }
+    }
+
+    /**
+     * The time grid every frame request is snapped to, in seconds.
+     *
+     * Both the frame cache key and the on-disk file name quantise to a tenth of a
+     * second, so a request for 12.34 s and one for 12.36 s are the same frame. The
+     * timeline subdivides by halving, so as long as it steps on multiples of this
+     * bucket every level lands exactly on a cache entry instead of a near miss.
+     */
+    fun frameBucketSeconds(): Double = FRAME_BUCKET_SECONDS
+
+    /** Snaps a timestamp onto the frame cache grid. */
+    fun snapFrameTime(seconds: Double): Double =
+        Math.round(seconds / FRAME_BUCKET_SECONDS) * FRAME_BUCKET_SECONDS
+
+    private fun rememberWarmFrame(key: String, bytes: ByteArray) {
+        frameWarmCache[key] = bytes
+    }
+
+    /**
+     * One JPEG for one timestamp, straight from the source.
+     *
+     * `-ss` sits before `-i`, so this is an input seek: ffmpeg jumps to the
+     * keyframe at or before the requested time instead of decoding from the start of
+     * a multi-gigabyte file. Its output timestamps start at zero, which is what makes
+     * the frame land at the timestamp the caller asked for rather than a GOP early.
+     */
     private suspend fun extractFrame(source: File, atSeconds: Double, width: Int, key: String): ByteArray? {
         val out = File(Proc.ensureDir(frameDir()), "$key.jpg")
         if (!isUsable(out)) {
@@ -244,7 +357,21 @@ class PreviewServer(
             )
             Proc.exec(cmd = command.toTypedArray())
         }
-        return if (isUsable(out)) out.readBytes() else null
+        if (!isUsable(out)) return null
+        // Keeps the "this timestamp is already local" marks honest for frames this
+        // session produced, without waiting for the next directory walk.
+        indexCachedTime(out.name)
+        return out.readBytes()
+    }
+
+    /** Adds one `<mediaId>-<width>-<tenths>.jpg` file name to the cached index. */
+    private fun indexCachedTime(fileName: String) {
+        val parts = fileName.removeSuffix(".jpg").split('-')
+        if (parts.size < 3) return
+        val tenths = parts.last().toLongOrNull() ?: return
+        val width = parts[parts.size - 2].toIntOrNull() ?: return
+        val mediaId = parts.subList(0, parts.size - 2).joinToString("-")
+        cachedTimes.computeIfAbsent("$mediaId-$width") { ConcurrentHashMap.newKeySet() }.add(tenths)
     }
 
     private fun cacheDir(entry: MediaEntry, quality: PreviewQuality): File =
@@ -259,15 +386,27 @@ class PreviewServer(
      * shades cached frames — the cache survives restarts, so this is worth showing
      * rather than only reflecting the current browser session.
      */
-    fun cachedFrameTimes(mediaId: String, width: Int): List<Double> = withFrameDir { dir ->
+    fun cachedFrameTimes(mediaId: String, width: Int): List<Double> {
+        val key = "$mediaId-$width"
+        val now = System.currentTimeMillis()
+        cachedTimes[key]?.let { if (now - (indexStamp[key] ?: 0L) < FRAME_INDEX_TTL_MS) return it.sortedTimes() }
+        val started = System.currentTimeMillis()
         val prefix = "$mediaId-$width-"
-        dir.listFiles { f -> f.isFile && f.name.startsWith(prefix) && f.name.endsWith(".jpg") }
-            ?.mapNotNull { file ->
-                file.name.removePrefix(prefix).removeSuffix(".jpg").toLongOrNull()?.let { it / 10.0 }
-            }
-            ?.sorted()
-            ?: emptyList()
+        val tenths = withFrameDir { dir ->
+            dir.listFiles { f -> f.isFile && f.name.startsWith(prefix) && f.name.endsWith(".jpg") }
+                ?.mapNotNull { it.name.removePrefix(prefix).removeSuffix(".jpg").toLongOrNull() }
+                ?: emptyList()
+        }
+        // The stamp is taken *before* the listing and merged rather than replaced: a
+        // frame produced while this walk ran must neither be dropped from the answer
+        // nor make the next caller believe a complete listing sits behind this stamp.
+        val index = cachedTimes.computeIfAbsent(key) { ConcurrentHashMap.newKeySet() }
+        index.addAll(tenths)
+        indexStamp[key] = started
+        return index.sortedTimes()
     }
+
+    private fun MutableSet<Long>.sortedTimes(): List<Double> = sorted().map { it / 10.0 }
 
     private inline fun <T> withFrameDir(block: (File) -> T): T = block(frameDir())
 
@@ -277,6 +416,13 @@ class PreviewServer(
             val dir = File(config.cacheDir, rel)
             if (dir.isDirectory) dir.walkBottomUp().forEach { runCatching { it.delete() } }
         }
+        // The in-memory copies would otherwise keep serving a deleted recording's
+        // frames, and the cached-time index would keep claiming they are on disk.
+        frameCache.keys.removeIf { it.startsWith("$mediaId-") }
+        frameWarmCache.keys.removeIf { it.startsWith("$mediaId-") }
+        cachedTimes.keys.removeIf { it.startsWith("$mediaId-") }
+        indexStamp.keys.removeIf { it.startsWith("$mediaId-") }
+        requestedFrames.removeIf { it.startsWith("$mediaId-") }
     }
 
     /**
@@ -304,7 +450,25 @@ class PreviewServer(
         log.info("cache trimmed: freed {} MB (cap {} MB)", freed / 1_048_576, config.cacheLimitBytes / 1_048_576)
     }
 
-    private val frameCache = ConcurrentHashMap<String, ByteArray>()
+    /**
+     * Bounded heap copies of recently produced frames.
+     *
+     * The timeline hover lane asks for the same frame again whenever the cursor comes
+     * back over ground it has already covered; serving that from a directory read and
+     * a response body is exactly the latency the cursor notices. A long scrub touches
+     * hundreds of frames, though, so this cannot grow without bound — and a plain size
+     * cap would evict the frame the cursor is about to return to. Access order gives a
+     * one-line LRU instead.
+     */
+    private class FrameLru(private val max: Int) : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?) = size > max
+    }
+
+    /** Every frame this process has produced; see [FrameLru]. */
+    private val frameCache = FrameLru(FRAME_MEMORY_CACHE_MAX)
+
+    /** The hover lane's own pool, kept warmer and smaller than [frameCache]. */
+    private val frameWarmCache = FrameLru(FRAME_WARM_CACHE_MAX)
 
     private companion object {
         const val TIMESTAMP_VERSION = "pts2"
@@ -312,6 +476,32 @@ class PreviewServer(
 
         /** Parallel frame extractions; each is a seek on the source file. */
         const val FRAME_CONCURRENCY = 4
+
+        /**
+         * The time grid every frame request snaps to, in seconds.
+         *
+         * The frame cache key and the on-disk file name both quantise to a tenth of a
+         * second, so 12.34 s and 12.36 s are the same frame. The client subdivides the
+         * timeline by halving from this bucket, so every level it asks for lands
+         * exactly on a cache entry instead of a near miss next to one.
+         */
+        const val FRAME_BUCKET_SECONDS = 0.1
+
+        /** Guard against one client asking for an entire recording in a single call. */
+        const val MAX_STRIP_FRAMES = 240
+
+        /** Tolerance for grid arithmetic, matching the cut engine's snap tolerance. */
+        const val EPSILON = 1e-3
+
+        /** Bound on the "already scheduled" set; clearing it only costs re-checks. */
+        const val REQUESTED_FRAMES_MAX = 20_000
+
+        /** Heap ceilings for the two frame pools. */
+        const val FRAME_MEMORY_CACHE_MAX = 64
+        const val FRAME_WARM_CACHE_MAX = 24
+
+        /** How long a cached on-disk frame listing is trusted before it is re-walked. */
+        const val FRAME_INDEX_TTL_MS = 1500L
 
         /**
          * Locale-independent number formatting. `String.format` with a default locale

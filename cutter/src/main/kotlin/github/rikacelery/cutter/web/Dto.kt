@@ -205,6 +205,21 @@ data class CancelDto(val cancelled: Boolean)
 @Serializable
 data class CachedFramesDto(val width: Int, val times: List<Double>)
 
+/**
+ * One rung of the timeline's frame pyramid.
+ *
+ * The client subdivides the timeline by halving, and at every level it asks for the
+ * timestamps on that level's grid. The server answers with the times it actually
+ * used ([times], always `index * step` snapped to the frame cache grid) so the client
+ * never has to reproduce the rounding and end up with a near miss next to a hit.
+ */
+@Serializable
+data class FrameStripDto(
+    val width: Int,
+    val step: Double,
+    val times: List<Double>
+)
+
 @Serializable
 data class ProxyDto(
     val mediaId: String,
