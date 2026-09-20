@@ -1,6 +1,7 @@
 package github.rikacelery.v3.core
 
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -148,7 +149,14 @@ object PipelineMetrics {
 
     // ── Live event source ─────────────────────────────────────────────────────
 
-    /** 1 while at least one WebSocket pool is connected. */
+    /**
+     * 1 while at least one WebSocket connection is up.
+     *
+     * Derived from the per-pool states below rather than from the last event: the source runs a
+     * *shard* of connections now (13 of them at 230 rooms), so "the last connect/disconnect event
+     * wins" said nothing about whether events were still arriving. The event counters below stay as
+     * shard-wide totals.
+     */
     @Volatile
     var wsConnected: Boolean = false
         private set
@@ -165,6 +173,61 @@ object PipelineMetrics {
         wsConnected = false
         wsDisconnects.incrementAndGet()
     }
+
+    /**
+     * One WebSocket connection of the shard, as the exporter needs it.
+     *
+     * The shard sizes itself against a measured per-connection subscribe budget, so an operator has
+     * to be able to see each connection's state on its own: how many channels it carries, whether it
+     * is up, how many frames are queued for it, and whether the platform refused any of its
+     * subscriptions. A single shard-wide "connected" flag cannot show a connection that went quiet —
+     * and a quiet connection is exactly how events disappear without a single error.
+     */
+    class WsPoolState {
+        val connected = AtomicBoolean(false)
+        val channels = AtomicInteger(0)
+        val sendQueue = AtomicInteger(0)
+        val connects = AtomicLong(0)
+        val disconnects = AtomicLong(0)
+        val rejectedSubscribes = ConcurrentHashMap<String, AtomicLong>()
+    }
+
+    private val wsPools = ConcurrentHashMap<Int, WsPoolState>()
+    private val wsChannelsTotal = AtomicInteger(0)
+
+    /** Registers (or fetches) the state of connection [index]; called when the shard is built. */
+    fun wsPool(index: Int): WsPoolState = wsPools.computeIfAbsent(index) { WsPoolState() }
+
+    /**
+     * Drops a retired connection's series. Prometheus marks them stale on the next scrape, which is
+     * what tells a resize apart from a connection that simply stopped reporting.
+     */
+    fun forgetWsPool(index: Int) {
+        wsChannelsTotal.addAndGet(-(wsPools.remove(index)?.channels?.get() ?: 0))
+    }
+
+    fun wsPoolConnected(index: Int, up: Boolean) {
+        val state = wsPool(index)
+        state.connected.set(up)
+        if (up) state.connects.incrementAndGet() else state.disconnects.incrementAndGet()
+    }
+
+    fun wsPoolChannels(index: Int, channels: Int) {
+        val state = wsPool(index)
+        wsChannelsTotal.addAndGet(channels - state.channels.getAndSet(channels))
+    }
+
+    fun wsPoolSendQueue(index: Int, depth: Int) {
+        wsPool(index).sendQueue.set(depth)
+    }
+
+    fun wsPoolSubscribeRejected(index: Int, code: String) {
+        wsPool(index).rejectedSubscribes.bump(code)
+    }
+
+    /** Connections the shard currently runs, and how many of them are up. */
+    fun wsPoolCounts(): Pair<Int, Int> =
+        wsPools.size to wsPools.values.count { it.connected.get() }
 
     // ── Prometheus rendering ──────────────────────────────────────────────────
 
@@ -248,14 +311,45 @@ object PipelineMetrics {
 
         // Losing the WebSocket is not fatal but it is silent: room status changes stop arriving, so
         // rooms sit armed and unrecorded until the periodic refresh happens to notice.
-        family(sb, "xhrec_ws_connected", "The live event WebSocket is connected (1) or not (0)", "gauge")
-        sb.appendLine("xhrec_ws_connected ${if (wsConnected) 1 else 0}")
+        val (poolCount, poolsUp) = wsPoolCounts()
+        family(sb, "xhrec_ws_connected", "At least one live event connection is up (1) or the shard is blind (0)", "gauge")
+        sb.appendLine("xhrec_ws_connected ${if (poolCount == 0) (if (wsConnected) 1 else 0) else if (poolsUp > 0) 1 else 0}")
 
         family(sb, "xhrec_ws_connects_total", "Successful WebSocket connects", "counter")
         sb.appendLine("xhrec_ws_connects_total ${wsConnects.get()}")
 
         family(sb, "xhrec_ws_disconnects_total", "WebSocket disconnects", "counter")
         sb.appendLine("xhrec_ws_disconnects_total ${wsDisconnects.get()}")
+
+        // Per connection: the shard trades channel count for connection count, so a connection that
+        // is up but carrying nothing (or queueing frames it cannot write) is the failure this block
+        // exists to make visible.
+        family(sb, "xhrec_ws_pools", "WebSocket connections in the shard", "gauge")
+        sb.appendLine("xhrec_ws_pools $poolCount")
+        family(sb, "xhrec_ws_pools_connected", "WebSocket connections currently up", "gauge")
+        sb.appendLine("xhrec_ws_pools_connected $poolsUp")
+        family(sb, "xhrec_ws_channels", "Channels the shard is subscribed to, across all connections", "gauge")
+        sb.appendLine("xhrec_ws_channels ${wsChannelsTotal.get()}")
+
+        if (wsPools.isNotEmpty()) {
+            family(sb, "xhrec_ws_pool_connected", "This connection is up (1) or not (0)", "gauge")
+            family(sb, "xhrec_ws_pool_channels", "Channels assigned to this connection (its subscribe budget)", "gauge")
+            family(sb, "xhrec_ws_pool_send_queue", "Frames queued for this connection, not yet written", "gauge")
+            family(sb, "xhrec_ws_pool_connects_total", "Successful connects of this connection", "counter")
+            family(sb, "xhrec_ws_pool_disconnects_total", "Disconnects of this connection", "counter")
+            family(sb, "xhrec_ws_pool_subscribe_rejected_total", "Subscribe commands the platform refused, by code", "counter")
+            wsPools.toSortedMap().forEach { (index, state) ->
+                val labels = "pool=\"$index\""
+                sb.appendLine("xhrec_ws_pool_connected{$labels} ${if (state.connected.get()) 1 else 0}")
+                sb.appendLine("xhrec_ws_pool_channels{$labels} ${state.channels.get()}")
+                sb.appendLine("xhrec_ws_pool_send_queue{$labels} ${state.sendQueue.get()}")
+                sb.appendLine("xhrec_ws_pool_connects_total{$labels} ${state.connects.get()}")
+                sb.appendLine("xhrec_ws_pool_disconnects_total{$labels} ${state.disconnects.get()}")
+                state.rejectedSubscribes.toSortedMap().forEach { (code, count) ->
+                    sb.appendLine("xhrec_ws_pool_subscribe_rejected_total{$labels,code=\"$code\"} ${count.get()}")
+                }
+            }
+        }
     }
 
     /** One HELP/TYPE pair per family: repeating them inside the loop makes strict scrapers reject. */

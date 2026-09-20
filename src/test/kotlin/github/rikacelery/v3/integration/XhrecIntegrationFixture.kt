@@ -87,7 +87,19 @@ import kotlin.time.Duration.Companion.seconds
 class XhrecIntegrationFixture(
     private val app: ApplicationTestBuilder,
     val mock: MockPlatformServer = MockPlatformServer(),
-    val tuning: RuntimeTuning = testTuning()
+    val tuning: RuntimeTuning = testTuning(),
+    /**
+     * How to build the component under test. The default is the production wiring; a test that wants
+     * to exercise the shard with a small channel budget supplies its own (see
+     * `WebSocketShardingIntegrationTest`).
+     */
+    private val liveEventSourceFactory: ((
+        bus: github.rikacelery.v3.core.EventBus,
+        scope: CoroutineScope,
+        provider: TestHttpClientProvider,
+        tuning: RuntimeTuning,
+        url: (String) -> String
+    ) -> LiveEventSource)? = null
 ) : AutoCloseable {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -187,15 +199,17 @@ class XhrecIntegrationFixture(
         configComponent = ConfigComponent(config, apiClient, eventBus, scope)
         authComponent = AuthComponent(usersPath, eventBus, scope)
         roomComponent = RoomComponent(apiClient, listConfPath, requestBus, eventBus, scope, tuning)
-        liveEventSource = LiveEventSource(
-            tokenProvider = { apiClient.fetchGuestWsToken() },
-            eventBus = eventBus,
-            parentScope = scope,
-            wsPoolCount = 1,
-            httpClientProvider = provider,
-            runtimeTuning = tuning,
-            wsUrlBuilder = { host -> "ws://$host/connection/websocket" }
-        )
+        val wsUrl: (String) -> String = { host -> "ws://$host/connection/websocket" }
+        liveEventSource = liveEventSourceFactory?.invoke(eventBus, scope, provider, tuning, wsUrl)
+            ?: LiveEventSource(
+                tokenProvider = { apiClient.fetchGuestWsToken() },
+                eventBus = eventBus,
+                parentScope = scope,
+                wsPoolCount = 1,
+                httpClientProvider = provider,
+                runtimeTuning = tuning,
+                wsUrlBuilder = wsUrl
+            )
         downloaderComponent = DownloaderComponent(
             dataChannel,
             eventBus = eventBus,
@@ -296,22 +310,27 @@ class XhrecIntegrationFixture(
     }
 
     /**
-     * Waits until LiveEventSource has subscribed the room's status channels on the mock.
+     * Waits until LiveEventSource has subscribed *every* channel an idle room holds.
      *
-     * `EventBus.subscribe` launches collectors asynchronously, so a room announced right
-     * after startup can miss its `RoomAdded`. Re-announcing is idempotent (subscribeRoom
-     * dedupes) and makes the WebSocket path deterministic instead of timing-dependent.
+     * The whole set, not just `broadcastChanged`: subscriptions are paced (the platform drops a
+     * burst it cannot process), so the other five channels land ~20 ms later, and a test that pushes
+     * `modelStatusChanged` or `streamChanged` immediately after this returns would otherwise race
+     * its own subscription.
+     *
+     * `EventBus.subscribe` launches collectors asynchronously, so a room announced right after
+     * startup can miss its `RoomAdded`. Re-announcing is idempotent and makes the WebSocket path
+     * deterministic instead of timing-dependent.
      */
     suspend fun awaitRoomSubscribed(roomId: Long, timeout: Duration = 10.seconds) {
-        val channel = "broadcastChanged@$roomId"
+        val wanted = IDLE_CHANNELS.map { "$it@$roomId" }.toSet()
         val deadline = System.currentTimeMillis() + timeout.inWholeMilliseconds
         while (System.currentTimeMillis() < deadline) {
-            if (mock.subscribedChannels().contains(channel)) return
+            if (wanted.all { it in mock.subscribedChannels() }) return
             rooms().firstOrNull { it.id == roomId }?.let { eventBus.publish(RoomAdded(it.id, it.name)) }
             delay(50.milliseconds)
         }
         throw AssertionError(
-            "timed out waiting for $channel; mock subscriptions=${mock.subscribedChannels()}; " +
+            "timed out waiting for $wanted; mock subscriptions=${mock.subscribedChannels()}; " +
                 "wsConnections=${mock.connectionCount()}"
         )
     }
@@ -501,6 +520,16 @@ class XhrecIntegrationFixture(
     }
 
     companion object {
+        /**
+         * The channels an idle (tracked, not recording) room subscribes on the WebSocket — the
+         * production `LiveEventSource.statusChannels`, mirrored here so a test can wait for the
+         * whole set.
+         */
+        val IDLE_CHANNELS = listOf(
+            "broadcastChanged", "streamChanged", "broadcastStarted", "broadcastStopped",
+            "modelStatusChanged", "broadcastSettingsChanged"
+        )
+
         /** Compressed production timings: same code paths, seconds instead of minutes. */
         fun testTuning(
             roomPollInterval: Duration = 200.milliseconds,
@@ -513,6 +542,10 @@ class XhrecIntegrationFixture(
             roomRefreshDebounce = 20.milliseconds,
             webSocketReconnectInitial = 50.milliseconds,
             webSocketReconnectMax = 200.milliseconds,
+            // a resize reconnects every connection, so a test wants the room-set burst to settle as
+            // fast as the debounce allows instead of waiting out the production two seconds
+            wsPoolResizeDebounce = 50.milliseconds,
+            wsPoolConnectStagger = 5.milliseconds,
             preconfigRetryInterval = 100.milliseconds,
             // Both of these only gate when test-visible state lands (list.conf, a paid ticket's
             // token); the production defaults of a second each are pure waiting inside a test.
@@ -581,9 +614,16 @@ class TestHttpClientProvider : HttpClientProvider, AutoCloseable {
 
 internal fun withFixture(
     tuning: RuntimeTuning = XhrecIntegrationFixture.testTuning(),
+    liveEventSource: ((
+        bus: github.rikacelery.v3.core.EventBus,
+        scope: CoroutineScope,
+        provider: TestHttpClientProvider,
+        tuning: RuntimeTuning,
+        url: (String) -> String
+    ) -> LiveEventSource)? = null,
     block: suspend (XhrecIntegrationFixture) -> Unit
 ) = testApplicationWithBudget {
-    XhrecIntegrationFixture(this, tuning = tuning).use { fx ->
+    XhrecIntegrationFixture(this, tuning = tuning, liveEventSourceFactory = liveEventSource).use { fx ->
         fx.start()
         fx.installRoutes()
         block(fx)

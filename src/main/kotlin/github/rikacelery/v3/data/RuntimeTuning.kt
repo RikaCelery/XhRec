@@ -24,6 +24,24 @@ data class RuntimeTuning(
     val configPersistDebounce: Duration = 1.seconds,
     val webSocketReconnectInitial: Duration = 1.seconds,
     val webSocketReconnectMax: Duration = 30.seconds,
+    /**
+     * How long a change to the room set waits before the WebSocket shard is resized. Rooms arrive
+     * in bursts (list.conf bootstraps every room back to back) and a resize reconnects every
+     * connection, so the burst has to settle into one resize instead of one per room.
+     */
+    val wsPoolResizeDebounce: Duration = 2.seconds,
+    /**
+     * Gap between one connection's first dial and the next one's. The platform throttles new
+     * WebSocket handshakes per source IP, so a shard must come up as a trickle rather than a burst;
+     * 16 connections therefore take ~4 s to all be up, which is invisible next to a reconnect
+     * backoff.
+     */
+    val wsPoolConnectStagger: Duration = 250.milliseconds,
+    /**
+     * Budget for a single WebSocket frame write. A socket the platform stopped reading must not pin
+     * its connection's sender: the frame is dropped and the next (re)connect re-subscribes the room.
+     */
+    val webSocketSendTimeout: Duration = 10.seconds,
     val preconfigRetryInterval: Duration = 15.seconds,
     /**
      * How long the group-show ticket path waits before asking the platform once more for the model

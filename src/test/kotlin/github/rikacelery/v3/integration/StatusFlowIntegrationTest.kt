@@ -211,6 +211,12 @@ class StatusFlowIntegrationTest {
             fx.ready()
             fx.startRecording()
 
+            // Subscriptions are paced (the platform drops a burst it cannot process), so the push
+            // below must wait for the channel to actually exist — the mock does not queue.
+            assertTrue(
+                fx.mock.awaitSubscription("streamChanged@1001", 10.seconds),
+                "stream lifecycle channel must be subscribed: ${fx.mock.subscribedChannels()}"
+            )
             fx.mock.setStreamStatus(1001, "finished")
 
             val ready = fx.awaitEvent<FileReady>(15.seconds) { it.roomId == 1001L }

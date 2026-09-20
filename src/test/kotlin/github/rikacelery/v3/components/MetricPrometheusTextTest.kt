@@ -1,6 +1,7 @@
 package github.rikacelery.v3.components
 
 import github.rikacelery.v3.core.EventBus
+import github.rikacelery.v3.core.PipelineMetrics
 import github.rikacelery.v3.events.DownloadStarted
 import github.rikacelery.v3.events.RecordingStarted
 import github.rikacelery.v3.events.RecordingStopped
@@ -85,6 +86,55 @@ class MetricPrometheusTextTest {
                 "the restarted session starts from zero instead of carrying the previous total"
             )
         } finally {
+            metric.stop()
+        }
+    }
+
+    /**
+     * The event source runs a *shard* of connections, so one shard-wide "connected" flag cannot show
+     * the failure that matters: a connection that is up but carrying nothing, or queueing frames it
+     * cannot write. Each connection reports its own state.
+     */
+    @Test
+    fun `each websocket connection reports its own state`() = runTest(UnconfinedTestDispatcher()) {
+        val metric = MetricComponent(EventBus(), this)
+        metric.start()
+        try {
+            PipelineMetrics.wsPool(0)
+            PipelineMetrics.wsPool(1)
+            PipelineMetrics.wsPoolConnected(0, true)
+            PipelineMetrics.wsPoolChannels(0, 6)
+            PipelineMetrics.wsPoolSendQueue(0, 3)
+            PipelineMetrics.wsPoolSubscribeRejected(0, "106")
+            runCurrent()
+
+            val text = metric.prometheusText()
+            assertTrue("""xhrec_ws_pools 2""" in text, text)
+            assertTrue("""xhrec_ws_pools_connected 1""" in text, text)
+            assertTrue("""xhrec_ws_channels 6""" in text, text)
+            assertTrue("""xhrec_ws_connected 1""" in text, "one live connection is enough to receive events")
+            assertTrue("""xhrec_ws_pool_connected{pool="0"} 1""" in text, text)
+            assertTrue("""xhrec_ws_pool_connected{pool="1"} 0""" in text, text)
+            assertTrue("""xhrec_ws_pool_channels{pool="0"} 6""" in text, text)
+            assertTrue("""xhrec_ws_pool_send_queue{pool="0"} 3""" in text, text)
+            assertTrue("""xhrec_ws_pool_connects_total{pool="0"} 1""" in text, text)
+            assertTrue("""xhrec_ws_pool_subscribe_rejected_total{pool="0",code="106"} 1""" in text, text)
+
+            // a connection that goes down keeps its series and flips the gauge, so a resize (series
+            // gone) is distinguishable from a connection that stopped working (series 0)
+            PipelineMetrics.wsPoolConnected(0, false)
+            runCurrent()
+            assertTrue("""xhrec_ws_pool_connected{pool="0"} 0""" in metric.prometheusText())
+
+            PipelineMetrics.forgetWsPool(0)
+            PipelineMetrics.forgetWsPool(1)
+            runCurrent()
+            val after = metric.prometheusText()
+            assertTrue("""xhrec_ws_pool_connected{pool="0"}""" !in after, "a retired connection stops reporting")
+            assertTrue("""xhrec_ws_pools 0""" in after, after)
+        } finally {
+            PipelineMetrics.forgetWsPool(0)
+            PipelineMetrics.forgetWsPool(1)
             metric.stop()
         }
     }
