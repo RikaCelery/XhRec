@@ -79,13 +79,26 @@ def to_classic_panel(name, element, layout_item):
             f"dashboard would render it as 'Plugin VizConfig not found'"
         )
 
-    queries = spec.get("data", {}).get("spec", {}).get("queries", [])
+    data_spec = spec.get("data", {}).get("spec", {})
+    queries = data_spec.get("queries", [])
     targets = []
     for index, entry in enumerate(queries):
         entry_spec = entry.get("spec", {})
         if entry_spec.get("hidden"):
             continue
         targets.append(to_classic_target(entry_spec.get("query", {}), entry_spec.get("refId", chr(65 + index))))
+
+    # Transformations are what turn several instant queries into one row per room (joinByField), drop
+    # the label columns (organize) and keep only interesting rows (filterByValue). Leaving them out
+    # does not fail loudly: the table silently collapses to `Time | Value #A`, which is how the Room
+    # Health panel lost every column but its first after a push.
+    transformations = []
+    for entry in data_spec.get("transformations") or []:
+        # v2 puts the transformation id in `group`; older exports nested it under `spec.id`
+        spec_body = entry.get("spec", entry)
+        transform_id = entry.get("group") or spec_body.get("id")
+        if transform_id:
+            transformations.append({"id": transform_id, "options": spec_body.get("options", {})})
 
     reference = layout_item.get("spec", {})
     panel = {
@@ -103,7 +116,10 @@ def to_classic_panel(name, element, layout_item):
         },
         "fieldConfig": viz_spec.get("fieldConfig", {"defaults": {}, "overrides": []}),
         "options": viz_spec.get("options", {}),
+        "transformations": transformations,
     }
+    if spec.get("links"):
+        panel["links"] = spec["links"]
     if viz_spec.get("pluginVersion"):
         panel["pluginVersion"] = viz_spec["pluginVersion"]
     return panel
@@ -150,6 +166,29 @@ def main():
         body={"dashboard": live, "overwrite": True, "message": "push grafana-xhrec-dashboard.json"},
     )
     print(f"pushed {len(panels)} panels: version {result.get('version')} {result.get('url')}")
+
+    # Read back and check the fields a lossy conversion drops *silently*: a panel without a
+    # visualization group fails to render at all, and a table without its transformations collapses
+    # to `Time | Value #A`. Both happened, so the script now verifies its own output.
+    pushed = {p["id"]: p for p in api(args.url, f"/api/dashboards/uid/{uid}")["dashboard"]["panels"]}
+    problems = []
+    for panel in panels:
+        stored = pushed.get(panel["id"])
+        if stored is None:
+            problems.append(f"panel {panel['id']} ({panel['title']}) is missing after the push")
+            continue
+        if len(stored.get("transformations", [])) != len(panel["transformations"]):
+            problems.append(
+                f"panel {panel['id']} ({panel['title']}) lost transformations: "
+                f"{len(panel['transformations'])} -> {len(stored.get('transformations', []))}"
+            )
+        if not (stored.get("targets") or [{}])[0].get("expr") and panel["type"] != "logs":
+            problems.append(f"panel {panel['id']} ({panel['title']}) has no query after the push")
+        if not (stored.get("datasource") or {}).get("uid"):
+            problems.append(f"panel {panel['id']} ({panel['title']}) lost its datasource")
+    if problems:
+        raise SystemExit("push verification failed:\n  " + "\n  ".join(problems))
+    print(f"verified {len(panels)} panels in place (types, datasources, queries, transformations)")
 
 
 if __name__ == "__main__":
