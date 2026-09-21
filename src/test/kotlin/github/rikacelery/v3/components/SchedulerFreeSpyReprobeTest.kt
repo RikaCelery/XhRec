@@ -63,12 +63,11 @@ class SchedulerFreeSpyReprobeTest {
         val granted = AtomicInteger(0)   // 0 = no benefit, 1 = the account may spy for free
         withPrivateRoom(granted) { h ->
             assertTrue(
-                awaitUntil(10.seconds) { h.entry.freeSpyExhausted },
-                "the room must stop probing once the privilege is known to be missing " +
-                        "(state=${h.entry.fsm.currentState}, verdicts=${h.entry.freeSpyVerdicts})"
+                awaitUntil(10.seconds) { h.entry.freeSpyExhausted && h.entry.fsm.currentState == SchedulerState.Armed },
+                "the room must stop probing and go back to waiting once the privilege is known to be " +
+                        "missing (state=${h.entry.fsm.currentState}, verdicts=${h.entry.freeSpyVerdicts})"
             )
             assertEquals("4242=benefit-inactive", h.entry.freeSpyVerdicts, "the verdict says why it is not recording")
-            assertEquals(SchedulerState.Armed, h.entry.fsm.currentState)
 
             // the operator enters the show in a browser (or the benefit activates): nothing tells the
             // recorder about it, exactly as in the report
@@ -88,16 +87,20 @@ class SchedulerFreeSpyReprobeTest {
     fun `a room whose show ended is not driven back onto the private route by the pending re-probe`() = runBlocking {
         val granted = AtomicInteger(0)
         withPrivateRoom(granted) { h ->
-            assertTrue(awaitUntil(10.seconds) { h.entry.freeSpyExhausted }, "the marker has to be set first")
+            assertTrue(
+                awaitUntil(10.seconds) { h.entry.freeSpyExhausted && h.entry.fsm.currentState == SchedulerState.Armed },
+                "the marker has to be set — and the room back to waiting — before the show ends"
+            )
 
             // the show ends for real: the platform's live channel says so, and the read agrees
             h.readStatus.set("off")
             h.eventBus.publish(RoomStatusChanged(7, "private", "off"))
             assertTrue(
-                awaitUntil(5.seconds) { !h.entry.freeSpyExhausted },
-                "leaving the private status must lift the marker and its pending re-probe"
+                awaitUntil(5.seconds) { !h.entry.freeSpyExhausted && h.entry.fsm.currentState == SchedulerState.Armed },
+                "leaving the private status must lift the marker and its pending re-probe " +
+                        "(state=${h.entry.fsm.currentState}, exhausted=${h.entry.freeSpyExhausted})"
             )
-            val attemptsSoFar = h.masterRequests()
+            val probesSoFar = h.camRequests()
 
             delay(700.milliseconds)   // well past the re-probe interval this test runs with
 
@@ -107,9 +110,9 @@ class SchedulerFreeSpyReprobeTest {
                 "a show that ended must not be preconfigured again by a stale timer"
             )
             assertEquals(
-                attemptsSoFar,
-                h.masterRequests(),
-                "the stale re-probe must not start another preconfig attempt"
+                probesSoFar,
+                h.camRequests(),
+                "the stale re-probe must not spend another privilege probe on a show that ended"
             )
         }
     }
@@ -122,8 +125,8 @@ class SchedulerFreeSpyReprobeTest {
         val entry: SchedulerEntry,
         /** The status the platform's own read answers with; the test moves it to end a show. */
         val readStatus: AtomicReference<String>,
-        /** Master-playlist requests, i.e. one per preconfig attempt that got a token. */
-        val masterRequests: () -> Int
+        /** One cam read per account per private preconfig attempt that looks for a privilege. */
+        val camRequests: () -> Int
     )
 
     /**
@@ -132,20 +135,19 @@ class SchedulerFreeSpyReprobeTest {
      */
     private suspend fun withPrivateRoom(granted: AtomicInteger, block: suspend (Harness) -> Unit) {
         val readStatus = AtomicReference("private")
-        val masters = AtomicInteger()
+        val cams = AtomicInteger()
         val cdn = HttpClient(MockEngine { request ->
             val url = request.url.toString()
             when {
                 url.endsWith("/api/front/v1/broadcasts/model") ->
                     respond("""{"item":{"status":"${readStatus.get()}"}}""", headers = jsonHeaders)
 
-                url.contains("/api/front/v2/models/7/cam") ->
+                url.contains("/api/front/v2/models/7/cam") -> {
+                    cams.incrementAndGet()
                     respond(camPayload(granted.get() == 1), headers = jsonHeaders)
-
-                request.url.encodedPath.startsWith("/master/") -> {
-                    masters.incrementAndGet()
-                    respond(masterPlaylist)
                 }
+
+                request.url.encodedPath.startsWith("/master/") -> respond(masterPlaylist)
 
                 request.url.encodedPath == "/media/model.m3u8" -> respond("#EXTM3U")
 
@@ -205,7 +207,7 @@ class SchedulerFreeSpyReprobeTest {
             scheduler.tell(
                 SchedulerSignal(7, SchedulerEvent.RoomStatusChanged, SchedulerDriveData(roomStatus = "private"))
             )
-            block(Harness(scheduler, eventBus, entry, readStatus) { masters.get() })
+            block(Harness(scheduler, eventBus, entry, readStatus) { cams.get() })
         } finally {
             scheduler.stop()
             CdnSelector.updateHosts(oldCdnHosts)
