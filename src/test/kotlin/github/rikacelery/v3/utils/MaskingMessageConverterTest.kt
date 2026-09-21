@@ -70,4 +70,28 @@ class MaskingMessageConverterTest {
     fun `numbers outside a url are left alone`() {
         assertEquals("segments=10012", convert("segments=10012"))
     }
+
+    /**
+     * The credential-only pass is what `/diagnose` uses: it renders internal state outside the log
+     * pipeline, so the signed URL values must be hidden while the room id (which the operator is
+     * already looking at) stays readable.
+     */
+    @Test
+    fun `the credential-only pass hides secrets but leaves room ids alone`() {
+        val previous = SensitiveStringRegistry.enabled
+        SensitiveStringRegistry.enabled = true
+        try {
+            SensitiveStringRegistry.maskRoom(2005L, "masking-test-credentials")
+            val out = MaskingMessageConverter.maskCredentials(
+                "playlistUrl=https://cdn.test/hls/2005/media/2005_720p.m3u8?psch=v2&pkey=secret&aclAuth=signed " +
+                        "Cookie: session=abc123"
+            )
+            assertTrue(out.contains("aclAuth=***"), out)
+            assertTrue(out.contains("pkey=***"), out)
+            assertTrue(out.contains("Cookie: ***"), out)
+            assertTrue(out.contains("/hls/2005/media/2005_720p.m3u8"), out)
+        } finally {
+            SensitiveStringRegistry.enabled = previous
+        }
+    }
 }
