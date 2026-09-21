@@ -15,6 +15,31 @@ import org.slf4j.LoggerFactory
 
 private val RENAME_REGEX = Regex("Model has new name: newName=(.*)")
 
+/** The fan-club benefit that lets a member spy on a paid show for free. */
+private const val FREE_SPYING = "freeSpying"
+
+/** A primitive's text, or null when the element is an object, an array or JSON null. */
+private fun JsonElement.primitiveText(name: String): String? =
+    ((this as? JsonObject)?.get(name) as? JsonPrimitive)?.contentOrNull
+
+/**
+ * Why the free-spy privilege check answered the way it did.
+ *
+ * Each value but [Granted] is a different answer to the operator's "so why is this room not
+ * recording?": the account pays for spying, the subscription lapsed, the tier has no free spying,
+ * or the payload no longer looks the way the check expects. [wire] is what the diagnose view and
+ * the log line carry.
+ */
+enum class FreeSpyVerdict(val wire: String) {
+    Granted("granted"),
+    NoSubscription("no-subscription"),
+    SubscriptionInactive("subscription-inactive"),
+    NoBenefit("no-benefit"),
+    BenefitInactive("benefit-inactive");
+
+    val granted: Boolean get() = this == Granted
+}
+
 /**
  * Parses a 404 response body of the broadcasts API. Every branch is a business result and throws,
  * so the caller can treat 404 as a terminal branch: a rename, a deletion, or a model that is not
@@ -215,22 +240,38 @@ class ApiClient(
         roomFetchCamInfo(roomId, "").PathSingleOrNull("user.user.username")
             ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 
-    suspend fun roomFetchModelToken(roomId: Long, user: User): String? {
-        val info = roomFetchCamInfo(roomId, user.cookie)
-        return info.PathSingle("cam.modelToken").asString().ifBlank { null }
-    }
+    suspend fun roomFetchModelToken(roomId: Long, user: User): String? =
+        camModelToken(roomFetchCamInfo(roomId, user.cookie))
 
-    suspend fun hasFreeSpyAccess(roomId: Long, user: User): Boolean {
-        val info = roomFetchCamInfo(roomId, user.cookie)
-        val subscription = info.PathSingleOrNull("cam.userFanClub.subscription")
-        if (subscription == null || subscription is JsonNull) return false
-        if (subscription.String("status") != "active") return false
-        val tier = subscription.String("tier")
-        val benefits = info.PathSingleOrNull("cam.userFanClub.benefits")?.jsonArray ?: return false
-        val freeSpyingBenefit = benefits.firstOrNull {
-            it.jsonObject["id"]?.asString() == "freeSpying"
-        } ?: return false
-        return freeSpyingBenefit.PathSingleOrNull("tiers.$tier.isActive")?.asBoolean() ?: false
+    /**
+     * The model token of a cam payload, or null when the platform sent none.
+     *
+     * Read leniently on purpose: a payload that no longer carries the field (or carries a
+     * differently shaped one) is "no token", which the caller reports and retries, instead of a
+     * `PathSingle` exception that only says "single element expected".
+     */
+    fun camModelToken(cam: JsonObject): String? =
+        (cam.PathSingleOrNull("cam.modelToken") as? JsonPrimitive)?.contentOrNull?.ifBlank { null }
+
+    /**
+     * Why this account may — or may not — spy on a paid show for free, read off a cam payload.
+     *
+     * The boolean this replaces could only say "no", which made a fan-club tier the account does not
+     * have indistinguishable from the platform renaming a field: both stopped the room with the same
+     * `no free spy access`, and the room stayed stopped until somebody re-armed it (issue #192).
+     */
+    fun freeSpyVerdict(cam: JsonObject): FreeSpyVerdict {
+        val subscription = cam.PathSingleOrNull("cam.userFanClub.subscription")
+        if (subscription == null || subscription is JsonNull) return FreeSpyVerdict.NoSubscription
+        if (subscription.primitiveText("status") != "active") return FreeSpyVerdict.SubscriptionInactive
+        val tier = subscription.primitiveText("tier").orEmpty()
+        val benefits = cam.PathSingleOrNull("cam.userFanClub.benefits") as? JsonArray
+            ?: return FreeSpyVerdict.NoBenefit
+        val benefit = benefits.firstOrNull { (it as? JsonObject)?.primitiveText("id") == FREE_SPYING }
+            ?: return FreeSpyVerdict.NoBenefit
+        if (tier.isBlank()) return FreeSpyVerdict.BenefitInactive
+        val active = (benefit.PathSingleOrNull("tiers.$tier.isActive") as? JsonPrimitive)?.booleanOrNull == true
+        return if (active) FreeSpyVerdict.Granted else FreeSpyVerdict.BenefitInactive
     }
 
     suspend fun roomRequestGroupShow(roomId: Long, user: User): Boolean {
