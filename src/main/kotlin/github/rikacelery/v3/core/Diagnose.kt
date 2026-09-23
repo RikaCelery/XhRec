@@ -4,6 +4,7 @@ import github.rikacelery.v3.fsm.ERROR
 import github.rikacelery.v3.fsm.KEEP
 import github.rikacelery.v3.fsm.NextState
 import github.rikacelery.v3.fsm.StateMachine
+import github.rikacelery.v3.utils.MaskingMessageConverter
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -103,7 +104,20 @@ private fun <S, E> List<github.rikacelery.v3.fsm.TransitionRecord<S, E>>.toJsonA
                     is ERROR -> "ERROR"
                     is NextState -> "-> ${t.state}"
                 })
-                if (record.data != null) put("data", BusMonitor.shorten(record.data))
+                if (record.data != null) put("data", BusMonitor.shorten(masked(record.data), DIAGNOSE_DATA_MAX))
             })
         }
     }
+
+/**
+ * How much of one transition's data the diagnose view keeps.
+ *
+ * The default 300 characters cut a `SchedulerDriveData` in half — the playlist URL alone is longer
+ * — and the tail is exactly the part that explains a stuck room (`failReason`, `tokenFailure`).
+ * History is bounded to ten transitions per state machine, so a longer string per record stays a
+ * small payload.
+ */
+private const val DIAGNOSE_DATA_MAX = 1000
+
+/** Transition data as the diagnose view renders it: credential values are masked, ids are not. */
+private fun masked(data: Any): String = MaskingMessageConverter.maskCredentials(data.toString())

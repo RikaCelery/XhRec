@@ -69,7 +69,7 @@ class SchedulerPreconfigRefreshTest {
                 "a 404 must ask RoomComponent to re-read the room (state=${h.entry.fsm.currentState})"
             )
             assertTrue(
-                awaitUntil { h.entry.lastFailReason == "playlist unusable (HTTP 404)" },
+                awaitUntil { h.entry.lastFailReason?.startsWith("playlist unusable (HTTP 404)") == true },
                 "a 404 is reported as an HTTP status, not a raw client message: ${h.entry.lastFailReason}"
             )
         }
@@ -83,8 +83,14 @@ class SchedulerPreconfigRefreshTest {
                 "a 403 must ask RoomComponent to re-read the room (state=${h.entry.fsm.currentState})"
             )
             assertTrue(
-                awaitUntil { h.entry.lastFailReason == "playlist unusable (HTTP 403)" },
+                awaitUntil { h.entry.lastFailReason?.startsWith("playlist unusable (HTTP 403)") == true },
                 "a 403 is reported as an HTTP status, not a raw client message: ${h.entry.lastFailReason}"
+            )
+            // the reason says what the probe carried, so a viewer-specific rejection cannot be read
+            // as a room that moved on (issue #192)
+            assertTrue(
+                h.entry.lastFailReason?.contains("no token was sent") == true,
+                "a public probe reports that it carried no token: ${h.entry.lastFailReason}"
             )
         }
     }

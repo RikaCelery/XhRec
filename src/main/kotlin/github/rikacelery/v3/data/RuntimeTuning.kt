@@ -56,6 +56,16 @@ data class RuntimeTuning(
      */
     val spyTokenPollDelay: Duration = 500.milliseconds,
     val spyTokenPollRetryDelay: Duration = 1500.milliseconds,
+    /**
+     * How long a private room with no free-spy privilege waits before asking again.
+     *
+     * The privilege is a property of the account, so one probe per private show was enough — until
+     * the answer could change mid-show: the fan club payload is read live, and an operator who
+     * enters the show in a browser (or a benefit that activates late) leaves the room waiting for a
+     * restart that nobody is there to perform (issue #192). The probe costs one cam request per
+     * account, so this is a slow poll, not the preconfig interval.
+     */
+    val freeSpyReprobeInterval: Duration = 5.minutes,
     /** Watchdog for the "is the selected variant playlist fetchable?" probe of a preconfig attempt. */
     val preconfigProbeTimeout: Duration = 5.seconds,
     val playlistPollInterval: Duration = 3.seconds,
