@@ -139,13 +139,37 @@ class ApiClient(
         throw lastErr ?: IllegalStateException("no platform host available")
     }
 
-    private fun ensure2xx(host: String, response: HttpResponse): HttpResponse {
+    private suspend fun ensure2xx(host: String, response: HttpResponse): HttpResponse {
         if (response.status.value !in 200..299) {
+            // The caller never sees this response, so the one call line an attempt gets is logged
+            // here; a 2xx is logged by the caller, which is where the body is read anyway.
+            logCall(response, response.bodyAsText())
             val msg = "HTTP " + response.status.value + " from " + host
             if (response.status.value in 400..499) throw ClientRequestException(response, msg)
             throw IllegalStateException(msg)
         }
         return response
+    }
+
+    /**
+     * One DEBUG line per platform call: the status the host answered, the path it was answered on
+     * and how many characters came with it.
+     *
+     * These are the low-frequency control-plane calls — media playlists and segments have their own
+     * logging — and none of the three is visible in the state a room reports: a private show that
+     * ends up "no token" looks the same whether the platform answered `200 …/cam` with an empty
+     * `cam.modelToken` or `403 …/cam` with an error body. The path goes through
+     * [MaskingMessageConverter.maskPath], so the room id in it is masked the way the rest of the log
+     * masks one; a line stays publishable as it is.
+     */
+    private fun logCall(response: HttpResponse, body: String) {
+        if (!logger.isDebugEnabled) return
+        logger.debug(
+            "{} {} {}",
+            response.status.value,
+            MaskingMessageConverter.maskPath(response.call.request.url.encodedPath.removePrefix("/")),
+            body.length
+        )
     }
 
     /**
@@ -158,7 +182,9 @@ class ApiClient(
                 ensure2xx(host, apiClient.get(apiUrl(host, "api/front/v3/config/initial")))
             }
         }
-        val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val body = response.bodyAsText()
+        logCall(response, body)
+        val json = Json.parseToJsonElement(body).jsonObject
         return json.PathSingle("initial.client.websocket.token").asString()
     }
 
@@ -184,7 +210,9 @@ class ApiClient(
                 })
             }
         }
-        val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val body = response.bodyAsText()
+        logCall(response, body)
+        val json = Json.parseToJsonElement(body).jsonObject
         val userData = json.PathSingle("initial.client.user")
         return User(
             cookie = cookie, userId = userData.Long("id"),
@@ -200,7 +228,9 @@ class ApiClient(
                 })
             }
         }
-        return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val body = response.bodyAsText()
+        logCall(response, body)
+        return Json.parseToJsonElement(body).jsonObject
     }
 
     /**
@@ -216,7 +246,9 @@ class ApiClient(
                 })
             }
         }
-        val modelIds = Json.parseToJsonElement(response.bodyAsText()).jsonObject["modelIds"] as? JsonArray
+        val body = response.bodyAsText()
+        logCall(response, body)
+        val modelIds = Json.parseToJsonElement(body).jsonObject["modelIds"] as? JsonArray
             ?: return emptyList()
         return modelIds.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.toLongOrNull() }
     }
@@ -229,7 +261,9 @@ class ApiClient(
                 })
             }
         }
-        return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val body = response.bodyAsText()
+        logCall(response, body)
+        return Json.parseToJsonElement(body).jsonObject
     }
 
     suspend fun roomFetchRoomId(roomName: String): JsonObject {
@@ -314,6 +348,7 @@ class ApiClient(
                 r
             }
         }
+        logCall(response, response.bodyAsText())
         return response.status.value in 200..299
     }
 
@@ -340,6 +375,7 @@ class ApiClient(
                 r
             }
         }
+        logCall(response, response.bodyAsText())
         return response.status.value in 200..299
     }
 
@@ -374,11 +410,13 @@ class ApiClient(
         return withHostFallback(stopIf = domainBusiness) { host ->
             withRetry(3, stopIf = noRetry) {
                 val response = apiClient.get(apiUrl(host, "api/front/v2/broadcasts/" + roomId))
+                val body = response.bodyAsText()
+                logCall(response, body)
                 val status = response.status.value
                 if (status in 200..299) {
-                    Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                    Json.parseToJsonElement(body).jsonObject
                 } else if (status == 404) {
-                    throwBroadcast404(response.bodyAsText())
+                    throwBroadcast404(body)
                 } else if (status in 400..499) {
                     throw ClientRequestException(response, "HTTP " + status + " from " + host)
                 } else {
