@@ -45,6 +45,17 @@ class MaskingMessageConverter : MessageConverter() {
             return msg
         }
 
+        /**
+         * Masks the id segments of a *bare* path, i.e. one that is not wrapped in a URL.
+         *
+         * [mask] applies [PATH_ID_RULE] only inside a full `https://…` match, so a path logged on
+         * its own (`api/front/v2/models/1001/cam`) would carry a raw room id into a log that masks
+         * every other one. Anything that logs a bare path routes it through here.
+         */
+        fun maskPath(path: String): String =
+            if (!SensitiveStringRegistry.enabled) path
+            else PATH_ID_RULE.replace(path) { m -> SensitiveStringRegistry.maskPattern(m.value) }
+
         private val STATIC_RULES: List<Pair<Regex, String>> = listOf(
             // JWT token
             Regex("eyJ[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+") to "***jwt***",

@@ -94,4 +94,30 @@ class MaskingMessageConverterTest {
             SensitiveStringRegistry.enabled = previous
         }
     }
+
+    /**
+     * A bare path is what the platform-call debug line prints, and [MaskingMessageConverter.mask]
+     * masks ids only inside a full URL — so the path gets its own pass, or the call log would be the
+     * one place in the file carrying a raw room id.
+     */
+    @Test
+    fun `a bare path masks its id segments`() {
+        val previous = SensitiveStringRegistry.enabled
+        SensitiveStringRegistry.enabled = true
+        try {
+            val token = SensitiveStringRegistry.maskRoom(2006L, "masking-test-path")
+            assertEquals(
+                "api/front/v2/models/$token/cam",
+                MaskingMessageConverter.maskPath("api/front/v2/models/2006/cam")
+            )
+            assertEquals(
+                "api/front/show/models/$token/viewers/77/spy",
+                MaskingMessageConverter.maskPath("api/front/show/models/2006/viewers/77/spy")
+            )
+            // short runs are versions and resolutions, not ids
+            assertEquals("api/front/v2/broadcasts/v2", MaskingMessageConverter.maskPath("api/front/v2/broadcasts/v2"))
+        } finally {
+            SensitiveStringRegistry.enabled = previous
+        }
+    }
 }
