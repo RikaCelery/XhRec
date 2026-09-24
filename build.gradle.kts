@@ -2,7 +2,7 @@ plugins {
     application
     kotlin("jvm") version "2.4.10"
     kotlin("plugin.serialization") version "2.4.10"
-    id("io.ktor.plugin") version "3.5.2"
+    id("io.ktor.plugin") version "3.6.0"
 //    id("org.graalvm.buildtools.native") version "0.9.19"
 }
 
@@ -18,20 +18,20 @@ application {
 
 dependencies {
     implementation("ch.qos.logback:logback-classic:1.6.3")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.5.2")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.0")
 
-    implementation("io.ktor:ktor-server-core-jvm:3.5.2")
-    implementation("io.ktor:ktor-server-netty-jvm:3.5.2")
-    implementation("io.ktor:ktor-server-websockets-jvm:3.5.2")
-    implementation("io.ktor:ktor-network-tls-certificates-jvm:3.5.2")
-    implementation("io.ktor:ktor-server-cors:3.5.2")
-    implementation("io.ktor:ktor-server-content-negotiation-jvm:3.5.2")
+    implementation("io.ktor:ktor-server-core-jvm:3.6.0")
+    implementation("io.ktor:ktor-server-netty-jvm:3.6.0")
+    implementation("io.ktor:ktor-server-websockets-jvm:3.6.0")
+    implementation("io.ktor:ktor-network-tls-certificates-jvm:3.6.0")
+    implementation("io.ktor:ktor-server-cors:3.6.0")
+    implementation("io.ktor:ktor-server-content-negotiation-jvm:3.6.0")
 
-    implementation("io.ktor:ktor-client-core-jvm:3.5.2")
-    implementation("io.ktor:ktor-client-okhttp-jvm:3.5.2")
-    implementation("io.ktor:ktor-client-logging:3.5.2")
-    implementation("io.ktor:ktor-client-websockets:3.5.2")
-    implementation("io.ktor:ktor-client-content-negotiation-jvm:3.5.2")
+    implementation("io.ktor:ktor-client-core-jvm:3.6.0")
+    implementation("io.ktor:ktor-client-okhttp-jvm:3.6.0")
+    implementation("io.ktor:ktor-client-logging:3.6.0")
+    implementation("io.ktor:ktor-client-websockets:3.6.0")
+    implementation("io.ktor:ktor-client-content-negotiation-jvm:3.6.0")
 
     implementation("io.github.nomisrev:kotlinx-serialization-jsonpath:1.0.0")
     implementation("org.jsoup:jsoup:1.23.2")
@@ -39,8 +39,8 @@ dependencies {
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    testImplementation("io.ktor:ktor-client-mock-jvm:3.5.2")
-    testImplementation("io.ktor:ktor-server-test-host-jvm:3.5.2")
+    testImplementation("io.ktor:ktor-client-mock-jvm:3.6.0")
+    testImplementation("io.ktor:ktor-server-test-host-jvm:3.6.0")
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
 }
