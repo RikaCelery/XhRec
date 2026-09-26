@@ -398,47 +398,50 @@ class SchedulerEntry(
     }
 
     private suspend fun fetchPrivateToken(config: RoomConfigResponse): String? {
-        val users = component.requestBus.request<List<User>>(GetValidPaymentAccount(0))
-        val freeUser = users.firstOrNull { component.apiClient.hasFreeSpyAccess(roomId, it) }
-        if (freeUser != null) {
-            val cam = component.apiClient.roomFetchCamInfo(roomId, freeUser.cookie)
-            val token = cam.PathSingle("cam.modelToken").asString().ifBlank { null }
-            if (token == null) {
-                lastFailReason = "no token"
-                tokenFailure = TokenFailure.NoToken
+        // This determines a valid user whether free or paid before attempting to
+        // obtain a token.
+        val (user,camInfo) = run {
+            val users = component.requestBus.request<List<User>>(GetValidPaymentAccount(0))
+            val freeUser = users.firstOrNull { component.apiClient.hasFreeSpyAccess(roomId, it) }
+            if (freeUser != null) {
+                val info = component.apiClient.roomFetchCamInfo(roomId, freeUser.cookie)
+                schedulerLogger.info("Free spy user found for {}: {}", roomId, freeUser.username)
+                return@run Pair(freeUser, info)
             }
-            return token
+            lastFailReason = "no free spy access"
+
+            tokenFailure = TokenFailure.NoFreeSpy
+            if (!config.settings.autoPaySpy) {
+                lastFailReason = "autopay disabled"
+                return null
+            }
+            val paidUser = users.firstOrNull()
+            if (paidUser == null) {
+                lastFailReason = "no account"
+                tokenFailure = TokenFailure.NoAccount
+                return null
+            }
+            val paidCamInfo = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
+            val price = paidCamInfo.PathSingleOrNull("user.user.spyRate")?.asInt()
+            if (price == null) {
+                lastFailReason = "price unavailable"
+                tokenFailure = TokenFailure.PriceUnavailable
+                return null
+            }
+            if (paidUser.coins < price) {
+                lastFailReason = "insufficient balance"
+                tokenFailure = TokenFailure.InsufficientBalance
+                return null
+            }
+            Pair(paidUser, paidCamInfo)
         }
-        lastFailReason = "no free spy access"
-        tokenFailure = TokenFailure.NoFreeSpy
-        if (!config.settings.autoPaySpy) {
-            lastFailReason = "autopay disabled"
-            return null
-        }
-        val paidUser = users.firstOrNull()
-        if (paidUser == null) {
-            lastFailReason = "no account"
-            tokenFailure = TokenFailure.NoAccount
-            return null
-        }
-        val paidCam = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
-        val price = paidCam.PathSingleOrNull("user.user.spyRate")?.asInt()
-        if (price == null) {
-            lastFailReason = "price unavailable"
-            tokenFailure = TokenFailure.PriceUnavailable
-            return null
-        }
-        if (paidUser.coins < price) {
-            lastFailReason = "insufficient balance"
-            tokenFailure = TokenFailure.InsufficientBalance
-            return null
-        }
-        var token = paidCam.PathSingle("cam.modelToken").asString().ifBlank { null }
+
+        var token = camInfo.PathSingle("cam.modelToken").asString().ifBlank { null }
         if (token == null) {
-            component.apiClient.roomRequestSpyShow(roomId, paidUser)
+            component.apiClient.roomRequestSpyShow(roomId, user)
             for (attempt in 1..4) {
                 delay(if (attempt == 1) component.runtimeTuning.spyTokenPollDelay else component.runtimeTuning.spyTokenPollRetryDelay)
-                val cam = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
+                val cam = component.apiClient.roomFetchCamInfo(roomId, user.cookie)
                 token = cam.PathSingle("cam.modelToken").asString().ifBlank { null }
                 if (token != null) break
             }
