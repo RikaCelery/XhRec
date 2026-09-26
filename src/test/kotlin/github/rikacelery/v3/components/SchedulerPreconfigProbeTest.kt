@@ -25,6 +25,7 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -59,18 +60,19 @@ class SchedulerPreconfigProbeTest {
         runBlocking {
             val probes = AtomicInteger()
             val client = HttpClient(MockEngine { request ->
-                val url = request.url.toString()
-                when {
-                    url.endsWith("/api/front/v1/broadcasts/model") ->
+            val url = request.url.toString()
+            val requestUrl = request.url.encodedPath
+            when {
+                requestUrl.matches(Regex(".*/api/front/v2/broadcasts/\\d+$")) ->
                         respond("""{"item":{"status":"public"}}""", headers = jsonHeaders)
 
-                    request.url.encodedPath.startsWith("/master/") -> respond(masterPlaylist)
+                requestUrl.startsWith("/master/") -> respond(masterPlaylist)
 
-                    request.url.encodedPath == "/media/model.m3u8" -> {
-                        // the first probe stalls far past the watchdog; every later probe answers
-                        if (probes.getAndIncrement() == 0) delay(30.seconds)
-                        respond("#EXTM3U")
-                    }
+                requestUrl == "/media/model.m3u8" -> {
+                    // the first probe stalls far past the watchdog; every later probe answers
+                    if (probes.getAndIncrement() == 0) delay(30.seconds)
+                    respond("#EXTM3U")
+                }
 
                     else -> error("unexpected request $url")
                 }
@@ -185,11 +187,12 @@ class SchedulerPreconfigProbeTest {
         }
         val mockClient = HttpClient(MockEngine { request ->
             val url = request.url.toString()
+            val requestUrl = request.url.encodedPath
             when {
-                url.endsWith("/api/front/v1/broadcasts/model") ->
+                requestUrl.matches(Regex(".*/api/front/v2/broadcasts/\\d+$")) -> // {
                     respond("""{"item":{"status":"public"}}""", headers = jsonHeaders)
 
-                request.url.encodedPath.startsWith("/master/") -> respond(masterPlaylistWith(variantUrl))
+                requestUrl.startsWith("/master/") -> respond(masterPlaylistWith(variantUrl))
 
                 else -> error("unexpected request $url")
             }

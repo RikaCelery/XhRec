@@ -172,7 +172,7 @@ class PreviewComponent(
         if (target.exists()) return
 
         val info: JsonObject = try {
-            apiClient.roomFetchBroadcastInfo(roomName)
+            apiClient.roomFetchBroadcastInfo(roomId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

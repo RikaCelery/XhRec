@@ -47,7 +47,7 @@ class RoomComponentTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     fun `refresh publishes changed status before acknowledging request`() = runTest(UnconfinedTestDispatcher()) {
         val mockServer = HttpClient(MockEngine { request ->
-            assertEquals("https://mock.platform/broadcasts/model", request.url.toString())
+            assertEquals("https://mock.platform/broadcasts/1", request.url.toString())
             respond(
                 content = """{"item":{"status":"private"}}""",
                 status = HttpStatusCode.OK,
