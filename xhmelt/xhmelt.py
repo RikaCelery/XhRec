@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-events_to_mlt.py
+xhmelt.py
 ----------------
 Generates a Shotcut-compatible .mlt project file from a set of
 stream recordings and their companion .event files.
@@ -15,7 +15,7 @@ Event file format: newline-delimited JSON objects, each with a
 Requires ffprobe (part of ffmpeg) to be installed and on PATH.
 
 Usage:
-    python mlt-gen.py [directory] [--output output.mlt] [--fps N]
+    python xhmelt.py [directory] [--output output.mlt] [--fps N]
 """
 
 import argparse
