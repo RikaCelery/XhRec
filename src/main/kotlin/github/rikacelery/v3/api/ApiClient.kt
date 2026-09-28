@@ -190,7 +190,7 @@ class ApiClient(
 
     suspend fun getRoomFromUrlOrSlug(path: String): Pair<Long, String> {
         val slug = path.substringAfterLast("/")
-        val roomId = roomIdFromName(slug)
+        val roomId = roomFetchRoomId(slug)
         val j = withRetry(
             3,
             stopIf = { it is RenameException || it is DeletedException || it is ModelNotFoundException || is4xx(it) }
@@ -266,7 +266,16 @@ class ApiClient(
         return Json.parseToJsonElement(body).jsonObject
     }
 
-    suspend fun roomFetchRoomId(roomName: String): JsonObject {
+    /**
+     * The model id behind a room's slug: `api/front/users/user-ids/{name}` answers `{"id":…}`.
+     *
+     * One function, one answer. A caller that asked for an id cannot continue without one, so a slug
+     * the platform does not know — or a payload that carries no usable id — is an exception instead
+     * of a null that every call site has to remember to handle (review on #160). The unknown-slug
+     * case is a 404 and stays [ModelNotFoundException], the same domain answer the broadcasts
+     * endpoint gives for a model that is not there.
+     */
+    suspend fun roomFetchRoomId(roomName: String): Long {
         val response = withHostFallback { host ->
             withRetry(
                 3,
@@ -278,9 +287,13 @@ class ApiClient(
                 }
                 ensure2xx(host, res)
             }
-
         }
-        return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val body = response.bodyAsText()
+        logCall(response, body)
+        return Json.parseToJsonElement(body).jsonObject.PathSingleOrNull("id")
+            ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?.toLongOrNull()
+            ?: throw ModelNotFoundException("no id for model $roomName")
     }
 
     /**
@@ -292,10 +305,6 @@ class ApiClient(
         roomFetchCamInfo(roomId, "").PathSingleOrNull("user.user.username")
             ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 
-    suspend fun roomIdFromName(roomName: String): Long? =
-        roomFetchRoomId(roomName).PathSingleOrNull("id")
-            ?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?.toLongOrNull()
 
     suspend fun roomFetchModelToken(roomId: Long, user: User): String? =
         camModelToken(roomFetchCamInfo(roomId, user.cookie))
@@ -398,7 +407,7 @@ class ApiClient(
      * Fetches broadcast info. Explicitly handles 404: "model renamed" and
      * "model deleted" are business exceptions (no retry / no host failover).
      */
-    suspend fun roomFetchBroadcastInfo(roomId: Long?): JsonObject {
+    suspend fun roomFetchBroadcastInfo(roomId: Long): JsonObject {
         // Rename/Deleted/NotFound are domain answers: the same request on another host answers the
         // same way, so they must neither be retried nor fail over.
         val domainBusiness: (Throwable) -> Boolean = {
