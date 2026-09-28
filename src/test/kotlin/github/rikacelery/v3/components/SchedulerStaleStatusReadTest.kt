@@ -13,11 +13,13 @@ import github.rikacelery.v3.events.ConfigResponse
 import github.rikacelery.v3.events.DecryptKeyMatch
 import github.rikacelery.v3.events.GetDecryptKey
 import github.rikacelery.v3.events.GetRoomConfig
+import github.rikacelery.v3.events.GetUsers
 import github.rikacelery.v3.events.GetValidPaymentAccount
 import github.rikacelery.v3.events.MatchDecryptKeys
 import github.rikacelery.v3.events.OkResponse
 import github.rikacelery.v3.events.RefreshRoomCmd
 import github.rikacelery.v3.events.RoomConfigResponse
+import github.rikacelery.v3.events.UsersResponse
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
 import github.rikacelery.v3.utils.CdnSelector
@@ -73,7 +75,10 @@ class SchedulerStaleStatusReadTest {
 
             assertEquals("private", h.entry.roomStatus, "the room's own status wins the disagreement")
             assertEquals("public", h.entry.statusRead, "the read is still reported for the dashboard")
-            assertEquals("freeSpy", h.entry.tokenSource, "the private route is the one that must be taken")
+            assertEquals(
+                "existing", h.entry.tokenSource,
+                "the private route is the one that must be taken, and the payload already carried the token"
+            )
             assertEquals("spy-token".length, h.entry.tokenLength)
             assertTrue(
                 h.mediaRequests.isNotEmpty() && h.mediaRequests.all { Url(it).parameters["aclAuth"] == "spy-token" },
@@ -117,7 +122,7 @@ class SchedulerStaleStatusReadTest {
 
             assertEquals("private", h.entry.roomStatus, "the fresh read is followed when it is the stricter one")
             assertEquals("private", h.entry.statusRead)
-            assertEquals("freeSpy", h.entry.tokenSource)
+            assertEquals("existing", h.entry.tokenSource)
         }
     }
 
@@ -145,7 +150,7 @@ class SchedulerStaleStatusReadTest {
         val cdn = HttpClient(MockEngine { request ->
             val url = request.url.toString()
             when {
-                url.endsWith("/api/front/v1/broadcasts/model") ->
+                url.contains("/api/front/v2/broadcasts/") ->   // #160: the status read is keyed by room id
                     respond("""{"item":{"status":"$readStatus"}}""", headers = jsonHeaders)
 
                 url.contains("/api/front/v2/models/7/cam") ->
@@ -174,6 +179,7 @@ class SchedulerStaleStatusReadTest {
                 if (event is CommandEnvelope) {
                     val answer = when (event.command) {
                         is GetRoomConfig -> RoomConfigResponse(RoomSettings(pkey = "room-key"))
+                        is GetUsers -> UsersResponse(listOf(User("cookie", 4242, "tester", 1_000)))
                         is GetValidPaymentAccount -> listOf(User("cookie", 4242, "tester", 1_000))
                         is MatchDecryptKeys -> DecryptKeyMatch("key-id", "decrypt-key")
                         is GetDecryptKey -> ConfigResponse("decrypt-key")
@@ -244,7 +250,8 @@ class SchedulerStaleStatusReadTest {
         /** The cam payload a fan-club account with the free-spy benefit sees on a private show. */
         fun camPayload(freeSpy: Boolean) = buildJsonObject {
             put("cam", buildJsonObject {
-                put("modelToken", "spy-token")
+                // the platform hands a token to an account that may watch the show, and to nobody else
+                put("modelToken", if (freeSpy) "spy-token" else "")
                 put("userFanClub", buildJsonObject {
                     put("subscription", buildJsonObject {
                         put("status", if (freeSpy) "active" else "none")

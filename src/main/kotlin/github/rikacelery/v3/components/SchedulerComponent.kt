@@ -217,7 +217,7 @@ class SchedulerEntry(
      */
     var statusRead: String? = null
 
-    /** The route the last attempt took to a token: `public`, `ticket`, `freeSpy`, `paidSpy` or `none`. */
+    /** The route the last attempt took to a token: `public`, `ticket`, `existing`, `freeSpy`, `paidSpy` or `none`. */
     var tokenSource: String? = null
 
     /** Length of the token the last attempt used; the token itself is never kept for diagnostics. */
@@ -468,7 +468,7 @@ class SchedulerEntry(
             // Following the room decides which URL is probed, not what may be spent: while the
             // platform still reads the show as public, the paid spy join — a paid, non-idempotent
             // call — is withheld.
-            RoomStatus.isPrivate(status) -> fetchPrivateToken(config, allowPaidJoin = !followedRoom)
+            RoomStatus.isPrivate(status) -> fetchPrivateToken(config)
             else -> {
                 lastFailReason = "status $status"
                 tokenFailure = TokenFailure.BadStatus
@@ -521,82 +521,97 @@ class SchedulerEntry(
     }
 
     /**
-     * The private/show-spy route to a token, for a free-spy account and for a paid one.
+     * The private-show route to a token, in the order the review on #197 recommended:
      *
-     * Both end up in the same place — read the cam payload, and join the show when it carries no
-     * model token yet — because the platform hands a token only to a viewer that has entered the
-     * show (issue #192: the free-spy path used to return early instead, and never got one).
+     *  1. a token the cam payload already carries is returned as it is — nothing to do, nothing to
+     *     report;
+     *  2. otherwise an account needs the free-spy privilege, and a room without one is
+     *     [TokenFailure.NoFreeSpy] — a private show is watched for free or not at all, so the account
+     *     wording and the price/balance failures stay with the ticket (group-show) path;
+     *  3. the show is joined for that account and the token polled for;
+     *  4. a token that never arrives is [TokenFailure.NoToken].
      *
-     * [allowPaidJoin] is false while the platform's own read still calls the show public: the room's
-     * status decides which URL is probed (see [fetchToken]), but the paid join is a paid,
-     * non-idempotent call and is not spent on a show the platform says is not private. A free-spy
-     * join costs nothing by definition, so it is never withheld.
+     * `autoPaySpy` is the one opt-in exception: when the operator asked for the paid show, a room
+     * without the privilege continues into [paidSpyToken] instead of stopping at step 2.
      */
-    private suspend fun fetchPrivateToken(config: RoomConfigResponse, allowPaidJoin: Boolean = true): String? {
-        // One cam read per account, judged by the verdict: the payload the privilege is read from is
-        // the same one the token comes out of, and the verdict is what the log and the dashboard
-        // need when the answer is no.
-        val users = component.requestBus.request<List<User>>(GetValidPaymentAccount(0))
+    private suspend fun fetchPrivateToken(config: RoomConfigResponse): String? {
+        val users = component.requestBus.request<UsersResponse>(GetUsers).users
+        // Steps 1 and 2 in one pass: the payload that would carry a token is the same one the
+        // privilege verdict is read from, so every account costs one cam request rather than two.
         val verdicts = ArrayList<String>(users.size)
+        var existing: String? = null
         var freeUser: User? = null
-        var freeCam: JsonObject? = null
         for (u in users) {
             val cam = component.apiClient.roomFetchCamInfo(roomId, u.cookie)
+            if (existing == null) existing = component.apiClient.camModelToken(cam)
             val verdict = component.apiClient.freeSpyVerdict(cam)
             verdicts += "${u.userId}=${verdict.wire}"
-            if (verdict.granted) {
-                freeUser = u
-                freeCam = cam
-                schedulerLogger.info("roomId={} free spy granted for {} ({})", roomId, u.username, verdict.wire)
-                break
-            }
+            if (verdict.granted && freeUser == null) freeUser = u
+            if (existing != null && freeUser != null) break
         }
         freeSpyVerdicts = verdicts.joinToString(", ").ifEmpty { "no account" }
-        if (freeUser != null && freeCam != null) {
-            tokenSource = "freeSpy"
-            return spyToken(freeUser, component.apiClient.camModelToken(freeCam), allowJoin = true)
+        if (existing != null) {
+            tokenSource = "existing"
+            schedulerLogger.info("roomId={} the cam payload already carries a model token", roomId)
+            return existing
         }
-        lastFailReason = "no free spy access"
-        tokenFailure = TokenFailure.NoFreeSpy
-        if (!config.settings.autoPaySpy) {
-            lastFailReason = "autopay disabled"
+        if (freeUser == null) {
+            lastFailReason = "no free spy access"
+            tokenFailure = TokenFailure.NoFreeSpy
+            if (!config.settings.autoPaySpy) return null
+            return paidSpyToken(users)
+        }
+        tokenSource = "freeSpy"
+        schedulerLogger.info("roomId={} free spy granted for {} ({})", roomId, freeUser.username, freeSpyVerdicts)
+        return spyToken(freeUser)
+    }
+
+    /**
+     * The paid private show, for the rooms where the operator turned `autoPaySpy` on.
+     *
+     * The spy price belongs to the model and the cam payload is the only place it is published, so
+     * the price is read first and the account is then asked for *that* amount: asking for "any
+     * account" and checking its balance afterwards refused the room whenever the first loaded
+     * account was short, even with another one that could pay (review on #197).
+     */
+    private suspend fun paidSpyToken(users: List<User>): String? {
+        val probe = users.firstOrNull()
+        if (probe == null) {
+            // no account wording belongs to ticket shows, so a paid private show without accounts
+            // reports the same thing a free one does: there is nobody who may watch it
+            lastFailReason = "no free spy access"
+            tokenFailure = TokenFailure.NoFreeSpy
             return null
         }
-        val paidUser = users.firstOrNull()
-        if (paidUser == null) {
-            lastFailReason = "no account"
-            tokenFailure = TokenFailure.NoAccount
-            return null
-        }
-        tokenSource = "paidSpy"
-        val paidCam = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
-        val price = paidCam.PathSingleOrNull("user.user.spyRate")?.asInt()
+        val probeCam = component.apiClient.roomFetchCamInfo(roomId, probe.cookie)
+        val price = probeCam.PathSingleOrNull("user.user.spyRate")?.asInt()
         if (price == null) {
             lastFailReason = "price unavailable"
             tokenFailure = TokenFailure.PriceUnavailable
             return null
         }
-        if (paidUser.coins < price) {
+        val payer = component.requestBus.request<List<User>>(GetValidPaymentAccount(price.toLong())).firstOrNull()
+        if (payer == null) {
             lastFailReason = "insufficient balance"
             tokenFailure = TokenFailure.InsufficientBalance
             return null
         }
-        return spyToken(paidUser, component.apiClient.camModelToken(paidCam), allowJoin = allowPaidJoin)
+        // the payer's own payload: the probe only quoted the price, and a token is per viewer
+        val payerCam = if (payer.userId == probe.userId) probeCam
+        else component.apiClient.roomFetchCamInfo(roomId, payer.cookie)
+        tokenSource = "paidSpy"
+        return spyToken(payer, component.apiClient.camModelToken(payerCam))
     }
 
     /**
-     * The model token of [user] for this show, joining it when the cam payload did not carry one yet.
+     * The model token of [user] for this show: the one a cam payload already carries, or the one the
+     * platform assigns after the show is joined.
      *
      * The join is what the platform's own client does when a viewer enters a paid show; the token is
      * assigned asynchronously behind it, so the polls that follow are not a guess about latency.
      */
-    private suspend fun spyToken(user: User, existing: String?, allowJoin: Boolean): String? {
+    private suspend fun spyToken(user: User, existing: String? = null): String? {
         if (existing != null) return existing
-        if (!allowJoin) {
-            lastFailReason = "no token (paid spy join withheld while the show reads as public)"
-            tokenFailure = TokenFailure.NoToken
-            return null
-        }
         component.apiClient.roomRequestSpyShow(roomId, user)
         for (attempt in 1..4) {
             delay(if (attempt == 1) component.runtimeTuning.spyTokenPollDelay else component.runtimeTuning.spyTokenPollRetryDelay)

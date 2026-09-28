@@ -13,11 +13,13 @@ import github.rikacelery.v3.events.ConfigResponse
 import github.rikacelery.v3.events.DecryptKeyMatch
 import github.rikacelery.v3.events.GetDecryptKey
 import github.rikacelery.v3.events.GetRoomConfig
+import github.rikacelery.v3.events.GetUsers
 import github.rikacelery.v3.events.GetValidPaymentAccount
 import github.rikacelery.v3.events.MatchDecryptKeys
 import github.rikacelery.v3.events.OkResponse
 import github.rikacelery.v3.events.RefreshRoomCmd
 import github.rikacelery.v3.events.RoomConfigResponse
+import github.rikacelery.v3.events.UsersResponse
 import github.rikacelery.v3.events.RoomStatusChanged
 import github.rikacelery.v3.hooks.EventHook
 import github.rikacelery.v3.m3u8.M3u8Parser
@@ -139,7 +141,7 @@ class SchedulerFreeSpyReprobeTest {
         val cdn = HttpClient(MockEngine { request ->
             val url = request.url.toString()
             when {
-                url.endsWith("/api/front/v1/broadcasts/model") ->
+                url.contains("/api/front/v2/broadcasts/") ->   // #160: the status read is keyed by room id
                     respond("""{"item":{"status":"${readStatus.get()}"}}""", headers = jsonHeaders)
 
                 url.contains("/api/front/v2/models/7/cam") -> {
@@ -166,6 +168,7 @@ class SchedulerFreeSpyReprobeTest {
                 if (event is CommandEnvelope) {
                     val answer = when (event.command) {
                         is GetRoomConfig -> RoomConfigResponse(RoomSettings(pkey = "room-key"))
+                        is GetUsers -> UsersResponse(listOf(User("cookie", 4242, "tester", 1_000)))
                         is GetValidPaymentAccount -> listOf(User("cookie", 4242, "tester", 1_000))
                         is MatchDecryptKeys -> DecryptKeyMatch("key-id", "decrypt-key")
                         is GetDecryptKey -> ConfigResponse("decrypt-key")
@@ -237,7 +240,9 @@ class SchedulerFreeSpyReprobeTest {
         /** The cam payload of a fan-club account, with the free-spying benefit active or not. */
         fun camPayload(freeSpy: Boolean) = buildJsonObject {
             put("cam", buildJsonObject {
-                put("modelToken", "spy-token")
+                // a token only comes with the privilege the show is watched through: without it
+                // the payload carries none, which is what sends the attempt to the spy route
+                put("modelToken", if (freeSpy) "spy-token" else "")
                 put("userFanClub", buildJsonObject {
                     put("subscription", buildJsonObject {
                         put("status", "active")
