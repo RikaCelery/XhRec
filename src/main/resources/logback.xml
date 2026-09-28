@@ -3,9 +3,18 @@
     <conversionRule conversionWord="maskedMsg"
         converterClass="github.rikacelery.v3.utils.MaskingMessageConverter" />
 
+    <!--
+      The stack trace is masked too: logback appends its own throwable converter when a pattern
+      names none, and that one renders the exception text verbatim — a Ktor failure carries the
+      signed url, its room id and any Cookie header. Naming %maskedEx is also what keeps the
+      unmasked default out of the pattern.
+    -->
+    <conversionRule conversionWord="maskedEx"
+        converterClass="github.rikacelery.v3.utils.MaskingThrowableProxyConverter" />
+
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{MM-dd HH:mm:ss} %-5level %logger{2} - %maskedMsg%n</pattern>
+            <pattern>%d{MM-dd HH:mm:ss} %-5level %logger{2} - %maskedMsg%maskedEx%n</pattern>
             <charset>utf8</charset>
         </encoder>
     </appender>
@@ -21,7 +30,7 @@
             <totalSizeCap>1GB</totalSizeCap>
         </rollingPolicy>
         <encoder>
-            <pattern>%d{YYYY-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger - %maskedMsg%n</pattern>
+            <pattern>%d{YYYY-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger - %maskedMsg%maskedEx%n</pattern>
         </encoder>
     </appender>
     <!--
