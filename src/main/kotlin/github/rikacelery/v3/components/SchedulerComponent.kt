@@ -142,6 +142,23 @@ data class SchedulerArmStatus(
 
 private val schedulerLogger = LoggerFactory.getLogger("v3.SchedulerEntry")
 
+/** How many identical preconfig failures pass before the same reason is logged again. */
+private const val PRECONFIG_REPEAT_LOG_EVERY = 20
+
+/**
+ * What a preconfig probe carried to authorize the playlist, reported as part of a rejection.
+ *
+ * The same `playlist unusable (HTTP 403)` means two very different things: with a token it is the
+ * platform refusing *this viewer*, and without one it is a private show that was resolved to the
+ * public URL — a room the app already knows is private does not get there any more (see
+ * [SchedulerEntry.fetchToken]), but a probe whose auth is not in the log leaves the reader to
+ * rebuild the URL by hand (issue #192).
+ */
+private enum class PlaylistAuth(val detail: String) {
+    None("no token was sent"),
+    ModelToken("the model token was rejected")
+}
+
 internal fun productionMasterUrls(roomId: Long, pkey: String, token: String?): List<String> =
     (listOf(Hosts.current.hlsMasterHost) + Hosts.current.hlsHosts).distinct().map { host ->
         buildUrl {
@@ -189,6 +206,34 @@ class SchedulerEntry(
     var configuredQuality: String = ""
     var configuredToken: String? = null
     var configuredPkey: String = ""
+
+    // —— Preconfiguration diagnostics ——
+    /**
+     * The status the preconfig's *own* platform read saw, kept apart from [roomStatus]. The two
+     * disagree while a REST answer is still the cached one from before the show switched, and
+     * without this field that disagreement left no trace at all: the room resolved a private show
+     * to the public (token-less) URL, the CDN answered 403, and the reason read exactly like a room
+     * that had moved on — issue #192.
+     */
+    var statusRead: String? = null
+
+    /** The route the last attempt took to a token: `public`, `ticket`, `existing`, `freeSpy`, `paidSpy` or `none`. */
+    var tokenSource: String? = null
+
+    /** Length of the token the last attempt used; the token itself is never kept for diagnostics. */
+    var tokenLength: Int? = null
+
+    /** Per-account verdicts of the last free-spy probe, e.g. `4242=no-benefit, 4243=granted`. */
+    var freeSpyVerdicts: String? = null
+
+    /** Consecutive failed preconfig attempts since the last success, for repeat-failure logging. */
+    var preconfigAttempts: Int = 0
+
+    /** The last `read/known` status pair that disagreed, so the mismatch warns once per pair. */
+    private var statusMismatch: String? = null
+
+    /** Pending bounded re-probe of the free-spy privilege; see [markFreeSpyExhausted]. */
+    private var freeSpyReprobe: Job? = null
 
     // —— Resume state ——
     /**
@@ -266,6 +311,41 @@ class SchedulerEntry(
         }
     }
 
+    /**
+     * Stops asking the platform for a free-spy privilege this show does not have, and schedules one
+     * bounded re-probe.
+     *
+     * The privilege is a property of the account, not of the show, so probing on every preconfig
+     * tick is waste — but "never again until the room is re-armed" is not right either: the verdict
+     * comes from a live fan-club payload, and an operator who enters the show from a browser, or a
+     * benefit that activates late, changes it mid-show. One slow poll keeps the room able to recover
+     * on its own instead of waiting for a restart (issue #192).
+     */
+    internal fun markFreeSpyExhausted() {
+        freeSpyExhausted = true
+        freeSpyReprobe?.cancel()
+        freeSpyReprobe = scope.launch {
+            delay(component.runtimeTuning.freeSpyReprobeInterval)
+            // Only a room that is still waiting on this privilege is re-probed: a room that moved on
+            // (public, offline, a settings change, a manual re-arm) must not be driven by a stale timer.
+            if (freeSpyExhausted && fsm.currentState == SchedulerState.Armed && RoomStatus.isPrivate(roomStatus)) {
+                freeSpyExhausted = false
+                schedulerLogger.info(
+                    "roomId={} re-probing the free spy privilege after {} (last verdicts: {})",
+                    roomId, component.runtimeTuning.freeSpyReprobeInterval, freeSpyVerdicts
+                )
+                self(SchedulerEvent.RoomStatusChanged, SchedulerDriveData(roomStatus = roomStatus))
+            }
+        }
+    }
+
+    /** Lifts the exhausted marker, e.g. because the show ended or the operator changed something. */
+    internal fun clearFreeSpyExhausted() {
+        freeSpyExhausted = false
+        freeSpyReprobe?.cancel()
+        freeSpyReprobe = null
+    }
+
     internal fun kindOf(status: String): String = when {
         RoomStatus.isPublic(status) -> "public"
         RoomStatus.isGroupShow(status) -> "groupShow"
@@ -321,11 +401,15 @@ class SchedulerEntry(
                     SchedulerEvent.PreconfigFailed,
                     SchedulerDriveData(failReason = lastFailReason ?: "no token", tokenFailure = tokenFailure)
                 )
+            tokenLength = token.length
             val master = fetchMaster(token)
             val keyName = matchPkey(master)
             val variant = selectVariant(master, settings.quality)
             val url = resolveVariantUrl(variant, keyName, token)
-            playlistProbe(url)?.let { reason ->
+            // The probe reports what it carried, so a rejection can never again read like a room
+            // that moved on when the real problem was the token (or the lack of one) — issue #192.
+            val auth = if (token.isEmpty()) PlaylistAuth.None else PlaylistAuth.ModelToken
+            playlistProbe(url, auth)?.let { reason ->
                 return SchedulerSignal(roomId, SchedulerEvent.PreconfigFailed, SchedulerDriveData(failReason = reason))
             }
             SchedulerSignal(
@@ -339,13 +423,51 @@ class SchedulerEntry(
         }
     }
 
+    /**
+     * Resolves the token this attempt probes with, and with it the branch the show takes.
+     *
+     * The status is read from the platform twice over: [roomStatus] is what the room's live channel
+     * and the RoomComponent's reads last said, while this function's own REST read is a second
+     * opinion that can still be the *cached* one from before the show switched. A private room whose
+     * cached read says "public" used to resolve to the token-less public URL: the CDN answered 403,
+     * the reason looked like a room that had moved on, and the loop repeated it every interval until
+     * somebody re-armed the room (issue #192). The room's own status therefore wins that
+     * disagreement — a WS push is the platform's live answer, and a room that really did go public
+     * publishes its own event, which lands here as a [roomStatus] change on the next attempt.
+     */
     private suspend fun fetchToken(config: RoomConfigResponse): String? {
         val info = component.apiClient.roomFetchBroadcastInfo(roomId)
-        val status = info.PathSingle("item.status").asString()
-        roomStatus = status
+        val read = info.PathSingle("item.status").asString()
+        statusRead = read
+        // the attempt's defaults, so a route that never produces a token still says so on the dashboard
+        tokenSource = "none"
+        tokenLength = null
+        val known = roomStatus
+        val followedRoom = RoomStatus.isPrivate(known) && RoomStatus.isPublic(read)
+        if (followedRoom) {
+            // one warning per distinct pair: the loop retries every interval while this holds
+            val mismatch = "$read/$known"
+            if (statusMismatch != mismatch) {
+                statusMismatch = mismatch
+                schedulerLogger.warn(
+                    "roomId={} preconfig read the show as {} while the room is {} — keeping the room status",
+                    roomId, read, known
+                )
+            }
+        } else {
+            statusMismatch = null
+        }
+        val status = if (followedRoom) known else read
+        if (status != known) roomStatus = status
         return when {
-            RoomStatus.isPublic(status) -> ""
+            RoomStatus.isPublic(status) -> {
+                tokenSource = "public"
+                ""
+            }
             RoomStatus.isGroupShow(status) -> fetchGroupToken(config)
+            // Following the room decides which URL is probed, not what may be spent: while the
+            // platform still reads the show as public, the paid spy join — a paid, non-idempotent
+            // call — is withheld.
             RoomStatus.isPrivate(status) -> fetchPrivateToken(config)
             else -> {
                 lastFailReason = "status $status"
@@ -356,6 +478,7 @@ class SchedulerEntry(
     }
 
     private suspend fun fetchGroupToken(config: RoomConfigResponse): String? {
+        tokenSource = "ticket"
         if (!config.settings.autoPayTicket) {
             lastFailReason = "autopay disabled"
             tokenFailure = TokenFailure.AutopayDisabled
@@ -397,61 +520,107 @@ class SchedulerEntry(
         return token
     }
 
+    /**
+     * The private-show route to a token, in the order the review on #197 recommended:
+     *
+     *  1. a token the cam payload already carries is returned as it is — nothing to do, nothing to
+     *     report;
+     *  2. otherwise an account needs the free-spy privilege, and a room without one is
+     *     [TokenFailure.NoFreeSpy] — a private show is watched for free or not at all, so the account
+     *     wording and the price/balance failures stay with the ticket (group-show) path;
+     *  3. the show is joined for that account and the token polled for;
+     *  4. a token that never arrives is [TokenFailure.NoToken].
+     *
+     * `autoPaySpy` is the one opt-in exception: when the operator asked for the paid show, a room
+     * without the privilege continues into [paidSpyToken] instead of stopping at step 2.
+     */
     private suspend fun fetchPrivateToken(config: RoomConfigResponse): String? {
-        // This determines a valid user whether free or paid before attempting to
-        // obtain a token.
-        val (user,camInfo) = run {
-            val users = component.requestBus.request<List<User>>(GetValidPaymentAccount(0))
-            val freeUser = users.firstOrNull { component.apiClient.hasFreeSpyAccess(roomId, it) }
-            if (freeUser != null) {
-                val info = component.apiClient.roomFetchCamInfo(roomId, freeUser.cookie)
-                schedulerLogger.info("Free spy user found for {}: {}", roomId, freeUser.username)
-                return@run Pair(freeUser, info)
-            }
+        val users = component.requestBus.request<UsersResponse>(GetUsers).users
+        // Steps 1 and 2 in one pass: the payload that would carry a token is the same one the
+        // privilege verdict is read from, so every account costs one cam request rather than two.
+        val verdicts = ArrayList<String>(users.size)
+        var existing: String? = null
+        var freeUser: User? = null
+        for (u in users) {
+            val cam = component.apiClient.roomFetchCamInfo(roomId, u.cookie)
+            if (existing == null) existing = component.apiClient.camModelToken(cam)
+            val verdict = component.apiClient.freeSpyVerdict(cam)
+            verdicts += "${u.userId}=${verdict.wire}"
+            if (verdict.granted && freeUser == null) freeUser = u
+            if (existing != null && freeUser != null) break
+        }
+        freeSpyVerdicts = verdicts.joinToString(", ").ifEmpty { "no account" }
+        if (existing != null) {
+            tokenSource = "existing"
+            schedulerLogger.info("roomId={} the cam payload already carries a model token", roomId)
+            return existing
+        }
+        if (freeUser == null) {
             lastFailReason = "no free spy access"
-
             tokenFailure = TokenFailure.NoFreeSpy
-            if (!config.settings.autoPaySpy) {
-                lastFailReason = "autopay disabled"
-                return null
-            }
-            val paidUser = users.firstOrNull()
-            if (paidUser == null) {
-                lastFailReason = "no account"
-                tokenFailure = TokenFailure.NoAccount
-                return null
-            }
-            val paidCamInfo = component.apiClient.roomFetchCamInfo(roomId, paidUser.cookie)
-            val price = paidCamInfo.PathSingleOrNull("user.user.spyRate")?.asInt()
-            if (price == null) {
-                lastFailReason = "price unavailable"
-                tokenFailure = TokenFailure.PriceUnavailable
-                return null
-            }
-            if (paidUser.coins < price) {
-                lastFailReason = "insufficient balance"
-                tokenFailure = TokenFailure.InsufficientBalance
-                return null
-            }
-            Pair(paidUser, paidCamInfo)
+            if (!config.settings.autoPaySpy) return null
+            return paidSpyToken(users)
         }
+        tokenSource = "freeSpy"
+        schedulerLogger.info("roomId={} free spy granted for {} ({})", roomId, freeUser.username, freeSpyVerdicts)
+        return spyToken(freeUser)
+    }
 
-        var token = camInfo.PathSingle("cam.modelToken").asString().ifBlank { null }
-        if (token == null) {
-            component.apiClient.roomRequestSpyShow(roomId, user)
-            for (attempt in 1..4) {
-                delay(if (attempt == 1) component.runtimeTuning.spyTokenPollDelay else component.runtimeTuning.spyTokenPollRetryDelay)
-                val cam = component.apiClient.roomFetchCamInfo(roomId, user.cookie)
-                token = cam.PathSingle("cam.modelToken").asString().ifBlank { null }
-                if (token != null) break
-            }
-        }
-        if (token == null) {
-            lastFailReason = "no token"
-            tokenFailure = TokenFailure.NoToken
+    /**
+     * The paid private show, for the rooms where the operator turned `autoPaySpy` on.
+     *
+     * The spy price belongs to the model and the cam payload is the only place it is published, so
+     * the price is read first and the account is then asked for *that* amount: asking for "any
+     * account" and checking its balance afterwards refused the room whenever the first loaded
+     * account was short, even with another one that could pay (review on #197).
+     */
+    private suspend fun paidSpyToken(users: List<User>): String? {
+        val probe = users.firstOrNull()
+        if (probe == null) {
+            // no account wording belongs to ticket shows, so a paid private show without accounts
+            // reports the same thing a free one does: there is nobody who may watch it
+            lastFailReason = "no free spy access"
+            tokenFailure = TokenFailure.NoFreeSpy
             return null
         }
-        return token
+        val probeCam = component.apiClient.roomFetchCamInfo(roomId, probe.cookie)
+        val price = probeCam.PathSingleOrNull("user.user.spyRate")?.asInt()
+        if (price == null) {
+            lastFailReason = "price unavailable"
+            tokenFailure = TokenFailure.PriceUnavailable
+            return null
+        }
+        val payer = component.requestBus.request<List<User>>(GetValidPaymentAccount(price.toLong())).firstOrNull()
+        if (payer == null) {
+            lastFailReason = "insufficient balance"
+            tokenFailure = TokenFailure.InsufficientBalance
+            return null
+        }
+        // the payer's own payload: the probe only quoted the price, and a token is per viewer
+        val payerCam = if (payer.userId == probe.userId) probeCam
+        else component.apiClient.roomFetchCamInfo(roomId, payer.cookie)
+        tokenSource = "paidSpy"
+        return spyToken(payer, component.apiClient.camModelToken(payerCam))
+    }
+
+    /**
+     * The model token of [user] for this show: the one a cam payload already carries, or the one the
+     * platform assigns after the show is joined.
+     *
+     * The join is what the platform's own client does when a viewer enters a paid show; the token is
+     * assigned asynchronously behind it, so the polls that follow are not a guess about latency.
+     */
+    private suspend fun spyToken(user: User, existing: String? = null): String? {
+        if (existing != null) return existing
+        component.apiClient.roomRequestSpyShow(roomId, user)
+        for (attempt in 1..4) {
+            delay(if (attempt == 1) component.runtimeTuning.spyTokenPollDelay else component.runtimeTuning.spyTokenPollRetryDelay)
+            val cam = component.apiClient.roomFetchCamInfo(roomId, user.cookie)
+            component.apiClient.camModelToken(cam)?.let { return it }
+        }
+        lastFailReason = "no token"
+        tokenFailure = TokenFailure.NoToken
+        return null
     }
 
     private suspend fun fetchMaster(token: String?): MasterPlaylist {
@@ -549,14 +718,18 @@ class SchedulerEntry(
      * pooled client is dropped, so the next preconfig attempt neither reuses the connection that
      * just failed nor re-picks the host by default.
      *
-     * A 403/404 is different from every other failure: the token was accepted by the platform, so
-     * the CDN refusing the playlist means the room itself moved on — the show ended, the room went
-     * offline, or the private show was replaced. The room is asked to re-read its status (see
+     * A 403/404 is different from every other failure: the platform accepted the request, so the
+     * CDN refusing the playlist usually means the room itself moved on — the show ended, the room
+     * went offline, or the private show was replaced. The room is asked to re-read its status (see
      * [refreshRoomStatus]) because the stale value in the dashboard and in this entry is exactly
      * what keeps the loop retrying a stream that no longer exists. A rejection carries no host
      * penalty either.
+     *
+     * [auth] is what the probe carried, and it goes into the reason: a viewer-specific rejection
+     * (a token the platform will not honour) and a room that is gone answer with the same status
+     * code, and reading them apart must not require rebuilding the URL from the logs.
      */
-    private suspend fun playlistProbe(url: String): String? {
+    private suspend fun playlistProbe(url: String, auth: PlaylistAuth): String? {
         val host = CdnSelector.hostOf(url)
         val attemptMs = component.runtimeTuning.playlistAttemptTimeout.inWholeMilliseconds
         var rejected = false
@@ -577,7 +750,7 @@ class SchedulerEntry(
                 }
                 if (response.status.value in 200..299) "" else {
                     rejected = response.status.isRejection()
-                    "playlist unusable (HTTP ${response.status.value})"
+                    "playlist unusable (HTTP ${response.status.value}), ${auth.detail}"
                 }
             }
         } catch (e: CancellationException) {
@@ -585,7 +758,7 @@ class SchedulerEntry(
         } catch (e: ClientRequestException) {
             // the client throws on 4xx, so this is the branch a 403/404 actually takes
             rejected = e.response.status.isRejection()
-            "playlist unusable (HTTP ${e.response.status.value})"
+            "playlist unusable (HTTP ${e.response.status.value}), ${auth.detail}"
         } catch (e: Exception) {
             "playlist unusable (${e.message ?: e::class.simpleName})"
         }
@@ -691,6 +864,7 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
                 configuredPkey = d.pkey ?: settings.pkey
                 currentKind = kindOf(roomStatus)
                 lastFailReason = null
+                preconfigAttempts = 0
                 launch {
                     component.sessionComponent.tell(
                         StartRecording(
@@ -708,19 +882,28 @@ private fun buildSchedulerFsm(ctx: SchedulerEntry) =
             }
             on(SchedulerEvent.PreconfigFailed) to KEEP action { d ->
                 // no free spy privilege and paid spy is off: this room is not recordable while the
-                // private show lasts, so stop asking the platform every retry interval
+                // private show lasts, so stop asking the platform every retry interval — the marker
+                // schedules one slow re-probe instead, because the verdict can change mid-show
                 if (d?.tokenFailure == TokenFailure.NoFreeSpy && !settings.autoPaySpy) {
-                    freeSpyExhausted = true
+                    markFreeSpyExhausted()
                     schedulerLogger.info(
-                        "roomId={} no free spy access, waiting for the next private show", roomId
+                        "roomId={} no free spy access ({}), waiting for the next private show",
+                        roomId, freeSpyVerdicts
                     )
                     self(SchedulerEvent.BackToArmed)
                     return@action
                 }
                 // stay in Preconfiguring; the ticker retries automatically
-                if (lastFailReason != d?.failReason) {
-                    schedulerLogger.warn("roomId={} preconfig failed: {}", roomId, d?.failReason)
-                    lastFailReason = d?.failReason
+                preconfigAttempts += 1
+                val reason = d?.failReason
+                // A reason that never changes used to log exactly once, so a room that kept failing
+                // every retry interval for minutes read like one that had recovered. The repeat is
+                // logged again at a rate an INFO-level operator can see.
+                if (lastFailReason != reason || preconfigAttempts % PRECONFIG_REPEAT_LOG_EVERY == 0) {
+                    schedulerLogger.warn(
+                        "roomId={} preconfig failed (attempt {}): {}", roomId, preconfigAttempts, reason
+                    )
+                    lastFailReason = reason
                 }
             }
             on(SchedulerEvent.RoomStatusChanged) to KEEP action { d ->
@@ -969,8 +1152,9 @@ class SchedulerComponent(
         when (event) {
             is RoomStatusChanged -> {
                 // the free spy privilege is probed once per private show, so anything that ends
-                // the show (offline, public, group show) re-arms the probe for the next one
-                if (!RoomStatus.isPrivate(event.newStatus)) entries[event.roomId]?.freeSpyExhausted = false
+                // the show (offline, public, group show) re-arms the probe for the next one — and
+                // cancels the pending re-probe, which only belongs to a room still waiting
+                if (!RoomStatus.isPrivate(event.newStatus)) entries[event.roomId]?.clearFreeSpyExhausted()
                 // the paid ticket is bought once per group show, so leaving the group-show status
                 // re-arms the purchase for the next one
                 if (!RoomStatus.isGroupShow(event.newStatus)) entries[event.roomId]?.groupShowPurchased = false
@@ -989,7 +1173,7 @@ class SchedulerComponent(
                         quality = entry.settings.quality,
                         pkey = event.settings.pkey.ifBlank { streamAuthKey }
                     )
-                    entry.freeSpyExhausted = false
+                    entry.clearFreeSpyExhausted()
                     driveFsm(
                         event.roomId,
                         SchedulerEvent.SettingsChanged,
@@ -1201,9 +1385,16 @@ internal fun SchedulerEntry.diagnoseJson(): JsonObject = buildJsonObject {
     put("roomId", roomId)
     put("roomName", roomName)
     put("roomStatus", roomStatus)
+    // The status the preconfig's own read saw, next to the room's: a disagreement here is what made
+    // a private room probe the public URL and look like a room that had moved on (issue #192).
+    put("statusRead", statusRead?.let { JsonPrimitive(it) } ?: JsonNull)
+    put("tokenSource", tokenSource?.let { JsonPrimitive(it) } ?: JsonNull)
+    put("tokenLength", tokenLength?.let { JsonPrimitive(it) } ?: JsonNull)
+    put("preconfigAttempts", preconfigAttempts)
     put("streamStatus", streamStatus)
     put("kind", currentKind)
     put("freeSpyExhausted", freeSpyExhausted)
+    put("freeSpyVerdicts", freeSpyVerdicts?.let { JsonPrimitive(it) } ?: JsonNull)
     put("lastIndex", lastIndex?.let { JsonPrimitive(it) } ?: JsonNull)
     put("lastFailReason", lastFailReason?.let { JsonPrimitive(it) } ?: JsonNull)
     put("playlistPath", JsonPrimitive(playlistUrl.substringBefore('?')))

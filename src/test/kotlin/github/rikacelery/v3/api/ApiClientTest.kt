@@ -170,8 +170,29 @@ class ApiClientTest {
                         "http://$it"
                     }
 
-            assertEquals(1001L, client.roomIdFromName("model-one"))
+            assertEquals(1001L, client.roomFetchRoomId("model-one"))
             assertEquals("http://platform.test/api/front/users/user-ids/model-one", requestedUrl)
+        } finally {
+            mockClient.close()
+        }
+    }
+
+    /**
+     * The id helper answers with an id or not at all (review on #160): a 200 that carries no usable
+     * id is as actionable as a 404, and a null return would only move the decision to every caller.
+     */
+    @Test
+    fun `a model that answers without an id is an exception, not a null`() = runTest {
+        val mockClient = HttpClient(MockEngine {
+            respond(
+                content = """{"name":"model-one"}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            )
+        })
+        try {
+            val client = ApiClient(listOf("platform.test"), singleClientProvider(mockClient)) { "http://$it" }
+            assertFailsWith<ModelNotFoundException> { client.roomFetchRoomId("model-one") }
         } finally {
             mockClient.close()
         }

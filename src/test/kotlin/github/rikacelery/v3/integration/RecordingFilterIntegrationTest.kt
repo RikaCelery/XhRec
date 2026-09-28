@@ -180,7 +180,9 @@ class RecordingFilterIntegrationTest {
 
         val room = fx.awaitRoom("model") { it.path("room.hint.code") == "preconfig_failed" }
         assertEquals("preconfig_failed", room.path("room.hint.code"))
-        assertEquals("no account", room.path("room.hint.detail"))
+        // a private show has no ticket to buy, so the only account-level reason it reports is the
+        // free-spy privilege ("no account" wording belongs to the ticket path — review on #197)
+        assertEquals("no free spy access", room.path("room.hint.detail"))
     }
 
     @Test
