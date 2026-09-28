@@ -580,13 +580,20 @@
             <div class="p-4 overflow-x-auto overflow-y-auto terminal-scroll font-mono text-xs flex-1">
                 <div v-if="allUrls.length === 0" class="text-slate-500 italic">{{ $t('Waiting for connection...') }}</div>
                 <div v-for="(info, idx) in allUrls" :key="info.url"
-                    class="mb-1 text-slate-300 whitespace-nowrap hover:bg-[#2a2a2a] px-1 rounded transition-colors">
+                    class="mb-1 whitespace-nowrap hover:bg-[#2a2a2a] px-1 rounded transition-colors"
+                    :class="info.done ? 'text-slate-500' : 'text-slate-300'">
                     <span
-                        class="text-indigo-400 font-bold w-48 inline-block overflow-hidden text-ellipsis align-bottom">{{info.prefix.trim()}}</span>
+                        class="font-bold w-48 inline-block overflow-hidden text-ellipsis align-bottom"
+                        :class="info.done ? 'text-slate-500' : 'text-indigo-400'">{{info.prefix.trim()}}</span>
                     <span class="text-fuchsia-400">[{{info.type}}]</span>
-                    <span
+                    <span v-if="info.done">
+                        <!-- frozen at the values the row had when its download finished -->
+                        <span v-if="info.elapsedAbs !== null">[SERVER]:{{info.elapsedAbs}}s </span>[DOWN]:{{info.elapsed}}s
+                        <i class="fa-solid fa-check ml-1 text-emerald-600" :title="$t('Complete')"></i>
+                    </span>
+                    <span v-else
                         :class="{'text-emerald-400': info.timeClass==='time-short', 'text-amber-400': info.timeClass==='time-medium', 'text-red-400 font-bold': info.timeClass==='time-long'}">
-                        [SERVER]:{{info.elapsedAbs}}s [DOWN]:{{info.elapsed}}s
+                        <span v-if="info.elapsedAbs !== null">[SERVER]:{{info.elapsedAbs}}s </span>[DOWN]:{{info.elapsed}}s
                     </span>
                     <a :href="info.url" target="_blank"
                         class="text-slate-400 hover:text-blue-400 underline decoration-slate-600 hover:decoration-blue-400 ml-2">
@@ -1027,7 +1034,6 @@
                     settingsTime: 0,    // time limit shown in that dialog (seconds, 0 = unlimited)
                     settingsSize: '',   // size limit shown in that dialog (e.g. "1G", empty = unlimited)
                     allUrls: [],
-                    allUrlsSeen: new Set(),
                     imagePreview: false,
                     // roomId -> {count, columns, rows, cellWidth, cellHeight, samples:[{index, at}]}
                     // served by /preview/index; drives both the latest image and the strip geometry.
@@ -1633,15 +1639,19 @@
                             });
 
                             Object.entries(element.running || {}).forEach(([url, meta]) => {
-                                let match = /_(\d+)\.mp4/.exec(url);
-                                let startAtAbs = match && match[1] ? match[1] * 1000 : 0;
+                                // The trailing number of a segment name is the platform's publish
+                                // timestamp. An init or playlist name carries none, and reading its
+                                // number as one produced an epoch-sized [SERVER] time that only grew.
+                                let match = /_(\d{10})\.mp4/.exec(url);
+                                let startAtAbs = match ? match[1] * 1000 : 0;
 
                                 const elapsed = ((now - meta.startAt) / 1000).toFixed(1);
-                                const elapsedAbs = ((now - startAtAbs) / 1000).toFixed(1);
+                                const elapsedAbs = startAtAbs ? ((now - startAtAbs) / 1000).toFixed(1) : null;
+                                const slowest = Math.max(elapsedAbs === null ? 0 : Number(elapsedAbs), Number(elapsed));
 
                                 let timeClass = "time-short";
-                                if (elapsedAbs > 10) timeClass = "time-long";
-                                else if (elapsedAbs > 5) timeClass = "time-medium";
+                                if (slowest > 10) timeClass = "time-long";
+                                else if (slowest > 5) timeClass = "time-medium";
 
                                 newAllUrls.push({
                                     prefix: (roomName + " ".repeat(20)).slice(0, 20),
@@ -1649,7 +1659,8 @@
                                     timeClass,
                                     elapsedAbs,
                                     elapsed,
-                                    url
+                                    url,
+                                    done: false
                                 });
                             });
                         }
@@ -1677,19 +1688,22 @@
 
                         this.roomInfo = newRoomInfo;
                         const MAX_NETWORK_LOG_LINES = 500;
+                        // A row whose url left the in-flight list has finished: its line stays in the
+                        // scrollback, but the numbers it shows are the ones it ended with. A line that
+                        // kept a live-looking timer after the download was over is what #181's review
+                        // called out, so a finished row is frozen and marked instead of refreshed.
+                        const inFlight = new Set(newAllUrls.map(e => e.url));
+                        for (const entry of this.allUrls) {
+                            if (!inFlight.has(entry.url)) entry.done = true;
+                        }
                         for (const entry of newAllUrls) {
-                            if (this.allUrlsSeen.has(entry.url)) {
-                                // Still in-flight (or re-seen): refresh its live timing in place
-                                // rather than treating it as a new line.
-                                const idx = this.allUrls.findIndex(e => e.url === entry.url);
-                                if (idx !== -1) this.allUrls[idx] = entry;
+                            const idx = this.allUrls.findIndex(e => e.url === entry.url);
+                            if (idx !== -1) {
+                                // still running, or running again after a retry: live timing wins
+                                this.allUrls[idx] = entry;
                             } else {
-                                this.allUrlsSeen.add(entry.url);
                                 this.allUrls.unshift(entry);
-                                if (this.allUrls.length > MAX_NETWORK_LOG_LINES) {
-                                    const removed = this.allUrls.pop();
-                                    this.allUrlsSeen.delete(removed.url);
-                                }
+                                if (this.allUrls.length > MAX_NETWORK_LOG_LINES) this.allUrls.pop();
                             }
                         }
                     } catch (e) {
