@@ -27,6 +27,7 @@ import github.rikacelery.v3.m3u8.VariantStream
 import github.rikacelery.v3.utils.CdnSelector
 import github.rikacelery.v3.utils.DefaultHttpClientProvider
 import github.rikacelery.v3.utils.HttpClientProvider
+import github.rikacelery.v3.utils.MaskingMessageConverter
 import github.rikacelery.v3.utils.PathSingle
 import github.rikacelery.v3.utils.PathSingleOrNull
 import github.rikacelery.v3.utils.asInt
@@ -305,7 +306,7 @@ class SchedulerEntry(
                 RoomHint(RoomHintCode.PRIVATE_FILTER_OFF)
 
             fsm.currentState == SchedulerState.Preconfiguring && lastFailReason != null ->
-                RoomHint(RoomHintCode.PRECONFIG_FAILED, lastFailReason)
+                RoomHint(RoomHintCode.PRECONFIG_FAILED, displayFailReason())
 
             else -> null
         }
@@ -345,6 +346,14 @@ class SchedulerEntry(
         freeSpyReprobe?.cancel()
         freeSpyReprobe = null
     }
+
+    /**
+     * The failure reason as everything *outside* the log reads it: `GET /diagnose` and the dashboard
+     * hint, which an operator screenshots. A reason can be an exception's own text — Ktor puts the
+     * whole signed url in one — and neither of those surfaces runs the log masking, so it is applied
+     * here instead of relying on every reader to remember.
+     */
+    internal fun displayFailReason(): String? = lastFailReason?.let { MaskingMessageConverter.mask(it) }
 
     internal fun kindOf(status: String): String = when {
         RoomStatus.isPublic(status) -> "public"
@@ -1396,7 +1405,7 @@ internal fun SchedulerEntry.diagnoseJson(): JsonObject = buildJsonObject {
     put("freeSpyExhausted", freeSpyExhausted)
     put("freeSpyVerdicts", freeSpyVerdicts?.let { JsonPrimitive(it) } ?: JsonNull)
     put("lastIndex", lastIndex?.let { JsonPrimitive(it) } ?: JsonNull)
-    put("lastFailReason", lastFailReason?.let { JsonPrimitive(it) } ?: JsonNull)
+    put("lastFailReason", displayFailReason()?.let { JsonPrimitive(it) } ?: JsonNull)
     put("playlistPath", JsonPrimitive(playlistUrl.substringBefore('?')))
     put("configuredQuality", configuredQuality)
     put("configuredPkey", configuredPkey)

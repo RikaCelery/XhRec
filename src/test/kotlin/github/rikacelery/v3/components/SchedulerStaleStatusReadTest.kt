@@ -126,6 +126,26 @@ class SchedulerStaleStatusReadTest {
         }
     }
 
+    /**
+     * `/diagnose` and the dashboard hint are read outside the log pipeline, so the failure reason
+     * they render is masked where it is rendered — a Ktor failure hands over the whole signed url,
+     * and that text travels through [SchedulerDriveData.failReason] unchanged.
+     */
+    @Test
+    fun `a failure reason that carries a signed url is masked where it is rendered`() = runBlocking {
+        withScenario(readStatus = "public", roomStatus = "private", freeSpy = true) { h ->
+            h.entry.lastFailReason = "playlist unusable (Request timeout has expired [url=https://cdn.test" +
+                    "/hls/7654321/media/7654321_720p.m3u8?psch=v2&pkey=pkey-secret&aclAuth=acl-secret])"
+
+            val rendered = h.entry.diagnoseJson()["lastFailReason"].toString()
+            assertTrue(rendered.contains("playlist unusable"), "the reason must survive: $rendered")
+            assertTrue(
+                !rendered.contains("pkey-secret") && !rendered.contains("acl-secret"),
+                "the signed url must not reach the dashboard: $rendered"
+            )
+        }
+    }
+
     // —— harness ——
 
     private class Harness(
